@@ -31,6 +31,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
@@ -39,6 +40,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
+import static java.util.Collections.newSetFromMap;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
@@ -70,6 +72,12 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 			"org.briarproject.briar.channel/NEARBY";
 	private static final long FIRST_SCAN_DELAY_MS = 5_000;
 	private static final long SCAN_INTERVAL_MS = 2 * 60 * 1000;
+	/**
+	 * How long one exchange with a nearby phone may take before it is
+	 * cut off, so a stranger who connects and goes quiet can't hold the
+	 * connection, and the wake lock it keeps, for the rest of the hour.
+	 */
+	private static final long EXCHANGE_TIMEOUT_MS = 10 * 60 * 1000;
 
 	private final DatabaseComponent db;
 	private final BlogManager blogManager;
@@ -191,6 +199,8 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 		private volatile boolean closed = false;
 		@Nullable
 		private volatile Cancellable scan = null, timer = null;
+		private final Set<DuplexTransportConnection> open =
+				newSetFromMap(new ConcurrentHashMap<>());
 
 		private Session(GroupId g, DuplexPlugin plugin, byte[] commitment,
 				KeyAgreementListener listener, long expiry) {
@@ -208,6 +218,8 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 			c = timer;
 			if (c != null) c.cancel();
 			listener.close();
+			// Closing the listener doesn't end an exchange in progress
+			for (DuplexTransportConnection conn : open) dispose(conn, true);
 		}
 
 		/**
@@ -223,18 +235,7 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 					return;
 				}
 				LOG.info("Serving a nearby reader");
-				DuplexTransportConnection conn = c.getConnection();
-				boolean error = false;
-				try {
-					InputStream in = conn.getReader().getInputStream();
-					OutputStream out = conn.getWriter().getOutputStream();
-					protocol.serve(g, in, out);
-				} catch (DbException | IOException e) {
-					logException(LOG, INFO, e);
-					error = true;
-				} finally {
-					dispose(conn, error);
-				}
+				exchange(c.getConnection(), true);
 			}
 		}
 
@@ -252,15 +253,35 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 				if (conn != null) dispose(conn, false);
 				return;
 			}
+			exchange(conn, false);
+		}
+
+		/**
+		 * Serves our copy over a connection, or reads theirs, within the
+		 * time an exchange may take. The connection is closed when the
+		 * exchange ends, when the time is up, or when the session is.
+		 */
+		private void exchange(DuplexTransportConnection conn,
+				boolean serving) {
+			open.add(conn);
+			Cancellable deadline = scheduler.schedule(() -> {
+				LOG.info("Nearby exchange timed out");
+				dispose(conn, true);
+			}, ioExecutor, EXCHANGE_TIMEOUT_MS, MILLISECONDS);
 			boolean error = false;
 			try {
+				// The session may have closed while we were connecting
+				if (closed) return;
 				InputStream in = conn.getReader().getInputStream();
 				OutputStream out = conn.getWriter().getOutputStream();
-				protocol.read(g, in, out);
+				if (serving) protocol.serve(g, in, out);
+				else protocol.read(g, in, out);
 			} catch (DbException | IOException e) {
 				logException(LOG, INFO, e);
 				error = true;
 			} finally {
+				deadline.cancel();
+				open.remove(conn);
 				dispose(conn, error);
 			}
 		}
