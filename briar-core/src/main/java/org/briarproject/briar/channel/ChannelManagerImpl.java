@@ -212,6 +212,19 @@ class ChannelManagerImpl
 	// An entry is a timestamp and a message body
 	private static final int MAX_ENTRY_BYTES = MAX_MESSAGE_BODY_LENGTH + 64;
 
+	/**
+	 * The User-Agent sent with every fetch from a mirror. The HTTP client
+	 * would otherwise send its own name and version, which lets a mirror
+	 * that also serves a website count Briar's readers apart from its
+	 * visitors, and tell one build of the app from another. This is the
+	 * one Tor Browser 15 sends. It hides the library and its version, but
+	 * the other headers and their order still differ from a browser's, so
+	 * a reader is not made to look like a Tor Browser user. It should
+	 * follow Tor Browser to each new Firefox ESR.
+	 */
+	static final String FETCH_USER_AGENT =
+			"Mozilla/5.0 (Windows NT 10.0; rv:140.0) Gecko/20100101 Firefox/140.0";
+
 	private static final long FETCH_TIMEOUT_MS = MINUTES.toMillis(10);
 	/**
 	 * How long after a file could not be fetched from any mirror before
@@ -1026,7 +1039,8 @@ class ChannelManagerImpl
 		// a reason to throw on the fetch thread
 		HttpUrl url = HttpUrl.parse(mirror);
 		if (url == null) throw new IOException("Not an HTTP URL");
-		Request.Builder b = new Request.Builder().url(url).get();
+		Request.Builder b = new Request.Builder().url(url).get()
+				.header("User-Agent", FETCH_USER_AGENT);
 		// Ask the mirror to send the file only if it has changed
 		// Only the tag and date this mirror gave are sent back to it. A
 		// mirror can give each subscriber a tag of its own, and another
@@ -1677,7 +1691,8 @@ class ChannelManagerImpl
 		// mirror; one that serves something else is started again.
 		MessageId manifestId = h.getManifestId();
 		long offset = getFileFetchOffset(manifestId);
-		Request.Builder b = new Request.Builder().url(url).get();
+		Request.Builder b = new Request.Builder().url(url).get()
+				.header("User-Agent", FETCH_USER_AGENT);
 		if (offset > 0) b.addHeader("Range", "bytes=" + offset + "-");
 		Response response = httpClient(g).newCall(b.build()).execute();
 		try (ResponseBody body = response.body()) {

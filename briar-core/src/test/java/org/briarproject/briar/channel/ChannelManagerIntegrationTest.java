@@ -749,6 +749,30 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testFetchesSendAFixedUserAgent() throws Exception {
+		// The HTTP client's own name and version would set Briar's readers
+		// apart from a site's other visitors, and builds from each other
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader file = postFile(channel, 1000);
+		MockWebServer server = serveChannel(g, file);
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(2);
+			fetchFileWhenFree(g, file.getManifestId());
+			int n = server.getRequestCount();
+			assertTrue(n >= 2);
+			for (int i = 0; i < n; i++) {
+				assertEquals(ChannelManagerImpl.FETCH_USER_AGENT,
+						server.takeRequest().getHeader("User-Agent"));
+			}
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
 	public void testARedirectIsNotFollowed() throws Exception {
 		// A mirror could send the reader on to plain HTTP, or from an
 		// onion service to the open internet, with the request's tags
