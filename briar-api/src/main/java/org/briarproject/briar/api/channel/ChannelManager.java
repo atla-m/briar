@@ -86,6 +86,21 @@ public interface ChannelManager {
 	Blog subscribe(String title, PublicKey publicKey) throws DbException;
 
 	/**
+	 * Returns a link that can be given to anyone, carrying everything
+	 * needed to subscribe to the channel with the given ID: its title and
+	 * public key. The link does not say who created the channel, and
+	 * anyone holding it can subscribe without telling anybody.
+	 */
+	String getChannelLink(GroupId g) throws DbException;
+
+	/**
+	 * Subscribes to the channel named by the given link.
+	 *
+	 * @throws FormatException If the link is malformed
+	 */
+	Blog subscribeFromLink(String link) throws DbException, FormatException;
+
+	/**
 	 * Writes a channel's posts to the given stream, in the format its
 	 * subscribers can import. The stream carries the channel's own signed
 	 * messages, so whoever stores or serves it cannot alter them.
