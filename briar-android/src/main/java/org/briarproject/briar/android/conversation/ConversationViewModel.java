@@ -94,6 +94,7 @@ import static org.briarproject.briar.android.view.TextSendController.SendState.U
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.api.autodelete.AutoDeleteManager.DEFAULT_TIMER_DURATION;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES;
@@ -423,6 +424,21 @@ public class ConversationViewModel extends DbViewModel
 	 * must support {@link PrivateMessageFormat#supportsFiles() files}.
 	 */
 	@UiThread
+	/**
+	 * Asks for a file its sender held back because it is too large to be
+	 * sent without being asked for. The file's row updates when the request
+	 * is stored, and again as the chunks arrive.
+	 */
+	void requestFile(FileHeader header) {
+		runOnDbThread(() -> {
+			try {
+				messagingManager.requestFile(header);
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
 	void sendFile(Uri uri) {
 		Contact contact = requireNonNull(contactItem.getValue()).getContact();
 		GroupId groupId = messagingManager.getContactGroup(contact).getId();
@@ -443,7 +459,7 @@ public class ConversationViewModel extends DbViewModel
 			} catch (Exception e) {
 				logException(LOG, WARNING, e);
 			}
-			if (size > MAX_FILE_SIZE) {
+			if (size > getMaxFileSize()) {
 				fileError.postEvent(R.string.file_too_big);
 				return;
 			}
@@ -472,6 +488,12 @@ public class ConversationViewModel extends DbViewModel
 				// own. They aren't sent until the message references them.
 				header = messagingManager.addLocalFile(groupId,
 						clock.currentTimeMillis(), name, contentType, source);
+				// The provider may not have known the size in advance
+				if (header.getSize() > getMaxFileSize()) {
+					messagingManager.removeFile(header);
+					fileError.postEvent(R.string.file_too_big);
+					return;
+				}
 			} catch (FileTooBigException e) {
 				fileError.postEvent(R.string.file_too_big);
 				return;
@@ -632,6 +654,18 @@ public class ConversationViewModel extends DbViewModel
 
 	LiveData<String> getContactDisplayName() {
 		return contactName;
+	}
+
+	/**
+	 * Returns the largest file the contact can receive. A contact on an
+	 * older version rejects a file over
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE},
+	 * so a larger one would look sent and never arrive.
+	 */
+	long getMaxFileSize() {
+		PrivateMessageFormat format = privateMessageFormat.getValue();
+		return format != null && format.supportsLargeFiles()
+				? MAX_FILE_SIZE : MAX_PUSHED_FILE_SIZE;
 	}
 
 	LiveData<PrivateMessageFormat> getPrivateMessageFormat() {

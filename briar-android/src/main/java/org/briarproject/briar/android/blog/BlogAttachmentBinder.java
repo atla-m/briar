@@ -89,7 +89,13 @@ class BlogAttachmentBinder {
 	void onFileClicked(BlogPostItem item, FileHeader header) {
 		Context ctx = fragment.requireContext();
 		FileStatus status = item.getFileStatus(header);
-		if (status == null || !status.isComplete()) {
+		if (status != null && status.isAwaitingRequest() &&
+				viewModel != null) {
+			// Too large to have been sent without asking: ask now
+			viewModel.requestFile(header);
+			Toast.makeText(ctx, R.string.file_requested, LENGTH_SHORT)
+					.show();
+		} else if (status == null || !status.isComplete()) {
 			Toast.makeText(ctx, R.string.file_still_receiving, LENGTH_SHORT)
 					.show();
 		} else if (FileRowBinder.isPlayable(header.getContentType())) {

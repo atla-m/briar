@@ -210,7 +210,12 @@ public class GroupActivity extends
 	@Override
 	public void onFileClick(GroupMessageItem item, FileHeader header) {
 		FileStatus status = item.getFileStatus(header);
-		if (status == null || !status.isComplete()) {
+		if (status != null && status.isAwaitingRequest()) {
+			// Too large to have been sent without asking: ask now
+			viewModel.requestFile(header);
+			Toast.makeText(this, R.string.file_requested, LENGTH_SHORT)
+					.show();
+		} else if (status == null || !status.isComplete()) {
 			Toast.makeText(this, R.string.file_still_receiving, LENGTH_SHORT)
 					.show();
 		} else if (FileRowBinder.isPlayable(header.getContentType())) {

@@ -245,6 +245,21 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	/**
 	 * Copies a fully received file to the location the user chose.
 	 */
+	/**
+	 * Asks for a file its sender held back because it is too large to be
+	 * sent without being asked for. The file's row updates when the request
+	 * is stored, and again as the chunks arrive.
+	 */
+	void requestFile(FileHeader header) {
+		runOnDbThread(() -> {
+			try {
+				blogManager.requestFile(header);
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
 	void saveFile(FileHeader header, Uri uri) {
 		ioExecutor.execute(() -> {
 			try {

@@ -389,6 +389,9 @@
 	<string name="send_file">Send a file</string>
 	<string name="file_too_big">File too big. Limit is %d MB.</string>
 	<string name="file_send_failed">Could not send the file</string>
+	<string name="file_tap_to_download">Tap to download</string>
+	<string name="file_waiting">Waiting for it to arrive</string>
+	<string name="file_requested">Asked for the file. It arrives when someone who has it is in reach.</string>
 	<string name="file_no_storage">Not enough storage on this phone. Free up some space and try again.</string>
 	<string name="file_receiving">Receiving, %1$d of %2$d parts</string>
 	<string name="file_tap_to_play">Tap to play</string>

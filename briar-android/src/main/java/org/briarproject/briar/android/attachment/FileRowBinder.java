@@ -104,6 +104,18 @@ public class FileRowBinder {
 						? R.string.file_tap_to_play : R.string.file_tap_to_save;
 				status.setText(size + " \u00b7 " + ctx.getString(action));
 				progress.setVisibility(GONE);
+			} else if (s != null && s.isAwaitingRequest()) {
+				// Too large to be sent without asking; nothing comes until
+				// someone does, so say so rather than show no progress
+				status.setText(size + " \u00b7 " +
+						ctx.getString(R.string.file_tap_to_download));
+				progress.setVisibility(GONE);
+			} else if (s != null && s.isRequested() &&
+					s.getChunksReceived() == 0) {
+				// Asked for, but whoever has it hasn't been in reach yet
+				status.setText(size + " \u00b7 " +
+						ctx.getString(R.string.file_waiting));
+				progress.setVisibility(GONE);
 			} else {
 				int received = s == null ? 0 : s.getChunksReceived();
 				int total = h.getChunkCount();
