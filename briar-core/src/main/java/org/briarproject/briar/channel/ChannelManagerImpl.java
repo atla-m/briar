@@ -1607,13 +1607,27 @@ class ChannelManagerImpl
 		long manifestTimestamp = db.transactionWithResult(true,
 				txn -> db.getMessage(txn, manifestId).getTimestamp());
 		String path = getFilePath(manifestId);
-		// Try each mirror until one answers, as for the channel itself
+		// As for the channel itself: plain HTTP mirrors are never used,
+		// and the rest are asked in a random order, so no one mirror
+		// sees every file a reader asks for, or decides alone whether
+		// they get it
+		List<HttpUrl> safe = new ArrayList<>(mirrors.size());
 		for (String mirror : mirrors) {
 			HttpUrl base = HttpUrl.parse(mirror);
 			HttpUrl url = base == null ? null : base.resolve(path);
-			if (url == null) continue;
+			if (url != null && isSafeMirror(url)) safe.add(url);
+		}
+		if (safe.isEmpty()) return new FetchResult(NO_SAFE_MIRRORS, 0);
+		shuffle(safe, secureRandom);
+		for (HttpUrl url : safe) {
 			try {
 				FetchResult result = fetchFileFrom(g, h, manifestTimestamp, url);
+				// A mirror that answers with the file's header and no
+				// chunks is withholding the file, not serving it, so the
+				// next mirror is asked
+				if (result.getMessages() == 0) {
+					throw new IOException("Mirror served no chunks");
+				}
 				fileFailures.remove(manifestId);
 				return result;
 			} catch (IOException e) {

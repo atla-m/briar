@@ -1851,6 +1851,83 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testAMirrorWithholdingAFileIsNotTheOnlyOneAsked()
+			throws Exception {
+		// A mirror answers a file with its header and no chunks. Files
+		// used to be asked of the mirrors in link order, taking the first
+		// answer, so the first mirror could withhold every file from
+		// every reader, and saw every file every reader asked for.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader file = postFile(channel, 1000);
+		byte[] main = exportChannel(g);
+		ByteArrayOutputStream fileOut = new ByteArrayOutputStream();
+		channelManager0.exportChannelFile(g, file.getManifestId(), fileOut);
+		byte[] whole = fileOut.toByteArray();
+		CountingInputStream counting = new CountingInputStream(
+				new ByteArrayInputStream(whole), whole.length);
+		c1.getBdfReaderFactory().createReader(counting).readList();
+		byte[] headerOnly = Arrays.copyOf(whole, (int) counting.getBytesRead());
+		String path = "/" + channelManager0.getFilePath(file.getManifestId());
+
+		MockWebServer withholding = new MockWebServer();
+		withholding.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				byte[] body = "/c.briar".equals(request.getPath())
+						? main : headerOnly;
+				return new MockResponse().setBody(new Buffer().write(body));
+			}
+		});
+		withholding.start();
+		MockWebServer honest = serveChannel(g, file);
+		try {
+			channelManager0.setMirrors(g, asList(
+					withholding.url("/c.briar").toString(),
+					honest.url("/c.briar").toString()));
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(2);
+			FetchResult.Outcome o = fetchFileWhenFree(g, file.getManifestId());
+			assertTrue(o.toString(), o == FETCHED || o == UNCHANGED);
+			assertTrue(blogManager1.getFileStatus(file).isComplete());
+			// Whichever was asked first, the honest mirror served the file
+			List<String> asked = new ArrayList<>();
+			int n = honest.getRequestCount();
+			for (int i = 0; i < n; i++) asked.add(honest.takeRequest().getPath());
+			assertTrue(asked.contains(path));
+		} finally {
+			withholding.shutdown();
+			honest.shutdown();
+		}
+	}
+
+	@Test
+	public void testAFileIsNotFetchedFromAPlainHttpMirror() throws Exception {
+		// A link may name plain HTTP mirrors, which are kept so the link
+		// can be passed on, but never fetched from: an exit could read
+		// and change what is fetched. That held for the channel's file,
+		// but not for its attachments.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader file = postFile(channel, 1000);
+		Author a = channel.getBlog().getAuthor();
+		byte[] raw = c1.getClientHelper().toByteArray(BdfList.of(
+				LINK_FORMAT_VERSION, a.getName(), a.getPublicKey().getEncoded(),
+				BdfList.of("http://mirror.example/c.briar")));
+		channelManager1.subscribeFromLink(
+				LINK_PREFIX + Base32.encode(raw).toLowerCase(US));
+		// The channel's file carries the post and the manifest, not the
+		// file's chunks, so the file is there to be fetched
+		channelManager1.importChannel(new ByteArrayInputStream(exportChannel(g)));
+		awaitPendingMessageDelivery(2);
+		assertFalse(blogManager1.getFileStatus(file).isComplete());
+		assertEquals(NO_SAFE_MIRRORS,
+				fetchFileWhenFree(g, file.getManifestId()));
+	}
+
+	@Test
 	public void testAMirrorThatIgnoresRangesAndHasNothingNewIsUnchanged()
 			throws Exception {
 		// A mirror that answers 200 with the file we already have, and
