@@ -58,6 +58,7 @@ class ChannelAdapter
 		private final View layout;
 		private final TextView title, created, createdLabel;
 		private final ImageButton overflow;
+		private final TextView fingerprint;
 
 		private ChannelViewHolder(View v) {
 			super(v);
@@ -65,12 +66,14 @@ class ChannelAdapter
 			layout = v;
 			title = v.findViewById(R.id.titleView);
 			created = v.findViewById(R.id.createdView);
+			fingerprint = v.findViewById(R.id.fingerprintView);
 			createdLabel = v.findViewById(R.id.created);
 			overflow = v.findViewById(R.id.overflowButton);
 		}
 
 		private void bindItem(ChannelItem item) {
 			title.setText(item.getTitle());
+			fingerprint.setText(item.getFingerprint());
 			if (item.isOwned()) {
 				created.setText(formatDate(ctx, item.getCreated()));
 				created.setVisibility(VISIBLE);

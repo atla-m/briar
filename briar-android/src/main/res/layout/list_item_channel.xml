@@ -33,6 +33,20 @@
 		app:tint="?attr/colorControlNormal" />
 
 	<TextView
+		android:id="@+id/fingerprintView"
+		android:layout_width="0dp"
+		android:layout_height="wrap_content"
+		android:layout_marginEnd="@dimen/listitem_horizontal_margin"
+		android:layout_marginRight="@dimen/listitem_horizontal_margin"
+		android:fontFamily="monospace"
+		android:textColor="?android:attr/textColorSecondary"
+		android:textSize="@dimen/text_size_small"
+		app:layout_constraintEnd_toEndOf="parent"
+		app:layout_constraintStart_toStartOf="@+id/titleView"
+		app:layout_constraintTop_toBottomOf="@+id/titleView"
+		tools:text="a3f9 2c81 7b10 44de" />
+
+	<TextView
 		android:id="@+id/created"
 		android:layout_width="wrap_content"
 		android:layout_height="wrap_content"
@@ -41,7 +55,7 @@
 		android:textColor="?android:attr/textColorSecondary"
 		android:textSize="@dimen/text_size_small"
 		app:layout_constraintStart_toStartOf="@+id/titleView"
-		app:layout_constraintTop_toBottomOf="@+id/titleView" />
+		app:layout_constraintTop_toBottomOf="@+id/fingerprintView" />
 
 	<TextView
 		android:id="@+id/createdView"

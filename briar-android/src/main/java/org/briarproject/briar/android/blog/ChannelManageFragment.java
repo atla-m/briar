@@ -193,7 +193,7 @@ public class ChannelManageFragment extends BaseFragment
 				R.style.BriarDialogTheme);
 		b.setTitle(R.string.channels_import_confirm_title);
 		b.setMessage(getString(R.string.channels_import_confirm_message,
-				pending.name));
+				pending.name, pending.fingerprint));
 		b.setPositiveButton(R.string.channels_import_confirm_button,
 				(d, w) -> viewModel.confirmImport(pending));
 		b.setNegativeButton(R.string.cancel, null);

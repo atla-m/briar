@@ -550,7 +550,7 @@
 	<string name="blogs_forwarded_from">Forwarded from a channel. %s</string>
 	<string name="blogs_forwarded_subscribe">Tap to subscribe.</string>
 	<string name="blogs_forwarded_subscribe_title">Subscribe to this channel?</string>
-	<string name="blogs_forwarded_subscribe_message">\"%s\"\n\nA link from a contact can name any channel. If you subscribe, its posts will be fetched over Tor from the mirrors named in the link. Nobody is told that you subscribed.</string>
+	<string name="blogs_forwarded_subscribe_message">\"%1$s\"\nKey: %2$s\n\nA link from a contact can name any channel, so check the key with someone you trust. If you subscribe, its posts will be fetched over Tor from the mirrors named in the link. Nobody is told that you subscribed.</string>
 	<string name="blogs_forwarded_subscribed">Subscribed to the channel</string>
 	<string name="blogs_forwarded_bad_link">That channel link could not be read</string>
 	<string name="channels_sharing_invitation_received">%1$s has shared the channel \"%2$s\" with you.</string>
@@ -632,7 +632,7 @@
 	</plurals>
 	<string name="channels_import_error">The file could not be read</string>
 	<string name="channels_import_confirm_title">Subscribe to this channel?</string>
-	<string name="channels_import_confirm_message">This file holds the channel \"%s\". Subscribing tells no one. Later posts can reach you in another file or from contacts; to fetch them over the internet you also need the channel\'s link.</string>
+	<string name="channels_import_confirm_message">This file holds the channel \"%1$s\".\nKey: %2$s\n\nA file can carry any name with any key, so check the key with someone you trust. Subscribing tells no one. Later posts can reach you in another file or from contacts; to fetch them over the internet you also need the channel\'s link.</string>
 	<string name="channels_import_confirm_button">Subscribe</string>
 	<string name="channels_manage_empty_state">No channels yet. Tap + to create one, or use the menu to subscribe to one with a link.</string>
 	<string name="channels_manage_error">Your channels could not be loaded</string>

@@ -75,6 +75,7 @@ public class BlogActivity extends BriarActivity
 		viewModel.getBlog().observe(this, blog -> {
 			setTitle(blog.getBlog().getAuthor().getName());
 			channel = blog.getBlog().isChannel();
+			fingerprint = ChannelFingerprint.of(blog.getBlog().getAuthor());
 			updateToolbarSubTitle();
 		});
 		viewModel.getSharingInfo().observe(this, info -> {
@@ -104,9 +105,15 @@ public class BlogActivity extends BriarActivity
 	 * status screen is still a tap away, where the list is plainly about
 	 * contacts.
 	 */
+	@Nullable
+	private String fingerprint = null;
+
 	private void updateToolbarSubTitle() {
 		ActionBar actionBar = requireNonNull(getSupportActionBar());
-		if (channel || sharingInfo == null) {
+		if (channel) {
+			// The name proves nothing; the key does
+			actionBar.setSubtitle(fingerprint);
+		} else if (sharingInfo == null) {
 			actionBar.setSubtitle(null);
 		} else {
 			actionBar.setSubtitle(getString(R.string.shared_with,
