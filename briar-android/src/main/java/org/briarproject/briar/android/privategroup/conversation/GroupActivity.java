@@ -174,6 +174,7 @@ public class GroupActivity extends
 		viewModel.canPost().observe(this, canPost -> {
 			this.canPost = canPost;
 			updateComposer();
+			invalidateOptionsMenu();
 		});
 		observeOnce(viewModel.isCreator(), this, adapter::setIsCreator);
 
@@ -309,7 +310,7 @@ public class GroupActivity extends
 	public boolean onPrepareOptionsMenu(Menu menu) {
 		// Files can't be sent once the group has been dissolved
 		menu.findItem(R.id.action_group_send_file)
-				.setVisible(groupEnabled);
+				.setVisible(groupEnabled && canPost != null && canPost);
 		return super.onPrepareOptionsMenu(menu);
 	}
 

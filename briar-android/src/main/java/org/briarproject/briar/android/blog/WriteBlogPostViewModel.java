@@ -130,8 +130,9 @@ class WriteBlogPostViewModel extends DbViewModel
 	@Override
 	protected void onCleared() {
 		super.onCleared();
-		// Deletes the images that were never published
-		attachmentCreator.cancel();
+		// Deletes the images that were never published. Once Publish is
+		// tapped they are the post's, even if it is still being stored.
+		if (!filesPublished) attachmentCreator.cancel();
 		// A file is stored as soon as it's picked, so one attached to a
 		// post that was never published would be left in the database
 		// with nothing to reveal it and nothing to delete it

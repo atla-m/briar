@@ -126,6 +126,7 @@ class GroupMessageItem extends ThreadItem
 		FileStatus old = fileStatuses.put(manifestId, status);
 		return old == null ||
 				old.getChunksReceived() != status.getChunksReceived() ||
+				old.isRequested() != status.isRequested() ||
 				old.isManifestReceived() != status.isManifestReceived();
 	}
 

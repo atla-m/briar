@@ -139,8 +139,9 @@ public class WriteBlogPostViewModelTest extends BrambleMockTestCase {
 		viewModel.publish("text", emptyList());
 
 		context.checking(new Expectations() {{
-			oneOf(attachmentCreator).cancel();
-			// The post references the file, so it is no longer ours
+			// The post references the images and the file, so neither
+			// is ours to delete, even while the post is still being stored
+			never(attachmentCreator).cancel();
 			never(blogManager).removeFile(with(any(FileHeader.class)));
 		}});
 		viewModel.onCleared();

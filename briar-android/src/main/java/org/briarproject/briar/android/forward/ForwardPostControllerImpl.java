@@ -110,14 +110,18 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 					String text = truncateUtf8(getSpanned(
 							blogManager.getPostText(txn, postId)).toString()
 							.trim(), MAX_PRIVATE_MESSAGE_TEXT_LENGTH);
+					int sent = 0;
 					for (ContactId c : contacts) {
 						try {
 							forward(txn, c, text, link);
+							sent++;
 						} catch (NoSuchContactException
 								| NoSuchGroupException e) {
 							logException(LOG, WARNING, e);
 						}
 					}
+					// Success means someone got it
+					if (sent == 0) throw new NoSuchContactException();
 				});
 				handler.onResult(null);
 			} catch (DbException e) {

@@ -41,8 +41,10 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
@@ -88,7 +90,10 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 			new ArrayList<>();
 	// The posts that share files, keyed by manifest ID, so progress events
 	// for a file can be routed to the post that shares it. UiThread
-	private final Map<MessageId, BlogPostItem> filePosts = new HashMap<>();
+	// The list and the post detail share this view model, so a file can
+	// belong to an item on each screen at once
+	private final Map<MessageId, Set<BlogPostItem>> filePosts =
+			new HashMap<>();
 	// Whether each blog we've loaded a post from is a channel. Written
 	// on the database thread and read there too, but a ViewModel can
 	// outlive the thread that made it, so keep it concurrent
@@ -145,11 +150,13 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 					attachmentRetriever.loadAttachmentItem(p.getManifestId()));
 		}
 		androidExecutor.runOnUiThread(() -> {
-			BlogPostItem item = filePosts.get(p.getManifestId());
-			if (item == null) return;
-			for (FileHeader h : item.getFileHeaders()) {
-				if (h.getManifestId().equals(p.getManifestId()))
-					loadFileStatus(item, h);
+			Set<BlogPostItem> items = filePosts.get(p.getManifestId());
+			if (items == null) return;
+			for (BlogPostItem item : new ArrayList<>(items)) {
+				for (FileHeader h : item.getFileHeaders()) {
+					if (h.getManifestId().equals(p.getManifestId()))
+						loadFileStatus(item, h);
+				}
 			}
 		});
 	}
@@ -173,7 +180,12 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	@UiThread
 	protected void loadAttachments(BlogPostItem item) {
 		for (FileHeader h : item.getFileHeaders()) {
-			filePosts.put(h.getManifestId(), item);
+			Set<BlogPostItem> items = filePosts.get(h.getManifestId());
+			if (items == null) {
+				items = new HashSet<>();
+				filePosts.put(h.getManifestId(), items);
+			}
+			items.add(item);
 			loadFileStatus(item, h);
 		}
 		List<AttachmentHeader> headers = item.getAttachmentHeaders();
@@ -198,7 +210,8 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 				FileStatus status = blogManager.getFileStatus(h);
 				androidExecutor.runOnUiThread(() -> {
 					// Only redraw if this post is still being shown
-					if (filePosts.get(h.getManifestId()) == item &&
+					Set<BlogPostItem> items = filePosts.get(h.getManifestId());
+					if (items != null && items.contains(item) &&
 							item.updateFileStatus(status)) {
 						attachmentUpdated.setValue(item.getId());
 					}

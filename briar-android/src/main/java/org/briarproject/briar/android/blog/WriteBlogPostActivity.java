@@ -119,8 +119,10 @@ public class WriteBlogPostActivity extends BriarActivity
 		fileList = findViewById(R.id.fileList);
 		progressBar = findViewById(R.id.progressBar);
 
-		viewModel.getAttachedFiles().observe(this, headers ->
-				FileRowBinder.bindAttached(fileList, headers));
+		viewModel.getAttachedFiles().observe(this, headers -> {
+			FileRowBinder.bindAttached(fileList, headers);
+			sendController.setHasFiles(!headers.isEmpty());
+		});
 		viewModel.getFileError().observeEvent(this, res -> {
 			String msg = res == R.string.file_too_big
 					? getString(res, MAX_FILE_SIZE / 1024 / 1024)
