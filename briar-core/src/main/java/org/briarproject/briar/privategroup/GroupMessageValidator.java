@@ -1,38 +1,57 @@
 package org.briarproject.briar.privategroup;
 
 import org.briarproject.bramble.api.FormatException;
+import org.briarproject.bramble.api.UniqueId;
 import org.briarproject.bramble.api.client.BdfMessageContext;
 import org.briarproject.bramble.api.client.BdfMessageValidator;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.data.BdfReader;
+import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.data.MetadataEncoder;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.Message;
+import org.briarproject.bramble.api.sync.MessageContext;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.briar.api.privategroup.PrivateGroup;
 import org.briarproject.briar.api.privategroup.PrivateGroupFactory;
 import org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory;
+import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Collection;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_SIGNATURE_LENGTH;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
+import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_JOIN;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_POST;
+import static org.briarproject.briar.api.privategroup.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_HAS_TEXT;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_INITIAL_JOIN_MSG;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_MEMBER;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_PARENT_MSG_ID;
@@ -47,20 +66,64 @@ class GroupMessageValidator extends BdfMessageValidator {
 
 	private final PrivateGroupFactory privateGroupFactory;
 	private final GroupInvitationFactory groupInvitationFactory;
+	private final BdfReaderFactory bdfReaderFactory;
 
 	GroupMessageValidator(PrivateGroupFactory privateGroupFactory,
 			ClientHelper clientHelper, MetadataEncoder metadataEncoder,
-			Clock clock, GroupInvitationFactory groupInvitationFactory) {
+			Clock clock, GroupInvitationFactory groupInvitationFactory,
+			BdfReaderFactory bdfReaderFactory) {
 		super(clientHelper, metadataEncoder, clock);
 		this.privateGroupFactory = privateGroupFactory;
 		this.groupInvitationFactory = groupInvitationFactory;
+		this.bdfReaderFactory = bdfReaderFactory;
+	}
+
+	@Override
+	public MessageContext validateMessage(Message m, Group g)
+			throws InvalidMessageException {
+		// Reject the message if it's too far in the future
+		long now = clock.currentTimeMillis();
+		if (m.getTimestamp() - now > MAX_CLOCK_DIFFERENCE) {
+			throw new InvalidMessageException(
+					"Timestamp is too far in the future");
+		}
+		try {
+			// An attachment is a BDF list (the descriptor) followed by the
+			// attachment's raw bytes, so the body can't be parsed as a single
+			// list. Read the first list and check what type of message it is.
+			InputStream in = new ByteArrayInputStream(m.getBody());
+			CountingInputStream countIn =
+					new CountingInputStream(in, MAX_MESSAGE_BODY_LENGTH);
+			BdfReader reader = bdfReaderFactory.createReader(countIn, canonical);
+			BdfList list = reader.readList();
+			long bytesRead = countIn.getBytesRead();
+			BdfMessageContext context;
+			if (isAttachment(list)) {
+				context = validateAttachment(m, list, bytesRead);
+			} else {
+				// All other message types consist of a single list
+				if (!reader.eof()) throw new FormatException();
+				context = validateMessage(m, g, list);
+			}
+			Metadata meta = metadataEncoder.encode(context.getDictionary());
+			return new MessageContext(meta, context.getDependencies());
+		} catch (IOException e) {
+			throw new InvalidMessageException(e);
+		}
+	}
+
+	private boolean isAttachment(BdfList list) throws FormatException {
+		if (list.isEmpty()) throw new FormatException();
+		Object type = list.get(0);
+		return type instanceof Number &&
+				((Number) type).longValue() == ATTACHMENT.getInt();
 	}
 
 	@Override
 	protected BdfMessageContext validateMessage(Message m, Group g,
 			BdfList body) throws InvalidMessageException, FormatException {
 
-		checkSize(body, 4, 6);
+		checkSize(body, 4, 7);
 
 		// Message type (int)
 		int type = body.getInt(0);
@@ -143,28 +206,49 @@ class GroupMessageValidator extends BdfMessageValidator {
 
 	private BdfMessageContext validatePost(Message m, Group g, BdfList body,
 			Author member) throws FormatException {
-		// Message type, member, optional parent ID, previous message ID,
-		// text, signature
-		checkSize(body, 6);
+		// Client version 0.0: Message type, member, optional parent ID,
+		// previous message ID, text, signature.
+		// Client version 0.1: Message type, member, optional parent ID,
+		// previous message ID, optional text, attachment headers, signature.
+		checkSize(body, 6, 7);
+		boolean hasAttachments = body.size() == 7;
 		byte[] parentId = body.getOptionalRaw(2);
 		checkLength(parentId, MessageId.LENGTH);
 		byte[] previousMessageId = body.getRaw(3);
 		checkLength(previousMessageId, MessageId.LENGTH);
-		String text = body.getString(4);
-		checkLength(text, 1, MAX_GROUP_POST_TEXT_LENGTH);
-		byte[] signature = body.getRaw(5);
+		String text;
+		BdfList headers = null;
+		byte[] signature;
+		if (hasAttachments) {
+			// Text is optional when there are attachments
+			text = body.getOptionalString(4);
+			checkLength(text, 1, MAX_GROUP_POST_TEXT_LENGTH);
+			// The format with attachment headers is only used when there
+			// are attachments, so the list must not be empty
+			headers = body.getList(5);
+			checkSize(headers, 1, MAX_GROUP_POST_ATTACHMENTS);
+			for (int i = 0; i < headers.size(); i++) {
+				BdfList header = headers.getList(i);
+				// Message ID, content type
+				checkSize(header, 2);
+				byte[] id = header.getRaw(0);
+				checkLength(id, UniqueId.LENGTH);
+				String contentType = header.getString(1);
+				checkLength(contentType, 1, MAX_CONTENT_TYPE_BYTES);
+			}
+			signature = body.getRaw(6);
+		} else {
+			text = body.getString(4);
+			checkLength(text, 1, MAX_GROUP_POST_TEXT_LENGTH);
+			signature = body.getRaw(5);
+		}
 		checkLength(signature, 1, MAX_SIGNATURE_LENGTH);
 
-		// Verify the member's signature
+		// Verify the member's signature. The attachment headers are covered
+		// by the signature so that they can't be swapped or removed.
 		BdfList memberList = body.getList(1); // Already validated
-		BdfList signed = BdfList.of(
-				g.getId(),
-				m.getTimestamp(),
-				memberList,
-				parentId,
-				previousMessageId,
-				text
-		);
+		BdfList signed = getSignedPost(g, m.getTimestamp(), memberList,
+				parentId, previousMessageId, text, headers);
 		try {
 			clientHelper.verifySignature(signature, SIGNING_LABEL_POST,
 					signed, member.getPublicKey());
@@ -173,7 +257,8 @@ class GroupMessageValidator extends BdfMessageValidator {
 		}
 
 		// The parent post, if any, and the member's previous message are
-		// dependencies
+		// dependencies. Attachments are not dependencies, they may arrive
+		// before or after the post that references them.
 		Collection<MessageId> dependencies = new ArrayList<>();
 		if (parentId != null) dependencies.add(new MessageId(parentId));
 		dependencies.add(new MessageId(previousMessageId));
@@ -182,14 +267,52 @@ class GroupMessageValidator extends BdfMessageValidator {
 		BdfDictionary meta = new BdfDictionary();
 		if (parentId != null) meta.put(KEY_PARENT_MSG_ID, parentId);
 		meta.put(KEY_PREVIOUS_MSG_ID, previousMessageId);
+		if (hasAttachments) {
+			meta.put(KEY_HAS_TEXT, text != null);
+			meta.put(KEY_ATTACHMENT_HEADERS, headers);
+		}
 		return new BdfMessageContext(meta, dependencies);
 	}
 
+	/**
+	 * Returns the list that is signed by the author of a post. The list has
+	 * the attachment headers appended if and only if the post has them, so
+	 * signatures of posts in the old format remain valid.
+	 */
+	static BdfList getSignedPost(Group g, long timestamp, BdfList memberList,
+			@Nullable byte[] parentId, byte[] previousMessageId,
+			@Nullable String text, @Nullable BdfList attachmentHeaders) {
+		if (attachmentHeaders == null) {
+			return BdfList.of(g.getId(), timestamp, memberList, parentId,
+					previousMessageId, text);
+		}
+		return BdfList.of(g.getId(), timestamp, memberList, parentId,
+				previousMessageId, text, attachmentHeaders);
+	}
+
+	private BdfMessageContext validateAttachment(Message m, BdfList descriptor,
+			long descriptorLength) throws FormatException {
+		// Message type, content type
+		checkSize(descriptor, 2);
+		String contentType = descriptor.getString(1);
+		checkLength(contentType, 1, MAX_CONTENT_TYPE_BYTES);
+		// Attachments aren't signed. They're authenticated by the signed
+		// post that references them, which includes the attachment's message
+		// ID (a hash of the attachment). Return the metadata and no
+		// dependencies.
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(KEY_TYPE, ATTACHMENT.getInt());
+		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptorLength);
+		meta.put(MSG_KEY_CONTENT_TYPE, contentType);
+		return new BdfMessageContext(meta);
+	}
+
 	private void addMessageMetadata(BdfMessageContext c, BdfList member,
-			long timestamp) {
-		c.getDictionary().put(KEY_MEMBER, member);
-		c.getDictionary().put(KEY_TIMESTAMP, timestamp);
+			long time) {
+		c.getDictionary().put(KEY_TIMESTAMP, time);
 		c.getDictionary().put(KEY_READ, false);
+		c.getDictionary().put(KEY_MEMBER, member);
 	}
 
 }

@@ -2,6 +2,7 @@ package org.briarproject.briar.privategroup;
 
 import org.briarproject.bramble.api.FeatureFlags;
 import org.briarproject.bramble.api.client.ClientHelper;
+import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.sync.validation.ValidationManager;
 import org.briarproject.bramble.api.system.Clock;
@@ -61,10 +62,11 @@ public class PrivateGroupModule {
 			PrivateGroupFactory privateGroupFactory,
 			ClientHelper clientHelper, MetadataEncoder metadataEncoder,
 			Clock clock, GroupInvitationFactory groupInvitationFactory,
-			ValidationManager validationManager, FeatureFlags featureFlags) {
+			ValidationManager validationManager, FeatureFlags featureFlags,
+			BdfReaderFactory bdfReaderFactory) {
 		GroupMessageValidator validator = new GroupMessageValidator(
 				privateGroupFactory, clientHelper, metadataEncoder, clock,
-				groupInvitationFactory);
+				groupInvitationFactory, bdfReaderFactory);
 		if (featureFlags.shouldEnablePrivateGroupsInCore()) {
 			validationManager.registerMessageValidator(CLIENT_ID, MAJOR_VERSION,
 					validator);

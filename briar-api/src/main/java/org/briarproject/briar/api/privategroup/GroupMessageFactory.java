@@ -4,7 +4,10 @@ import org.briarproject.bramble.api.crypto.CryptoExecutor;
 import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
+
+import java.util.List;
 
 import javax.annotation.Nullable;
 
@@ -58,6 +61,30 @@ public interface GroupMessageFactory {
 	@CryptoExecutor
 	GroupMessage createGroupMessage(GroupId groupId, long timestamp,
 			@Nullable MessageId parentId, LocalAuthor author, String text,
+			MessageId previousMsgId);
+
+	/**
+	 * Creates a private group post with optional text and attachments. This
+	 * format requires other members to support client version 0.1 or higher.
+	 *
+	 * @param groupId The ID of the private group
+	 * @param timestamp Must be greater than the timestamps of the parent
+	 * post, if any, and the member's previous message
+	 * @param parentId The ID of the parent post, or null if the post has no
+	 * parent
+	 * @param author The author of the post
+	 * @param text The text of the post, or null if the post has no text, in
+	 * which case it must have at least one attachment
+	 * @param attachmentHeaders The headers of the post's attachments, which
+	 * must have been stored with
+	 * {@link PrivateGroupManager#addLocalAttachment}
+	 * @param previousMsgId The ID of the author's previous message
+	 * in this group
+	 */
+	@CryptoExecutor
+	GroupMessage createGroupMessage(GroupId groupId, long timestamp,
+			@Nullable MessageId parentId, LocalAuthor author,
+			@Nullable String text, List<AttachmentHeader> attachmentHeaders,
 			MessageId previousMsgId);
 
 }

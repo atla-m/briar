@@ -2,6 +2,12 @@ package org.briarproject.briar.android.attachment;
 
 import android.app.Application;
 
+import org.briarproject.bramble.api.lifecycle.IoExecutor;
+import org.briarproject.briar.android.attachment.media.ImageCompressor;
+import org.briarproject.briar.api.messaging.MessagingManager;
+
+import java.util.concurrent.Executor;
+
 import javax.inject.Singleton;
 
 import dagger.Module;
@@ -24,10 +30,24 @@ public class AttachmentModule {
 		return attachmentRetriever;
 	}
 
+	/**
+	 * The attachment creator for private messages.
+	 */
 	@Provides
 	@Singleton
-	AttachmentCreator provideAttachmentCreator(
-			AttachmentCreatorImpl attachmentCreator) {
-		return attachmentCreator;
+	AttachmentCreator provideAttachmentCreator(Application app,
+			@IoExecutor Executor ioExecutor, MessagingManager messagingManager,
+			AttachmentRetriever retriever, ImageCompressor imageCompressor) {
+		return new AttachmentCreatorImpl(app, ioExecutor,
+				new MessagingAttachmentStore(messagingManager), retriever,
+				imageCompressor);
+	}
+
+	@Provides
+	AttachmentCreatorFactory provideAttachmentCreatorFactory(Application app,
+			@IoExecutor Executor ioExecutor, AttachmentRetriever retriever,
+			ImageCompressor imageCompressor) {
+		return store -> new AttachmentCreatorImpl(app, ioExecutor, store,
+				retriever, imageCompressor);
 	}
 }

@@ -38,6 +38,14 @@
 
 	</FrameLayout>
 
+	<org.briarproject.briar.android.view.ImagePreview
+		android:id="@+id/imagePreview"
+		android:layout_width="match_parent"
+		android:layout_height="0dp"
+		android:layout_weight="1"
+		android:visibility="gone"
+		tools:visibility="visible" />
+
 	<org.briarproject.briar.android.view.TextInputView
 		android:id="@+id/text_input_container"
 		android:layout_width="match_parent"

@@ -11,6 +11,7 @@ import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataParser;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.identity.Author;
@@ -19,8 +20,11 @@ import org.briarproject.bramble.api.identity.IdentityManager;
 import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.briar.api.client.ProtocolStateException;
@@ -37,10 +41,14 @@ import org.briarproject.briar.api.privategroup.PrivateGroupFactory;
 import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 import org.briarproject.briar.api.privategroup.Visibility;
 import org.briarproject.briar.api.privategroup.event.ContactRelationshipRevealedEvent;
+import org.briarproject.briar.api.privategroup.event.GroupAttachmentReceivedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupDissolvedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupMessageAddedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -55,9 +63,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
+import static java.util.Collections.emptyList;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_SHARE;
+import static org.briarproject.bramble.util.IoUtils.copyAndClose;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
 import static org.briarproject.briar.api.identity.AuthorInfo.Status.UNVERIFIED;
 import static org.briarproject.briar.api.identity.AuthorInfo.Status.VERIFIED;
+import static org.briarproject.briar.api.privategroup.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
 import static org.briarproject.briar.api.privategroup.Visibility.INVISIBLE;
@@ -69,6 +83,8 @@ import static org.briarproject.briar.privategroup.GroupConstants.GROUP_KEY_DISSO
 import static org.briarproject.briar.privategroup.GroupConstants.GROUP_KEY_MEMBERS;
 import static org.briarproject.briar.privategroup.GroupConstants.GROUP_KEY_OUR_GROUP;
 import static org.briarproject.briar.privategroup.GroupConstants.GROUP_KEY_VISIBILITY;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_HAS_TEXT;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_INITIAL_JOIN_MSG;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_MEMBER;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_PARENT_MSG_ID;
@@ -76,6 +92,7 @@ import static org.briarproject.briar.privategroup.GroupConstants.KEY_PREVIOUS_MS
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_READ;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_TIMESTAMP;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_TYPE;
+import static org.briarproject.briar.privategroup.GroupConstants.MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
 
 @ThreadSafe
 @NotNullByDefault
@@ -219,6 +236,18 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			if (m.getParent() != null)
 				meta.put(KEY_PARENT_MSG_ID, m.getParent());
 			addMessageMetadata(meta, m);
+			List<AttachmentHeader> attachments = m.getAttachmentHeaders();
+			if (!attachments.isEmpty()) {
+				meta.put(KEY_HAS_TEXT, m.hasText());
+				meta.put(KEY_ATTACHMENT_HEADERS,
+						encodeAttachmentHeaders(attachments));
+				// Mark the attachments as shared and permanent now that
+				// we're ready to send the post that references them
+				for (AttachmentHeader a : attachments) {
+					db.setMessageShared(txn, a.getMessageId());
+					db.setMessagePermanent(txn, a.getMessageId());
+				}
+			}
 			GroupId g = m.getMessage().getGroupId();
 			clientHelper
 					.addLocalMessage(txn, m.getMessage(), meta, true, false);
@@ -231,7 +260,7 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			return new GroupMessageHeader(m.getMessage().getGroupId(),
 					m.getMessage().getId(), m.getParent(),
 					m.getMessage().getTimestamp(), m.getMember(), authorInfo,
-					true);
+					true, m.hasText(), attachments);
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
@@ -241,6 +270,61 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 		meta.put(KEY_MEMBER, clientHelper.toList(m.getMember()));
 		meta.put(KEY_TIMESTAMP, m.getMessage().getTimestamp());
 		meta.put(KEY_READ, true);
+	}
+
+	@Override
+	public AttachmentHeader addLocalAttachment(GroupId groupId, long timestamp,
+			String contentType, InputStream in)
+			throws DbException, IOException {
+		// The attachment is a BDF descriptor followed by the raw bytes, and
+		// the whole thing must fit into a single message
+		ByteArrayOutputStream bodyOut = new ByteArrayOutputStream();
+		byte[] descriptor = clientHelper.toByteArray(
+				BdfList.of(ATTACHMENT.getInt(), contentType));
+		bodyOut.write(descriptor);
+		copyAndClose(in, bodyOut);
+		if (bodyOut.size() > MAX_MESSAGE_BODY_LENGTH)
+			throw new FileTooBigException();
+		byte[] body = bodyOut.toByteArray();
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(KEY_TYPE, ATTACHMENT.getInt());
+		meta.put(KEY_TIMESTAMP, timestamp);
+		meta.put(MSG_KEY_CONTENT_TYPE, contentType);
+		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptor.length);
+		Message m = clientHelper.createMessage(groupId, timestamp, body);
+		// Attachments are temporary and not shared until the post that
+		// references them is added
+		db.transaction(false, txn ->
+				clientHelper.addLocalMessage(txn, m, meta, false, true));
+		return new AttachmentHeader(groupId, m.getId(), contentType);
+	}
+
+	@Override
+	public void removeAttachment(AttachmentHeader header) throws DbException {
+		db.transaction(false,
+				txn -> db.removeMessage(txn, header.getMessageId()));
+	}
+
+	private BdfList encodeAttachmentHeaders(List<AttachmentHeader> headers) {
+		BdfList list = new BdfList();
+		for (AttachmentHeader a : headers) {
+			list.add(BdfList.of(a.getMessageId(), a.getContentType()));
+		}
+		return list;
+	}
+
+	private List<AttachmentHeader> parseAttachmentHeaders(GroupId g,
+			BdfDictionary meta) throws FormatException {
+		if (!meta.containsKey(KEY_ATTACHMENT_HEADERS)) return emptyList();
+		BdfList list = meta.getList(KEY_ATTACHMENT_HEADERS);
+		List<AttachmentHeader> headers = new ArrayList<>(list.size());
+		for (int i = 0; i < list.size(); i++) {
+			BdfList header = list.getList(i);
+			MessageId m = new MessageId(header.getRaw(0));
+			String contentType = header.getString(1);
+			headers.add(new AttachmentHeader(g, m, contentType));
+		}
+		return headers;
 	}
 
 	@Override
@@ -331,8 +415,10 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 
 	private String getMessageText(BdfList body) throws FormatException {
 		// Message type (0), member (1), parent ID (2), previous message ID (3),
-		// text (4), signature (5)
-		return body.getString(4);
+		// text (4), signature (5). Or, for posts with attachments: text (4)
+		// may be null, attachment headers (5), signature (6)
+		String text = body.getOptionalString(4);
+		return text == null ? "" : text;
 	}
 
 	@Override
@@ -346,8 +432,14 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			throws DbException {
 		List<GroupMessageHeader> headers = new ArrayList<>();
 		try {
-			Map<MessageId, BdfDictionary> metadata =
+			Map<MessageId, BdfDictionary> allMetadata =
 					clientHelper.getMessageMetadataAsDictionary(txn, g);
+			// attachments aren't messages in their own right, skip them
+			Map<MessageId, BdfDictionary> metadata = new HashMap<>();
+			for (Entry<MessageId, BdfDictionary> e : allMetadata.entrySet()) {
+				if (e.getValue().getInt(KEY_TYPE) != ATTACHMENT.getInt())
+					metadata.put(e.getKey(), e.getValue());
+			}
 			// get all authors we need to get the information for
 			Set<AuthorId> authors = new HashSet<>();
 			for (BdfDictionary meta : metadata.values()) {
@@ -394,9 +486,12 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			authorInfo = authorManager.getAuthorInfo(txn, member.getId());
 		}
 		boolean read = meta.getBoolean(KEY_READ);
+		// Posts without attachments don't store these keys
+		boolean hasText = meta.getBoolean(KEY_HAS_TEXT, true);
+		List<AttachmentHeader> attachments = parseAttachmentHeaders(g, meta);
 
 		return new GroupMessageHeader(g, id, parentId, timestamp, member,
-				authorInfo, read);
+				authorInfo, read, hasText, attachments);
 	}
 
 	private JoinMessageHeader getJoinMessageHeader(Transaction txn, GroupId g,
@@ -526,6 +621,23 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 	}
 
 	@Override
+	public DeliveryAction incomingMessage(Transaction txn, Message m,
+			Metadata meta) throws DbException, InvalidMessageException {
+		// An attachment's body is a BDF list followed by raw bytes, so it
+		// can't be parsed as a list by the superclass. Handle it here.
+		try {
+			BdfDictionary metaDict = metadataParser.parse(meta);
+			if (metaDict.getInt(KEY_TYPE) == ATTACHMENT.getInt()) {
+				handleAttachment(txn, m);
+				return ACCEPT_SHARE;
+			}
+		} catch (FormatException e) {
+			throw new InvalidMessageException(e);
+		}
+		return super.incomingMessage(txn, m, meta);
+	}
+
+	@Override
 	protected DeliveryAction incomingMessage(Transaction txn, Message m,
 			BdfList body, BdfDictionary meta)
 			throws DbException, FormatException {
@@ -541,6 +653,44 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			default:
 				// the validator should only let valid types pass
 				throw new RuntimeException("Unknown MessageType");
+		}
+	}
+
+	private void handleAttachment(Transaction txn, Message m)
+			throws DbException, FormatException {
+		GroupId g = m.getGroupId();
+		txn.attach(new GroupAttachmentReceivedEvent(g, m.getId()));
+		// If no post that references this attachment has been delivered,
+		// start the cleanup timer. It will be stopped when a post that
+		// references the attachment is delivered.
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(KEY_TYPE, POST.getInt()));
+		Map<MessageId, BdfDictionary> results =
+				clientHelper.getMessageMetadataAsDictionary(txn, g, query);
+		for (BdfDictionary meta : results.values()) {
+			for (AttachmentHeader h : parseAttachmentHeaders(g, meta)) {
+				if (h.getMessageId().equals(m.getId())) return;
+			}
+		}
+		// No posts reference this attachment - start the timer
+		db.setCleanupTimerDuration(txn, m.getId(),
+				MISSING_ATTACHMENT_CLEANUP_DURATION_MS);
+		db.startCleanupTimer(txn, m.getId());
+	}
+
+	private void stopAttachmentCleanupTimers(Transaction txn, Message m,
+			List<AttachmentHeader> headers)
+			throws DbException, FormatException {
+		// Fetch the IDs of all attachments in the group
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(KEY_TYPE, ATTACHMENT.getInt()));
+		Collection<MessageId> results =
+				clientHelper.getMessageIds(txn, m.getGroupId(), query);
+		// Stop the cleanup timers of any attachments that have already
+		// been delivered
+		for (AttachmentHeader h : headers) {
+			MessageId id = h.getMessageId();
+			if (results.contains(id)) db.stopCleanupTimer(txn, id);
 		}
 	}
 
@@ -595,6 +745,11 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				MessageType.valueOf(previousMeta.getInt(KEY_TYPE));
 		if (previousType != JOIN && previousType != POST)
 			throw new FormatException();
+		// the post's attachments, if any, are no longer orphans
+		List<AttachmentHeader> attachments =
+				parseAttachmentHeaders(m.getGroupId(), meta);
+		if (!attachments.isEmpty())
+			stopAttachmentCleanupTimers(txn, m, attachments);
 		// track message and broadcast event
 		messageTracker.trackIncomingMessage(txn, m);
 		attachGroupMessageAddedEvent(txn, m, meta, false);

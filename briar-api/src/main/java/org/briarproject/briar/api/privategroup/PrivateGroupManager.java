@@ -8,9 +8,13 @@ import org.briarproject.bramble.api.identity.AuthorId;
 import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.Collection;
 import java.util.List;
 
@@ -29,8 +33,10 @@ public interface PrivateGroupManager {
 
 	/**
 	 * The current minor version of the private group client.
+	 * <p>
+	 * Version 0.1 added image attachments to posts.
 	 */
-	int MINOR_VERSION = 0;
+	int MINOR_VERSION = 1;
 
 	/**
 	 * Adds a new private group and joins it.
@@ -97,6 +103,22 @@ public interface PrivateGroupManager {
 	 */
 	GroupMessageHeader addLocalMessage(Transaction txn, GroupMessage p)
 			throws DbException;
+
+	/**
+	 * Stores a local attachment for the given private group. The attachment
+	 * is not shared with other members until a post that references it is
+	 * added with {@link #addLocalMessage(GroupMessage)}.
+	 *
+	 * @throws FileTooBigException If the attachment is too big
+	 */
+	AttachmentHeader addLocalAttachment(GroupId groupId, long timestamp,
+			String contentType, InputStream in)
+			throws DbException, IOException;
+
+	/**
+	 * Removes an unsent attachment.
+	 */
+	void removeAttachment(AttachmentHeader header) throws DbException;
 
 	/**
 	 * Returns the private group with the given ID.

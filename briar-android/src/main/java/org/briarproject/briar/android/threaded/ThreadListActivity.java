@@ -70,7 +70,7 @@ public abstract class ThreadListActivity<I extends ThreadItem, A extends ThreadI
 		viewModel.setGroupId(groupId);
 
 		textInput = findViewById(R.id.text_input_container);
-		sendController = new TextSendController(textInput, this, false);
+		sendController = createSendController();
 		textInput.setSendController(sendController);
 		textInput.setMaxTextLength(getMaxTextLength());
 		textInput.setReady(true);
@@ -241,18 +241,38 @@ public abstract class ThreadListActivity<I extends ThreadItem, A extends ThreadI
 		adapter.setHighlightedItem(replyId);
 	}
 
+	/**
+	 * Creates the controller for the text input. Subclasses that support
+	 * attachments can override this to return a controller that handles them.
+	 */
+	protected TextSendController createSendController() {
+		return new TextSendController(textInput, this, false);
+	}
+
 	@Override
 	public LiveData<SendState> onSendClick(@Nullable String text,
 			List<AttachmentHeader> headers, long expectedAutoDeleteTimer) {
-		if (isNullOrEmpty(text)) throw new AssertionError();
+		if (isNullOrEmpty(text) && headers.isEmpty())
+			throw new AssertionError();
 
 		MessageId replyId = getViewModel().getReplyId();
-		getViewModel().createAndStoreMessage(text, replyId);
+		createAndStoreMessage(isNullOrEmpty(text) ? null : text, headers,
+				replyId);
 		textInput.hideSoftKeyboard();
 		textInput.clearText();
 		getViewModel().setReplyId(null);
 		updateTextInput();
 		return new MutableLiveData<>(SENT);
+	}
+
+	/**
+	 * Creates and stores a message. Subclasses that support attachments
+	 * must override this, as the default implementation requires text.
+	 */
+	protected void createAndStoreMessage(@Nullable String text,
+			List<AttachmentHeader> headers, @Nullable MessageId replyId) {
+		if (text == null) throw new AssertionError();
+		getViewModel().createAndStoreMessage(text, replyId);
 	}
 
 	protected abstract int getMaxTextLength();

@@ -3,7 +3,11 @@ package org.briarproject.briar.privategroup;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.BdfMessageContext;
 import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.data.BdfReader;
+import org.briarproject.bramble.api.data.BdfReaderFactory;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.MessageId;
@@ -15,6 +19,7 @@ import org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory
 import org.jmock.Expectations;
 import org.junit.Test;
 
+import java.io.InputStream;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Collection;
@@ -25,14 +30,22 @@ import static org.briarproject.bramble.test.TestUtils.getAuthor;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
+import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_JOIN;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_POST;
+import static org.briarproject.briar.api.privategroup.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.GROUP_SALT_LENGTH;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_NAME_LENGTH;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_HAS_TEXT;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_INITIAL_JOIN_MSG;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_MEMBER;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_PARENT_MSG_ID;
@@ -51,6 +64,9 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 			context.mock(PrivateGroupFactory.class);
 	private final GroupInvitationFactory groupInvitationFactory =
 			context.mock(GroupInvitationFactory.class);
+	private final BdfReaderFactory bdfReaderFactory =
+			context.mock(BdfReaderFactory.class);
+	private final BdfReader reader = context.mock(BdfReader.class);
 
 	private final Author member = getAuthor();
 	private final BdfList memberList = BdfList.of(
@@ -77,10 +93,16 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	private final MessageId parentId = new MessageId(getRandomId());
 	private final MessageId previousMsgId = new MessageId(getRandomId());
 	private final String text = getRandomString(MAX_GROUP_POST_TEXT_LENGTH);
+	private final String contentType = getRandomString(MAX_CONTENT_TYPE_BYTES);
+	private final BdfList attachmentHeader =
+			BdfList.of(new MessageId(getRandomId()), contentType);
+	private final BdfList attachmentHeaders = BdfList.of(attachmentHeader);
+	private final long now = message.getTimestamp() + 1000;
 
 	private final GroupMessageValidator validator =
 			new GroupMessageValidator(privateGroupFactory, clientHelper,
-					metadataEncoder, clock, groupInvitationFactory);
+					metadataEncoder, clock, groupInvitationFactory,
+					bdfReaderFactory);
 
 	// JOIN message
 
@@ -440,7 +462,7 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	@Test(expected = FormatException.class)
 	public void testRejectsTooLongPost() throws Exception {
 		BdfList body = BdfList.of(POST.getInt(), memberList, parentId,
-				previousMsgId, text, memberSignature, "");
+				previousMsgId, text, attachmentHeaders, memberSignature, "");
 		validator.validateMessage(message, group, body);
 	}
 
@@ -626,6 +648,245 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 				messageContext.getDictionary().getRaw(KEY_PREVIOUS_MSG_ID));
 		assertFalse(
 				messageContext.getDictionary().containsKey(KEY_PARENT_MSG_ID));
+	}
+
+
+
+	// POST with attachments (client version 0.1)
+
+	@Test
+	public void testAcceptsPostWithAttachments() throws Exception {
+		BdfList body = BdfList.of(POST.getInt(), memberList, parentId,
+				previousMsgId, text, attachmentHeaders, memberSignature);
+		expectPostWithAttachments(parentId, text, attachmentHeaders, true);
+		BdfMessageContext messageContext =
+				validator.validateMessage(message, group, body);
+		assertExpectedMessageContext(messageContext, POST, memberList,
+				Arrays.asList(parentId, previousMsgId));
+		BdfDictionary meta = messageContext.getDictionary();
+		assertTrue(meta.getBoolean(KEY_HAS_TEXT));
+		assertEquals(attachmentHeaders, meta.getList(KEY_ATTACHMENT_HEADERS));
+	}
+
+	@Test
+	public void testAcceptsPostWithAttachmentsAndNullText() throws Exception {
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, null, attachmentHeaders, memberSignature);
+		expectPostWithAttachments(null, null, attachmentHeaders, true);
+		BdfMessageContext messageContext =
+				validator.validateMessage(message, group, body);
+		assertExpectedMessageContext(messageContext, POST, memberList,
+				Collections.singletonList(previousMsgId));
+		BdfDictionary meta = messageContext.getDictionary();
+		assertFalse(meta.getBoolean(KEY_HAS_TEXT));
+		assertEquals(attachmentHeaders, meta.getList(KEY_ATTACHMENT_HEADERS));
+	}
+
+	@Test
+	public void testAcceptsPostWithMaxAttachments() throws Exception {
+		BdfList headers = new BdfList();
+		for (int i = 0; i < MAX_GROUP_POST_ATTACHMENTS; i++) {
+			headers.add(BdfList.of(new MessageId(getRandomId()), contentType));
+		}
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectPostWithAttachments(null, text, headers, true);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithTooManyAttachments() throws Exception {
+		BdfList headers = new BdfList();
+		for (int i = 0; i < MAX_GROUP_POST_ATTACHMENTS + 1; i++) {
+			headers.add(BdfList.of(new MessageId(getRandomId()), contentType));
+		}
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithEmptyAttachmentList() throws Exception {
+		// The format with attachment headers is only used when there are
+		// attachments, so an empty list isn't a valid encoding
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, new BdfList(), memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithNonListAttachmentHeaders()
+			throws Exception {
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, "not a list", memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithTooShortAttachmentHeader()
+			throws Exception {
+		BdfList headers = BdfList.of(BdfList.of(new MessageId(getRandomId())));
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithTooShortAttachmentId() throws Exception {
+		BdfList headers = BdfList.of(BdfList.of(
+				getRandomBytes(MessageId.LENGTH - 1), contentType));
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithTooLongAttachmentContentType()
+			throws Exception {
+		BdfList headers = BdfList.of(BdfList.of(new MessageId(getRandomId()),
+				getRandomString(MAX_CONTENT_TYPE_BYTES + 1)));
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithAttachmentsAndInvalidSignature()
+			throws Exception {
+		BdfList body = BdfList.of(POST.getInt(), memberList, parentId,
+				previousMsgId, text, attachmentHeaders, memberSignature);
+		expectPostWithAttachments(parentId, text, attachmentHeaders, false);
+		validator.validateMessage(message, group, body);
+	}
+
+
+	// ATTACHMENT message, which is validated from the raw body because the
+	// descriptor is followed by the attachment's bytes
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFarFutureTimestamp() throws Exception {
+		expectCheckTimestamp(message.getTimestamp() - MAX_CLOCK_DIFFERENCE - 1);
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsEmptyBody() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(new BdfList());
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsTrailingDataForPost() throws Exception {
+		// Only attachments may have data after the list
+		BdfList body = BdfList.of(POST.getInt(), memberList, parentId,
+				previousMsgId, text, memberSignature);
+		expectCheckTimestamp(now);
+		expectParseList(body);
+		expectReadEof(false);
+		validator.validateMessage(message, group);
+	}
+
+	@Test
+	public void testAcceptsValidDescriptorForAttachment() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(ATTACHMENT.getInt(), contentType));
+		// Descriptor length is zero as the test doesn't read from the
+		// counting input stream
+		BdfDictionary meta = BdfDictionary.of(
+				new BdfEntry(KEY_TYPE, ATTACHMENT.getInt()),
+				new BdfEntry(KEY_TIMESTAMP, message.getTimestamp()),
+				new BdfEntry(MSG_KEY_DESCRIPTOR_LENGTH, 0L),
+				new BdfEntry(MSG_KEY_CONTENT_TYPE, contentType)
+		);
+		expectEncodeMetadata(meta);
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsTooShortDescriptorForAttachment() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(ATTACHMENT.getInt()));
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsTooLongDescriptorForAttachment() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(ATTACHMENT.getInt(), contentType, 123));
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsNullContentTypeForAttachment() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(ATTACHMENT.getInt(), null));
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsTooLongContentTypeForAttachment() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(ATTACHMENT.getInt(),
+				getRandomString(MAX_CONTENT_TYPE_BYTES + 1)));
+		validator.validateMessage(message, group);
+	}
+
+	private void expectCheckTimestamp(long now) {
+		context.checking(new Expectations() {{
+			oneOf(clock).currentTimeMillis();
+			will(returnValue(now));
+		}});
+	}
+
+	private void expectParseList(BdfList body) throws Exception {
+		context.checking(new Expectations() {{
+			oneOf(bdfReaderFactory).createReader(with(any(InputStream.class)),
+					with(true));
+			will(returnValue(reader));
+			oneOf(reader).readList();
+			will(returnValue(body));
+		}});
+	}
+
+	private void expectReadEof(boolean eof) throws Exception {
+		context.checking(new Expectations() {{
+			oneOf(reader).eof();
+			will(returnValue(eof));
+		}});
+	}
+
+	private void expectEncodeMetadata(BdfDictionary meta) throws Exception {
+		context.checking(new Expectations() {{
+			oneOf(metadataEncoder).encode(meta);
+			will(returnValue(new Metadata()));
+		}});
+	}
+
+	private void expectPostWithAttachments(MessageId parentId, String text,
+			BdfList headers, boolean sigValid) throws Exception {
+		BdfList signed = BdfList.of(
+				group.getId(),
+				message.getTimestamp(),
+				memberList,
+				parentId == null ? null : parentId.getBytes(),
+				previousMsgId.getBytes(),
+				text,
+				headers
+		);
+		expectParseAuthor(memberList, member);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).verifySignature(memberSignature,
+					SIGNING_LABEL_POST, signed, member.getPublicKey());
+			if (!sigValid)
+				will(throwException(new GeneralSecurityException()));
+		}});
 	}
 
 	private void expectPostMessage(MessageId parentId, boolean sigValid)

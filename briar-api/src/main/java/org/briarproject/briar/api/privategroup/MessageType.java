@@ -9,7 +9,13 @@ import javax.annotation.concurrent.Immutable;
 public enum MessageType {
 
 	JOIN(0),
-	POST(1);
+	POST(1),
+	/**
+	 * An image attachment referenced by a {@link #POST}. Attachments are
+	 * not shown as messages themselves; they're loaded via the attachment
+	 * headers of the post that references them.
+	 */
+	ATTACHMENT(2);
 
 	private final int value;
 

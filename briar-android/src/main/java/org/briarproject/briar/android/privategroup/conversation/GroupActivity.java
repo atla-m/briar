@@ -1,44 +1,84 @@
 package org.briarproject.briar.android.privategroup.conversation;
 
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
+import android.view.View;
+import android.widget.Toast;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
+import org.briarproject.bramble.api.FeatureFlags;
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
+import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.conversation.ImageActivity;
 import org.briarproject.briar.android.privategroup.creation.GroupInviteActivity;
 import org.briarproject.briar.android.privategroup.memberlist.GroupMemberListActivity;
 import org.briarproject.briar.android.privategroup.reveal.RevealContactsActivity;
 import org.briarproject.briar.android.threaded.ThreadListActivity;
 import org.briarproject.briar.android.threaded.ThreadListViewModel;
+import org.briarproject.briar.android.util.ActivityLaunchers.GetMultipleImagesAdvanced;
+import org.briarproject.briar.android.util.ActivityLaunchers.OpenMultipleImageDocumentsAdvanced;
+import org.briarproject.briar.android.view.ImagePreview;
+import org.briarproject.briar.android.view.TextAttachmentController;
+import org.briarproject.briar.android.view.TextAttachmentController.AttachmentListener;
+import org.briarproject.briar.android.view.TextSendController;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 
+import androidx.activity.result.ActivityResultLauncher;
 import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.ActivityOptionsCompat;
 import androidx.lifecycle.ViewModelProvider;
 
 import static android.view.View.GONE;
 import static android.view.View.VISIBLE;
+import static android.widget.Toast.LENGTH_SHORT;
+import static androidx.core.app.ActivityOptionsCompat.makeSceneTransitionAnimation;
+import static androidx.recyclerview.widget.RecyclerView.NO_POSITION;
 import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_GROUP_INVITE;
+import static org.briarproject.briar.android.conversation.ImageActivity.ATTACHMENTS;
+import static org.briarproject.briar.android.conversation.ImageActivity.ATTACHMENT_POSITION;
+import static org.briarproject.briar.android.conversation.ImageActivity.DATE;
+import static org.briarproject.briar.android.conversation.ImageActivity.ITEM_ID;
+import static org.briarproject.briar.android.conversation.ImageActivity.NAME;
+import static org.briarproject.briar.android.util.UiUtils.launchActivityToOpenFile;
 import static org.briarproject.briar.android.util.UiUtils.observeOnce;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.nullsafety.NullSafety.requireNonNull;
 
 @MethodsNotNullByDefault
 @ParametersNotNullByDefault
 public class GroupActivity extends
-		ThreadListActivity<GroupMessageItem, GroupMessageAdapter> {
+		ThreadListActivity<GroupMessageItem, GroupMessageAdapter>
+		implements AttachmentListener, GroupImageAdapter.Listener {
 
 	@Inject
 	ViewModelProvider.Factory viewModelFactory;
+	@Inject
+	FeatureFlags featureFlags;
+
+	private final ActivityResultLauncher<String[]> docLauncher =
+			registerForActivityResult(new OpenMultipleImageDocumentsAdvanced(),
+					this::onImagesChosen);
+	private final ActivityResultLauncher<String> contentLauncher =
+			registerForActivityResult(new GetMultipleImagesAdvanced(),
+					this::onImagesChosen);
 
 	private GroupViewModel viewModel;
 
@@ -56,7 +96,21 @@ public class GroupActivity extends
 
 	@Override
 	protected GroupMessageAdapter createAdapter() {
-		return new GroupMessageAdapter(this);
+		return new GroupMessageAdapter(this, this);
+	}
+
+	@Override
+	protected TextSendController createSendController() {
+		if (!featureFlags.shouldEnableImageAttachments()) {
+			return super.createSendController();
+		}
+		ImagePreview imagePreview = findViewById(R.id.imagePreview);
+		TextAttachmentController controller = new TextAttachmentController(
+				textInput, imagePreview, this, viewModel);
+		// Attachments in groups were added in the same release as this UI,
+		// so all members of a group we can post to support them
+		controller.setImagesSupported();
+		return controller;
 	}
 
 	@Override
@@ -86,6 +140,54 @@ public class GroupActivity extends
 			// only show dialog when no prior state
 			if (dissolved && state == null) onGroupDissolved();
 		});
+
+		// redraw a post when one of its attachments has loaded
+		viewModel.getAttachmentUpdated().observe(this, id -> {
+			int position = adapter.findItemPosition(id);
+			if (position != NO_POSITION) adapter.notifyItemChanged(position);
+		});
+	}
+
+	@Override
+	protected void createAndStoreMessage(@Nullable String text,
+			List<AttachmentHeader> headers, @Nullable MessageId replyId) {
+		viewModel.createAndStoreMessage(text, headers, replyId);
+	}
+
+	@Override
+	public void onAttachImageClicked() {
+		launchActivityToOpenFile(this, docLauncher, contentLauncher, "image/*");
+	}
+
+	private void onImagesChosen(@Nullable List<Uri> uris) {
+		if (sendController instanceof TextAttachmentController) {
+			((TextAttachmentController) sendController).onImageReceived(uris);
+		}
+	}
+
+	@Override
+	public void onTooManyAttachments() {
+		String format = getResources().getString(
+				R.string.messaging_too_many_attachments_toast);
+		String warning = String.format(format, MAX_GROUP_POST_ATTACHMENTS);
+		Toast.makeText(this, warning, LENGTH_SHORT).show();
+	}
+
+	@Override
+	public void onAttachmentClicked(View view, GroupMessageItem item,
+			AttachmentItem attachment) {
+		ArrayList<AttachmentItem> attachments =
+				new ArrayList<>(item.getAttachments());
+		Intent i = new Intent(this, ImageActivity.class);
+		i.putParcelableArrayListExtra(ATTACHMENTS, attachments);
+		i.putExtra(ATTACHMENT_POSITION, attachments.indexOf(attachment));
+		i.putExtra(NAME, item.getAuthorName());
+		i.putExtra(DATE, item.getTimestamp());
+		i.putExtra(ITEM_ID, item.getId().getBytes());
+		String transitionName = attachment.getTransitionName(item.getId());
+		ActivityOptionsCompat options =
+				makeSceneTransitionAnimation(this, view, transitionName);
+		ActivityCompat.startActivity(this, i, options.toBundle());
 	}
 
 	@Override

@@ -13,7 +13,6 @@ import org.briarproject.briar.android.attachment.media.ImageCompressor;
 import org.briarproject.briar.api.attachment.Attachment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileTooBigException;
-import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.IOException;
@@ -23,8 +22,6 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
-
-import javax.inject.Inject;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
@@ -47,7 +44,7 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 	private final Application app;
 	@IoExecutor
 	private final Executor ioExecutor;
-	private final MessagingManager messagingManager;
+	private final AttachmentStore attachmentStore;
 	private final AttachmentRetriever retriever;
 	private final ImageCompressor imageCompressor;
 
@@ -61,13 +58,12 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 	@Nullable
 	private volatile MutableLiveData<AttachmentResult> result;
 
-	@Inject
 	AttachmentCreatorImpl(Application app, @IoExecutor Executor ioExecutor,
-			MessagingManager messagingManager, AttachmentRetriever retriever,
+			AttachmentStore attachmentStore, AttachmentRetriever retriever,
 			ImageCompressor imageCompressor) {
 		this.app = app;
 		this.ioExecutor = ioExecutor;
-		this.messagingManager = messagingManager;
+		this.attachmentStore = attachmentStore;
 		this.retriever = retriever;
 		this.imageCompressor = imageCompressor;
 	}
@@ -88,7 +84,7 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 		observeForeverOnce(groupId, id -> {
 			if (id == null) throw new IllegalStateException();
 			boolean needsSize = uris.size() == 1;
-			task = new AttachmentCreationTask(messagingManager,
+			task = new AttachmentCreationTask(attachmentStore,
 					app.getContentResolver(), this, imageCompressor, id,
 					uris, needsSize);
 			ioExecutor.execute(() -> task.storeAttachments());
@@ -212,7 +208,7 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 		ioExecutor.execute(() -> {
 			for (AttachmentHeader header : headers) {
 				try {
-					messagingManager.removeAttachment(header);
+					attachmentStore.removeAttachment(header);
 				} catch (DbException e) {
 					logException(LOG, WARNING, e);
 				}

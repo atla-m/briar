@@ -7,7 +7,6 @@ import android.view.ViewGroup;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.threaded.BaseThreadItemViewHolder;
 import org.briarproject.briar.android.threaded.ThreadItemAdapter;
-import org.briarproject.briar.android.threaded.ThreadPostViewHolder;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import androidx.annotation.LayoutRes;
@@ -17,10 +16,14 @@ import androidx.annotation.UiThread;
 @NotNullByDefault
 class GroupMessageAdapter extends ThreadItemAdapter<GroupMessageItem> {
 
+	private final GroupImageAdapter.Listener imageListener;
+
 	private boolean isCreator = false;
 
-	GroupMessageAdapter(ThreadItemListener<GroupMessageItem> listener) {
+	GroupMessageAdapter(ThreadItemListener<GroupMessageItem> listener,
+			GroupImageAdapter.Listener imageListener) {
 		super(listener);
+		this.imageListener = imageListener;
 	}
 
 	@LayoutRes
@@ -38,7 +41,7 @@ class GroupMessageAdapter extends ThreadItemAdapter<GroupMessageItem> {
 		if (type == R.layout.list_item_group_join_notice) {
 			return new JoinMessageItemViewHolder(v, isCreator);
 		}
-		return new ThreadPostViewHolder<>(v);
+		return new GroupPostViewHolder(v, imageListener);
 	}
 
 	void setIsCreator(boolean isCreator) {

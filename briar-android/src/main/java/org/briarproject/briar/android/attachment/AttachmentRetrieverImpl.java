@@ -86,7 +86,12 @@ class AttachmentRetrieverImpl implements AttachmentRetriever {
 	@Override
 	public List<LiveData<AttachmentItem>> getAttachmentItems(
 			PrivateMessageHeader messageHeader) {
-		List<AttachmentHeader> headers = messageHeader.getAttachmentHeaders();
+		return getAttachmentItems(messageHeader.getAttachmentHeaders());
+	}
+
+	@Override
+	public List<LiveData<AttachmentItem>> getAttachmentItems(
+			List<AttachmentHeader> headers) {
 		List<LiveData<AttachmentItem>> items = new ArrayList<>(headers.size());
 		boolean needsSize = headers.size() == 1;
 		List<String> supported = asList(getSupportedImageContentTypes());

@@ -8,7 +8,6 @@ import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.briar.android.attachment.media.ImageCompressor;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
-import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.IOException;
@@ -34,7 +33,7 @@ class AttachmentCreationTask {
 	private static final Logger LOG =
 			getLogger(AttachmentCreationTask.class.getName());
 
-	private final MessagingManager messagingManager;
+	private final AttachmentStore attachmentStore;
 	private final ContentResolver contentResolver;
 	private final ImageCompressor imageCompressor;
 	private final GroupId groupId;
@@ -45,12 +44,12 @@ class AttachmentCreationTask {
 
 	private volatile boolean canceled = false;
 
-	AttachmentCreationTask(MessagingManager messagingManager,
+	AttachmentCreationTask(AttachmentStore attachmentStore,
 			ContentResolver contentResolver,
 			AttachmentCreator attachmentCreator,
 			ImageCompressor imageCompressor,
 			GroupId groupId, Collection<Uri> uris, boolean needsSize) {
-		this.messagingManager = messagingManager;
+		this.attachmentStore = attachmentStore;
 		this.contentResolver = contentResolver;
 		this.imageCompressor = imageCompressor;
 		this.groupId = groupId;
@@ -110,7 +109,7 @@ class AttachmentCreationTask {
 		}
 		is = imageCompressor.compressImage(is, contentType);
 		long timestamp = System.currentTimeMillis();
-		AttachmentHeader h = messagingManager.addLocalAttachment(groupId,
+		AttachmentHeader h = attachmentStore.addLocalAttachment(groupId,
 				timestamp, MIME_TYPE, is);
 		tryToClose(is, LOG, WARNING);
 		logDuration(LOG, "Storing attachment", start);

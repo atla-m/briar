@@ -29,6 +29,14 @@ public interface AttachmentRetriever {
 			PrivateMessageHeader messageHeader);
 
 	/**
+	 * Returns a list of observable {@link LiveData}
+	 * that get updated as the state of their {@link AttachmentItem}s changes.
+	 * This works for attachments of any client, e.g. private group posts.
+	 */
+	List<LiveData<AttachmentItem>> getAttachmentItems(
+			List<AttachmentHeader> headers);
+
+	/**
 	 * Retrieves item size and adds the item to the cache, if available.
 	 * <p>
 	 * Use this to eagerly load the attachment size before it gets displayed.
