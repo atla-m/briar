@@ -25,6 +25,7 @@
 		android:hint="@string/channels_mirrors_hint"
 		android:importantForAutofill="no"
 		android:inputType="textMultiLine|textUri"
+		android:imeOptions="flagNoPersonalizedLearning"
 		android:minLines="3"
 		android:textSize="@dimen/text_size_small" />
 

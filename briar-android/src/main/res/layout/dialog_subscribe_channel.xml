@@ -24,6 +24,7 @@
 		android:hint="@string/channels_link_hint"
 		android:importantForAutofill="no"
 		android:inputType="textUri"
+		android:imeOptions="flagNoPersonalizedLearning"
 		android:textSize="@dimen/text_size_small" />
 
 </LinearLayout>
