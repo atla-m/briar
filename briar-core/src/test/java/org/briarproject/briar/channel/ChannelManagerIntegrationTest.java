@@ -1598,14 +1598,96 @@ public class ChannelManagerIntegrationTest
 		assertTrue(blogManager0.getFileStatus(planted).isComplete());
 		assertNothingToSend(db0, contactId2From0);
 
-		// Once the owner's post names the file, all three go on
+		// Once the owner's post names the file, all three go on: a third
+		// phone holding the channel gets the post, the whole file and the
+		// request
+		ChannelManager channelManager2 = c2.getChannelManager();
+		channelManager2.subscribeFromLink(channelManager0.getChannelLink(g));
+		db2.transaction(false, txn ->
+				db2.setGroupVisibility(txn, contactId0From2, g, SHARED));
 		BlogPost post = blogPostFactory.createBlogPost(g,
 				c0.getClock().currentTimeMillis(), null,
 				channel.getLocalAuthor(), "Now it is mine", emptyList(),
 				singletonList(planted));
 		blogManager0.addLocalPost(post);
+		// Post, manifest, chunk and request
+		sync0To2(4, true);
+		assertTrue(c2.getBlogManager().getFileStatus(planted).isComplete());
+		int chunkAndRequest = db2.transactionWithResult(true, txn ->
+				c2.getClientHelper().getMessageIds(txn, g,
+						BdfDictionary.of(new BdfEntry(KEY_FILE_MANIFEST_ID,
+								planted.getManifestId()))).size());
+		assertEquals(2, chunkAndRequest);
+	}
+
+	@Test
+	public void testARequestKeptBackGoesOnOnceItsFileArrives()
+			throws Exception {
+		// Messages arrive in any order. A request that reaches a phone
+		// before the file it names is kept back, since nothing names the
+		// file yet. If the post naming the file arrives next and the
+		// manifest last, the request must still go on from there, or the
+		// phone holding the file never hears that it's wanted.
+		addContacts1And2();
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		String link = channelManager0.getChannelLink(g);
+		channelManager1.subscribeFromLink(link);
+		c2.getChannelManager().subscribeFromLink(link);
+		shareBothWays(g);
+		db0.transaction(false, txn ->
+				db0.setGroupVisibility(txn, contactId2From0, g, SHARED));
+		db2.transaction(false, txn -> {
+			db2.setGroupVisibility(txn, contactId0From2, g, SHARED);
+			db2.setGroupVisibility(txn, contactId1From2, g, SHARED);
+		});
+		db1.transaction(false, txn ->
+				db1.setGroupVisibility(txn, contactId2From1, g, SHARED));
+
+		// The owner posts a file
+		FileHeader file = blogManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "file.bin",
+				"application/octet-stream",
+				() -> new ByteArrayInputStream(
+						new byte[FILE_CHUNK_PAYLOAD_LENGTH]));
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				c0.getClock().currentTimeMillis(), null,
+				channel.getLocalAuthor(), "A file", emptyList(),
+				singletonList(file));
+		blogManager0.addLocalPost(post);
+		MessageId postId = post.getMessage().getId();
+		MessageId manifestId = file.getManifestId();
+		BdfDictionary naming = BdfDictionary.of(
+				new BdfEntry(KEY_FILE_MANIFEST_ID, manifestId));
+
+		// Phone 2 gets the manifest alone and asks for the file
+		db0.transaction(false, txn -> {
+			db0.setMessageNotShared(txn, postId);
+			for (MessageId id : c0.getClientHelper().getMessageIds(txn, g,
+					naming)) {
+				db0.setMessageNotShared(txn, id);
+			}
+		});
+		sync0To2(1, true);
+		c2.getBlogManager().requestFile(file);
+
+		// Phone 1 gets the post, then phone 2's request, and keeps the
+		// request back, since the file it names isn't here
+		db0.transaction(false, txn -> {
+			db0.setMessageNotShared(txn, manifestId);
+			db0.setMessageShared(txn, postId);
+		});
+		sync0To1(1, true);
+		sync2To1(1, true);
+		assertNothingToSend(db1, contactId0From1);
+
+		// When the manifest arrives, the post already names it, so the
+		// request goes on to the owner, who releases the file's chunks
+		db0.transaction(false, txn -> db0.setMessageShared(txn, manifestId));
+		sync0To1(1, true);
+		sync1To0(1, true);
 		assertTrue(db0.transactionWithResult(true, txn ->
-				db0.containsMessagesToSend(txn, contactId2From0,
+				db0.containsMessagesToSend(txn, contactId1From0,
 						Integer.MAX_VALUE, false)));
 	}
 

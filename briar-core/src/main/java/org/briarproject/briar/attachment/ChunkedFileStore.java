@@ -35,6 +35,8 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 
 import javax.annotation.concurrent.Immutable;
@@ -571,19 +573,33 @@ public class ChunkedFileStore {
 	public void shareFile(Transaction txn, GroupId g, MessageId manifestId)
 			throws DbException {
 		boolean push;
+		Map<MessageId, BdfDictionary> naming;
 		try {
 			BdfDictionary meta =
 					clientHelper.getMessageMetadataAsDictionary(txn,
 							manifestId);
 			push = meta.getLong(KEY_FILE_SIZE) <= MAX_PUSHED_FILE_SIZE;
+			naming = clientHelper.getMessageMetadataAsDictionary(txn, g,
+					BdfDictionary.of(
+							new BdfEntry(KEY_FILE_MANIFEST_ID, manifestId)));
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
 		markReferenced(txn, manifestId);
 		db.setMessageShared(txn, manifestId);
 		db.setMessagePermanent(txn, manifestId);
+		// A request that arrived before the message naming the file was
+		// kept back, as nothing named the file then. It goes on now, and
+		// it counts as asking, so a file that would be held back is
+		// released as it would have been had the request come later.
+		boolean asked = false;
+		for (Entry<MessageId, BdfDictionary> e : naming.entrySet()) {
+			if (e.getValue().containsKey(KEY_FILE_CHUNK_INDEX)) continue;
+			db.setMessageShared(txn, e.getKey());
+			asked = true;
+		}
 		for (MessageId chunkId : getChunkIds(txn, g, manifestId)) {
-			if (push) db.setMessageShared(txn, chunkId);
+			if (push || asked) db.setMessageShared(txn, chunkId);
 			db.setMessagePermanent(txn, chunkId);
 		}
 	}
@@ -767,6 +783,15 @@ public class ChunkedFileStore {
 		db.setMessageShared(txn, manifestId);
 		// Its chunks, and any requests for them that were kept back with
 		// the file, so they reach whoever holds the rest of it
+		shareMessagesNaming(txn, g, manifestId);
+	}
+
+	/**
+	 * Shares every message in the group that names the given manifest:
+	 * its chunks and any requests for it.
+	 */
+	private void shareMessagesNaming(Transaction txn, GroupId g,
+			MessageId manifestId) throws DbException {
 		BdfDictionary query = BdfDictionary.of(
 				new BdfEntry(KEY_FILE_MANIFEST_ID, manifestId));
 		try {
@@ -1008,6 +1033,11 @@ public class ChunkedFileStore {
 		boolean referenced = client.isManifestReferenced(txn, g, m.getId());
 		if (referenced) {
 			markReferenced(txn, m.getId());
+			// A request for the file that arrived before it was kept back,
+			// as nothing named the file then. It goes on with the manifest,
+			// so whoever holds the file hears that it's wanted. No chunk
+			// can be here yet, as chunks depend on the manifest.
+			shareMessagesNaming(txn, g, m.getId());
 		} else {
 			// Nothing references this file yet. Give the manifest a
 			// deadline, which is lifted if the referencing message arrives.

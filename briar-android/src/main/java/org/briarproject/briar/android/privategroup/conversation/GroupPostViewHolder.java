@@ -133,7 +133,8 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 			String excerpt;
 			if (parent.hasText()) excerpt = parent.getText();
 			else if (!parent.getFileHeaders().isEmpty())
-				excerpt = parent.getFileHeaders().get(0).getName();
+				excerpt = FileRowBinder.getSaveName(
+						parent.getFileHeaders().get(0));
 			else excerpt = getContext().getString(R.string.groups_quote_photo);
 			quoteText.setText(excerpt);
 			quote.setOnClickListener(
