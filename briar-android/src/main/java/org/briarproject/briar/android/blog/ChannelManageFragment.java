@@ -179,7 +179,7 @@ public class ChannelManageFragment extends BaseFragment
 		publishing = channel.getId();
 		publishingWithFiles = withFiles;
 		try {
-			publishLauncher.launch(channel.getTitle() + ".briar");
+			publishLauncher.launch(ChannelViewModel.fileName(channel.getTitle()));
 		} catch (ActivityNotFoundException e) {
 			showMessage(R.string.error_start_activity);
 		}
