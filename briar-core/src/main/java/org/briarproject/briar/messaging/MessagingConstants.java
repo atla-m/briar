@@ -13,9 +13,12 @@ interface MessagingConstants {
 	String MSG_KEY_AUTO_DELETE_TIMER = "autoDeleteTimer";
 	/**
 	 * The link of the channel a forwarded post came from, if the message
-	 * is a forward.
+	 * is a forward whose text was checked against the channel's signature.
+	 * Forwards from before that check kept their link under "channelLink",
+	 * which is no longer read, so their text, which nothing checked, is
+	 * shown as the contact's own rather than as the channel's.
 	 */
-	String MSG_KEY_CHANNEL_LINK = "channelLink";
+	String MSG_KEY_CHANNEL_LINK = "signedChannelLink";
 
 	/**
 	 * How long to keep incoming attachments that aren't listed by any private
