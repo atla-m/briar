@@ -33,8 +33,11 @@ public interface GroupInvitationManager extends ConversationClient {
 
 	/**
 	 * The current minor version of the private group invitation client.
+	 * <p>
+	 * Version 0.1 added the optional auto-delete timer to messages. Version
+	 * 0.2 added the creator-only flag to invite messages.
 	 */
-	int MINOR_VERSION = 1;
+	int MINOR_VERSION = 2;
 
 	/**
 	 * Sends an invitation to share the given private group with the given

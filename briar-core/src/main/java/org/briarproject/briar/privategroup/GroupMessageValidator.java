@@ -270,6 +270,16 @@ class GroupMessageValidator extends BdfMessageValidator {
 		}
 		checkLength(signature, 1, MAX_SIGNATURE_LENGTH);
 
+		// In an announcement group only the creator can post. This is
+		// enforced here, in the validator, so that every member's device
+		// rejects posts from anyone else regardless of what the sender's
+		// client does. Attachments, manifests and chunks are unsigned and
+		// are only reachable through a post that names them, so refusing
+		// the post is enough to keep them out of the group.
+		PrivateGroup pg = privateGroupFactory.parsePrivateGroup(g);
+		if (pg.isCreatorOnly() && !member.equals(pg.getCreator()))
+			throw new FormatException();
+
 		// Verify the member's signature. The attachment headers are covered
 		// by the signature so that they can't be swapped or removed.
 		BdfList memberList = body.getList(1); // Already validated

@@ -42,24 +42,44 @@ class PrivateGroupFactoryImpl implements PrivateGroupFactory {
 
 	@Override
 	public PrivateGroup createPrivateGroup(String name, Author creator) {
+		return createPrivateGroup(name, creator, false);
+	}
+
+	@Override
+	public PrivateGroup createPrivateGroup(String name, Author creator,
+			boolean creatorOnly) {
 		int length = StringUtils.toUtf8(name).length;
 		if (length == 0 || length > MAX_GROUP_NAME_LENGTH)
 			throw new IllegalArgumentException();
 		byte[] salt = new byte[GROUP_SALT_LENGTH];
 		random.nextBytes(salt);
-		return createPrivateGroup(name, creator, salt);
+		return createPrivateGroup(name, creator, salt, creatorOnly);
 	}
 
 	@Override
 	public PrivateGroup createPrivateGroup(String name, Author creator,
 			byte[] salt) {
+		return createPrivateGroup(name, creator, salt, false);
+	}
+
+	@Override
+	public PrivateGroup createPrivateGroup(String name, Author creator,
+			byte[] salt, boolean creatorOnly) {
 		try {
 			BdfList creatorList = clientHelper.toList(creator);
-			BdfList group = BdfList.of(creatorList, name, salt);
+			// Regular group: creator, group name, salt
+			// Creator-only: creator, group name, salt, true
+			// The flag is only included when set, so the descriptors, and
+			// therefore the group IDs, of existing groups are unchanged.
+			// A client that doesn't support the flag rejects the
+			// four-element descriptor and so can't join such a group.
+			BdfList group;
+			if (creatorOnly) group = BdfList.of(creatorList, name, salt, true);
+			else group = BdfList.of(creatorList, name, salt);
 			byte[] descriptor = clientHelper.toByteArray(group);
 			Group g = groupFactory.createGroup(CLIENT_ID, MAJOR_VERSION,
 					descriptor);
-			return new PrivateGroup(g, name, creator, salt);
+			return new PrivateGroup(g, name, creator, salt, creatorOnly);
 		} catch (FormatException e) {
 			throw new RuntimeException(e);
 		}
@@ -67,17 +87,24 @@ class PrivateGroupFactoryImpl implements PrivateGroupFactory {
 
 	@Override
 	public PrivateGroup parsePrivateGroup(Group g) throws FormatException {
-		// Creator, group name, salt
+		// Creator, group name, salt, optional creator-only flag
 		BdfList descriptor = clientHelper.toList(g.getDescriptor());
-		checkSize(descriptor, 3);
+		checkSize(descriptor, 3, 4);
 		BdfList creatorList = descriptor.getList(0);
 		String groupName = descriptor.getString(1);
 		checkLength(groupName, 1, MAX_GROUP_NAME_LENGTH);
 		byte[] salt = descriptor.getRaw(2);
 		checkLength(salt, GROUP_SALT_LENGTH);
+		boolean creatorOnly = false;
+		if (descriptor.size() == 4) {
+			// The flag is only ever encoded when true, so a four-element
+			// descriptor with a false flag is not a valid encoding
+			creatorOnly = descriptor.getBoolean(3);
+			if (!creatorOnly) throw new FormatException();
+		}
 
 		Author creator = clientHelper.parseAndValidateAuthor(creatorList);
-		return new PrivateGroup(g, groupName, creator, salt);
+		return new PrivateGroup(g, groupName, creator, salt, creatorOnly);
 	}
 
 }

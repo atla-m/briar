@@ -2,6 +2,8 @@ package org.briarproject.briar.privategroup.invitation;
 
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.client.ProtocolStateException;
+import org.briarproject.briar.api.privategroup.PrivateGroup;
+import org.briarproject.briar.api.privategroup.invitation.GroupInvitationManager;
 import org.jmock.Expectations;
 import org.junit.Test;
 
@@ -79,6 +81,33 @@ public class CreatorProtocolEngineTest extends AbstractProtocolEngineTest {
 			oneOf(conversationManager).trackOutgoingMessage(txn, message);
 		}});
 		expectSendInviteMessage(text);
+	}
+
+	@Test(expected = ProtocolStateException.class)
+	public void testOnInviteActionToContactWithoutCreatorOnlySupport()
+			throws Exception {
+		// A client on 0.1 can't parse an invite carrying the creator-only
+		// flag, and would drop it silently. The selector greys such contacts
+		// out, so getting here means a race or a bug: fail rather than send
+		// an invitation that will never arrive.
+		PrivateGroup creatorOnly = new PrivateGroup(privateGroupGroup,
+				privateGroup.getName(), author, privateGroup.getSalt(), true);
+		CreatorSession session =
+				new CreatorSession(contactGroupId, privateGroupId);
+		context.checking(new Expectations() {{
+			oneOf(db).getGroup(txn, privateGroupId);
+			will(returnValue(privateGroupGroup));
+			oneOf(privateGroupFactory).parsePrivateGroup(privateGroupGroup);
+			will(returnValue(creatorOnly));
+			oneOf(clientHelper).getContactId(txn, contactGroupId);
+			will(returnValue(contactId));
+			oneOf(clientVersioningManager).getClientMinorVersion(txn, contactId,
+					GroupInvitationManager.CLIENT_ID,
+					GroupInvitationManager.MAJOR_VERSION);
+			will(returnValue(1));
+		}});
+		engine.onInviteAction(txn, session, null, inviteTimestamp, signature,
+				NO_AUTO_DELETE_TIMER);
 	}
 
 	@Test(expected = ProtocolStateException.class)

@@ -682,36 +682,82 @@ public class PrivateGroupManagerIntegrationTest
 	}
 
 
+	@Test
+	public void testCreatorOnlyGroupAcceptsPostsFromCreator() throws Exception {
+		// Create an announcement group rather than a regular group
+		PrivateGroup announce = privateGroupFactory
+				.createPrivateGroup("Testannouncements", author0, true);
+		GroupId announceId = announce.getId();
+		assertTrue(announce.isCreatorOnly());
+
+		// The creator-only flag is part of the group descriptor, so it survives
+		// parsing and gives it a different ID from a regular group
+		// with the same name, creator and salt
+		assertTrue(privateGroupFactory.parsePrivateGroup(announce.getGroup())
+				.isCreatorOnly());
+		PrivateGroup regular = privateGroupFactory.createPrivateGroup(
+				"Testannouncements", author0, announce.getSalt(), false);
+		assertFalse(regular.isCreatorOnly());
+		assertFalse(regular.getId().equals(announceId));
+
+		// Both members join
+		addGroup(announce);
+		assertEquals(2, groupManager1.getHeaders(announceId).size());
+
+		// The creator posts and the post is accepted
+		long time = c0.getClock().currentTimeMillis();
+		MessageId previousMsgId0 = groupManager0.getPreviousMsgId(announceId);
+		GroupMessage msg0 = groupMessageFactory.createGroupMessage(announceId,
+				time, null, author0, "From the creator", previousMsgId0);
+		groupManager0.addLocalMessage(msg0);
+		sync0To1(1, true);
+		assertEquals(3, groupManager1.getHeaders(announceId).size());
+
+		// Another member tries to post. The creator's device
+		// rejects the post as invalid, so it never appears there.
+		time = c1.getClock().currentTimeMillis();
+		MessageId previousMsgId1 = groupManager1.getPreviousMsgId(announceId);
+		GroupMessage msg1 = groupMessageFactory.createGroupMessage(announceId,
+				time, null, author1, "From a member", previousMsgId1);
+		groupManager1.addLocalMessage(msg1);
+		sync1To0(1, false);
+		assertEquals(3, groupManager0.getHeaders(announceId).size());
+	}
+
 	private void addGroup() throws Exception {
-		// author0 joins privateGroup0
+		addGroup(privateGroup0);
+	}
+
+	private void addGroup(PrivateGroup pg) throws Exception {
+		GroupId g = pg.getId();
+		// author0 joins the group
 		long joinTime = c0.getClock().currentTimeMillis();
 		GroupMessage joinMsg0 = groupMessageFactory
-				.createJoinMessage(privateGroup0.getId(), joinTime, author0);
-		groupManager0.addPrivateGroup(privateGroup0, joinMsg0, true);
+				.createJoinMessage(g, joinTime, author0);
+		groupManager0.addPrivateGroup(pg, joinMsg0, true);
 		assertEquals(joinMsg0.getMessage().getId(),
-				groupManager0.getPreviousMsgId(groupId0));
+				groupManager0.getPreviousMsgId(g));
 
 		// share the group with 1
 		db0.transaction(false, txn -> db0.setGroupVisibility(txn,
-				contactId1From0, privateGroup0.getId(), SHARED));
+				contactId1From0, g, SHARED));
 
-		// author1 joins privateGroup0
+		// author1 joins the group
 		joinTime = c1.getClock().currentTimeMillis();
 		long inviteTime = joinTime - 1;
 		Contact c1 = contactManager0.getContact(contactId1From0);
 		byte[] creatorSignature = groupInvitationFactory
-				.signInvitation(c1, privateGroup0.getId(), inviteTime,
-						author0.getPrivateKey());
+				.signInvitation(c1, g, inviteTime, author0.getPrivateKey());
 		GroupMessage joinMsg1 = groupMessageFactory
-				.createJoinMessage(privateGroup0.getId(), joinTime, author1,
-						inviteTime, creatorSignature);
-		groupManager1.addPrivateGroup(privateGroup0, joinMsg1, false);
+				.createJoinMessage(g, joinTime, author1, inviteTime,
+						creatorSignature);
+		groupManager1.addPrivateGroup(pg, joinMsg1, false);
 
 		// share the group with 0
 		db1.transaction(false, txn -> db1.setGroupVisibility(txn,
-				contactId0From1, privateGroup0.getId(), SHARED));
+				contactId0From1, g, SHARED));
 		assertEquals(joinMsg1.getMessage().getId(),
-				groupManager1.getPreviousMsgId(groupId0));
+				groupManager1.getPreviousMsgId(g));
 
 		// sync join messages
 		sync0To1(1, true);

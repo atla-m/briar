@@ -17,16 +17,19 @@ class InviteMessage extends DeletableGroupInvitationMessage {
 	private final byte[] salt, signature;
 	@Nullable
 	private final String text;
+	private final boolean creatorOnly;
 
 	InviteMessage(MessageId id, GroupId contactGroupId, GroupId privateGroupId,
 			long timestamp, String groupName, Author creator, byte[] salt,
-			@Nullable String text, byte[] signature, long autoDeleteTimer) {
+			@Nullable String text, byte[] signature, long autoDeleteTimer,
+			boolean creatorOnly) {
 		super(id, contactGroupId, privateGroupId, timestamp, autoDeleteTimer);
 		this.groupName = groupName;
 		this.creator = creator;
 		this.salt = salt;
 		this.text = text;
 		this.signature = signature;
+		this.creatorOnly = creatorOnly;
 	}
 
 	String getGroupName() {
@@ -48,5 +51,12 @@ class InviteMessage extends DeletableGroupInvitationMessage {
 
 	byte[] getSignature() {
 		return signature;
+	}
+
+	/**
+	 * Returns true if only the creator can post in the group invited to.
+	 */
+	boolean isCreatorOnly() {
+		return creatorOnly;
 	}
 }

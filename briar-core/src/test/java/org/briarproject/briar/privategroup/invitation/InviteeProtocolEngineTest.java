@@ -154,7 +154,8 @@ public class InviteeProtocolEngineTest extends AbstractProtocolEngineTest {
 			oneOf(privateGroupFactory)
 					.createPrivateGroup(inviteMessage.getGroupName(),
 							inviteMessage.getCreator(),
-							inviteMessage.getSalt());
+							inviteMessage.getSalt(),
+							inviteMessage.isCreatorOnly());
 			will(returnValue(privateGroup));
 			oneOf(clock).currentTimeMillis();
 			will((returnValue(timestamp)));
@@ -332,7 +333,7 @@ public class InviteeProtocolEngineTest extends AbstractProtocolEngineTest {
 						privateGroup.getName(), privateGroup.getCreator(),
 						privateGroup.getSalt(),
 						getRandomString(MAX_GROUP_INVITATION_TEXT_LENGTH),
-						signature, NO_AUTO_DELETE_TIMER);
+						signature, NO_AUTO_DELETE_TIMER, false);
 		Contact notCreatorContact = getContact(contactId, getAuthor(),
 				localAuthor.getId(), true);
 
@@ -356,7 +357,7 @@ public class InviteeProtocolEngineTest extends AbstractProtocolEngineTest {
 						privateGroupId, session.getInviteTimestamp() + 1,
 						privateGroup.getName(), privateGroup.getCreator(),
 						privateGroup.getSalt(), "msg", signature,
-						NO_AUTO_DELETE_TIMER);
+						NO_AUTO_DELETE_TIMER, false);
 		assertEquals(contact.getAuthor(), privateGroup.getCreator());
 
 		expectGetContactId();
@@ -372,7 +373,8 @@ public class InviteeProtocolEngineTest extends AbstractProtocolEngineTest {
 			oneOf(privateGroupFactory)
 					.createPrivateGroup(properInviteMessage.getGroupName(),
 							properInviteMessage.getCreator(),
-							properInviteMessage.getSalt());
+							properInviteMessage.getSalt(),
+							properInviteMessage.isCreatorOnly());
 			will(returnValue(privateGroup));
 		}});
 

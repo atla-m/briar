@@ -65,6 +65,7 @@ import static org.briarproject.briar.api.privategroup.invitation.GroupInvitation
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationManager.MAJOR_VERSION;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.ERROR;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.INVITE_SENT;
+import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHARING;
 import static org.briarproject.briar.privategroup.invitation.MessageType.ABORT;
@@ -744,7 +745,8 @@ public class GroupInvitationManagerImplTest extends BrambleMockTestCase {
 		InviteMessage invite =
 				new InviteMessage(message.getId(), contactGroup.getId(),
 						privateGroup.getId(), time1, "name", author,
-						new byte[0], null, new byte[0], NO_AUTO_DELETE_TIMER);
+						new byte[0], null, new byte[0], NO_AUTO_DELETE_TIMER,
+						false);
 		PrivateGroup pg =
 				new PrivateGroup(group, invite.getGroupName(),
 						invite.getCreator(), invite.getSalt());
@@ -767,7 +769,8 @@ public class GroupInvitationManagerImplTest extends BrambleMockTestCase {
 			oneOf(messageParser).getInviteMessage(txn, message.getId());
 			will(returnValue(invite));
 			oneOf(privateGroupFactory).createPrivateGroup(invite.getGroupName(),
-					invite.getCreator(), invite.getSalt());
+					invite.getCreator(), invite.getSalt(),
+					invite.isCreatorOnly());
 			will(returnValue(pg));
 			oneOf(db).containsGroup(txn, privateGroup.getId());
 			will(returnValue(true));
@@ -809,11 +812,11 @@ public class GroupInvitationManagerImplTest extends BrambleMockTestCase {
 		InviteMessage inviteMessage1 =
 				new InviteMessage(message.getId(), contactGroup.getId(),
 						privateGroup.getId(), time1, groupName, author, salt,
-						null, getRandomBytes(5), NO_AUTO_DELETE_TIMER);
+						null, getRandomBytes(5), NO_AUTO_DELETE_TIMER, false);
 		InviteMessage inviteMessage2 =
 				new InviteMessage(message2.getId(), contactGroup.getId(),
 						privateGroup.getId(), time2, groupName, author, salt,
-						null, getRandomBytes(5), NO_AUTO_DELETE_TIMER);
+						null, getRandomBytes(5), NO_AUTO_DELETE_TIMER, false);
 		PrivateGroup pg = new PrivateGroup(group, groupName,
 				author, salt);
 
@@ -832,13 +835,13 @@ public class GroupInvitationManagerImplTest extends BrambleMockTestCase {
 			oneOf(messageParser).getInviteMessage(txn, message.getId());
 			will(returnValue(inviteMessage1));
 			oneOf(privateGroupFactory).createPrivateGroup(groupName, author,
-					salt);
+					salt, false);
 			will(returnValue(pg));
 			// message 2
 			oneOf(messageParser).getInviteMessage(txn, message2.getId());
 			will(returnValue(inviteMessage2));
 			oneOf(privateGroupFactory).createPrivateGroup(groupName, author,
-					salt);
+					salt, false);
 			will(returnValue(pg));
 		}});
 
@@ -888,6 +891,35 @@ public class GroupInvitationManagerImplTest extends BrambleMockTestCase {
 				.getSharingStatus(contact, privateGroup.getId()));
 	}
 
+	@Test
+	public void testCreatorOnlyGroupNotSupportedByOldContact()
+			throws Exception {
+		// A client on 0.1 rejects the four-element descriptor, so it can't
+		// be invited to a group only the creator can post in. Say so rather
+		// than send an invitation it can't parse.
+		PrivateGroup pg = new PrivateGroup(group, getRandomString(5),
+				getAuthor(), getRandomBytes(32), true);
+		expectGetSession(oneResult, sessionId, contactGroup.getId());
+		context.checking(new DbExpectations() {{
+			oneOf(contactGroupFactory).createContactGroup(CLIENT_ID,
+					MAJOR_VERSION, contact);
+			will(returnValue(contactGroup));
+			oneOf(db).transactionWithResult(with(true), withDbCallable(txn));
+			oneOf(clientVersioningManager).getClientVisibility(txn, contactId,
+					PrivateGroupManager.CLIENT_ID,
+					PrivateGroupManager.MAJOR_VERSION);
+			will(returnValue(SHARED));
+			oneOf(privateGroupManager).getPrivateGroup(txn,
+					privateGroup.getId());
+			will(returnValue(pg));
+			oneOf(clientVersioningManager).getClientMinorVersion(txn, contactId,
+					CLIENT_ID, MAJOR_VERSION);
+			will(returnValue(1));
+		}});
+		assertEquals(NOT_SUPPORTED, groupInvitationManager
+				.getSharingStatus(contact, privateGroup.getId()));
+	}
+
 	private void expectIsInvitationAllowed(CreatorState state)
 			throws Exception {
 		expectGetSession(oneResult, sessionId, contactGroup.getId());
@@ -900,6 +932,10 @@ public class GroupInvitationManagerImplTest extends BrambleMockTestCase {
 					PrivateGroupManager.CLIENT_ID,
 					PrivateGroupManager.MAJOR_VERSION);
 			will(returnValue(SHARED));
+			// Flag not set, so the contact's version isn't checked
+			oneOf(privateGroupManager).getPrivateGroup(txn,
+					privateGroup.getId());
+			will(returnValue(privateGroup));
 			oneOf(sessionParser)
 					.parseCreatorSession(contactGroup.getId(), bdfSession);
 			will(returnValue(creatorSession));

@@ -79,6 +79,7 @@ import javax.inject.Inject;
 
 import androidx.annotation.UiThread;
 import androidx.lifecycle.LiveData;
+import androidx.lifecycle.MediatorLiveData;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.Observer;
 
@@ -130,6 +131,10 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	private final MutableLiveData<Boolean> isCreator = new MutableLiveData<>();
 	private final MutableLiveData<Boolean> isDissolved =
 			new MutableLiveData<>();
+	// Whether we can post. The group and our role in it are loaded
+	// separately from the dissolved flag, so the screen must wait for all
+	// three rather than guess from whichever arrives first
+	private final MediatorLiveData<Boolean> canPost = new MediatorLiveData<>();
 
 	@Inject
 	GroupViewModel(Application application,
@@ -158,6 +163,29 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 		this.attachmentCreator = attachmentCreatorFactory
 				.create(new GroupAttachmentStore(privateGroupManager));
 		this.ioExecutor = ioExecutor;
+		canPost.addSource(privateGroup, g -> updateCanPost());
+		canPost.addSource(isCreator, c -> updateCanPost());
+		canPost.addSource(isDissolved, d -> updateCanPost());
+	}
+
+	private void updateCanPost() {
+		Boolean value = canPost(privateGroup.getValue(), isCreator.getValue(),
+				isDissolved.getValue());
+		if (value != null) canPost.setValue(value);
+	}
+
+	/**
+	 * Returns whether we can post, or null if we don't know yet. The three
+	 * inputs are loaded by separate database tasks, so any of them can be
+	 * missing when another arrives; answering before all three are in
+	 * would show a composer to a member who can't use one, and then take
+	 * it away again.
+	 */
+	@Nullable
+	static Boolean canPost(@Nullable PrivateGroup g,
+			@Nullable Boolean isCreator, @Nullable Boolean isDissolved) {
+		if (g == null || isCreator == null || isDissolved == null) return null;
+		return !isDissolved && (!g.isCreatorOnly() || isCreator);
 	}
 
 	@Override
@@ -660,6 +688,10 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 
 	LiveData<Boolean> isDissolved() {
 		return isDissolved;
+	}
+
+	LiveData<Boolean> canPost() {
+		return canPost;
 	}
 
 }

@@ -41,8 +41,8 @@ public class CreateGroupActivity extends BriarActivity
 	}
 
 	@Override
-	public void onGroupNameChosen(String name) {
-		controller.createGroup(name,
+	public void onGroupNameChosen(String name, boolean creatorOnly) {
+		controller.createGroup(name, creatorOnly,
 				new UiResultExceptionHandler<GroupId, DbException>(this) {
 					@Override
 					public void onResultUi(GroupId g) {

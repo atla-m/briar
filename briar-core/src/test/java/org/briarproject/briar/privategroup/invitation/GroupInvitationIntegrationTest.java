@@ -781,6 +781,53 @@ public class GroupInvitationIntegrationTest
 				.deleteMessages(txn, contactId0From1, toDelete));
 	}
 
+	@Test
+	public void testInvitationAcceptCreatorOnlyGroup() throws Exception {
+		// The flag is part of the group descriptor, so the invitee has to
+		// rebuild the same descriptor from the invite to arrive at the same
+		// group ID. Check the whole path rather than each end of it.
+		PrivateGroup announce = privateGroupFactory
+				.createPrivateGroup("Testannouncements", author0, true);
+		assertTrue(announce.isCreatorOnly());
+		long joinTime = c0.getClock().currentTimeMillis();
+		groupManager0.addPrivateGroup(announce, groupMessageFactory
+				.createJoinMessage(announce.getId(), joinTime, author0), true);
+
+		// Invite the contact and let them accept
+		long timestamp = c0.getClock().currentTimeMillis();
+		byte[] signature = groupInvitationFactory.signInvitation(contact1From0,
+				announce.getId(), timestamp, author0.getPrivateKey());
+		groupInvitationManager0.sendInvitation(announce.getId(),
+				contactId1From0, null, timestamp, signature,
+				getAutoDeleteTimer(c0, contactId1From0, timestamp));
+		sync0To1(1, true);
+		groupInvitationManager1
+				.respondToInvitation(contactId0From1, announce, true);
+		sync1To0(1, true);
+		sync0To1(2, true);
+		sync1To0(1, true);
+
+		// The invitee joined the same group, and knows it is creator-only
+		PrivateGroup joined = groupManager1.getPrivateGroup(announce.getId());
+		assertEquals(announce.getId(), joined.getId());
+		assertTrue(joined.isCreatorOnly());
+
+		// The creator can post
+		long time = c0.getClock().currentTimeMillis();
+		groupManager0.addLocalMessage(groupMessageFactory.createGroupMessage(
+				announce.getId(), time, null, author0, "From the creator",
+				groupManager0.getPreviousMsgId(announce.getId())));
+		sync0To1(1, true);
+
+		// The member can't: the creator's device rejects the post as invalid
+		time = c1.getClock().currentTimeMillis();
+		groupManager1.addLocalMessage(groupMessageFactory.createGroupMessage(
+				announce.getId(), time, null, author1, "From a member",
+				groupManager1.getPreviousMsgId(announce.getId())));
+		sync1To0(1, false);
+		assertEquals(3, groupManager0.getHeaders(announce.getId()).size());
+	}
+
 	private void sendInvitation(long timestamp, @Nullable String text)
 			throws DbException {
 		byte[] signature = groupInvitationFactory.signInvitation(contact1From0,

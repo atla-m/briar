@@ -91,7 +91,7 @@ abstract class AbstractProtocolEngineTest extends BrambleMockTestCase {
 					privateGroupId, 0L, privateGroup.getName(),
 					privateGroup.getCreator(), privateGroup.getSalt(),
 					getRandomString(MAX_GROUP_INVITATION_TEXT_LENGTH),
-					signature, NO_AUTO_DELETE_TIMER);
+					signature, NO_AUTO_DELETE_TIMER, false);
 	final JoinMessage joinMessage =
 			new JoinMessage(new MessageId(getRandomId()), contactGroupId,
 					privateGroupId, 0L, lastRemoteMessageId,

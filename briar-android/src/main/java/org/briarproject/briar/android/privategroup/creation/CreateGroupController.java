@@ -16,7 +16,11 @@ import androidx.annotation.Nullable;
 public interface CreateGroupController
 		extends ContactSelectorController<SelectableContactItem> {
 
-	void createGroup(String name,
+	/**
+	 * Creates a private group. If {@code creatorOnly} is true, only the
+	 * creator can post in the group.
+	 */
+	void createGroup(String name, boolean creatorOnly,
 			ResultExceptionHandler<GroupId, DbException> result);
 
 	void sendInvitation(GroupId g, Collection<ContactId> contacts,

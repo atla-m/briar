@@ -77,7 +77,9 @@ class GroupInvitationValidator extends BdfMessageValidator {
 		// optional text, signature.
 		// Client version 0.1: Message type, creator, group name, salt,
 		// optional text, signature, optional auto-delete timer.
-		checkSize(body, 6, 7);
+		// Client version 0.2: Message type, creator, group name, salt,
+		// optional text, signature, auto-delete timer, creator-only flag.
+		checkSize(body, 6, 8);
 		BdfList creatorList = body.getList(1);
 		String groupName = body.getString(2);
 		checkLength(groupName, 1, MAX_GROUP_NAME_LENGTH);
@@ -88,14 +90,22 @@ class GroupInvitationValidator extends BdfMessageValidator {
 		byte[] signature = body.getRaw(5);
 		checkLength(signature, 1, MAX_SIGNATURE_LENGTH);
 		long timer = NO_AUTO_DELETE_TIMER;
-		if (body.size() == 7) {
+		if (body.size() >= 7) {
 			timer = validateAutoDeleteTimer(body.getOptionalLong(6));
 		}
+		// An explicit false is accepted here, unlike in the group
+		// descriptor, which rejects it. The descriptor is hashed into the
+		// group ID, so it must have exactly one encoding; this message
+		// isn't, and either encoding yields the same group.
+		boolean creatorOnly = false;
+		if (body.size() == 8) creatorOnly = body.getBoolean(7);
 
-		// Validate the creator and create the private group
+		// Validate the creator and create the private group. The flag is
+		// part of the group descriptor, so it's covered by the creator's
+		// signature over the private group ID below.
 		Author creator = clientHelper.parseAndValidateAuthor(creatorList);
 		PrivateGroup privateGroup = privateGroupFactory.createPrivateGroup(
-				groupName, creator, salt);
+				groupName, creator, salt, creatorOnly);
 		// Verify the signature
 		BdfList signed = BdfList.of(
 				m.getTimestamp(),
