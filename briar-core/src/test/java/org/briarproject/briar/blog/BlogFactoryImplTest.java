@@ -153,6 +153,19 @@ public class BlogFactoryImplTest extends BrambleMockTestCase {
 		assertTrue(channel.isChannel());
 	}
 
+	@Test(expected = FormatException.class)
+	public void testAChannelTitleWithALineBreakIsRefused() throws Exception {
+		Author fake = new Author(author.getId(), author.getFormatVersion(),
+				"News\nKey: 1234", author.getPublicKey());
+		BdfList fakeList = BdfList.of(fake.getFormatVersion(),
+				fake.getName(), fake.getPublicKey());
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).parseAndValidateAuthor(fakeList);
+			will(returnValue(fake));
+		}});
+		factory.parseBlog(BdfList.of(fakeList, false, true));
+	}
+
 	@Test
 	public void testParsingAGroupAgreesWithCreatingIt() throws Exception {
 		expectEncoding();

@@ -116,8 +116,6 @@ import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.StringUtils.toHexString;
 import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
 import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
-import static org.briarproject.briar.api.attachment.FileHeader.hasDirectionOverride;
-import static org.briarproject.briar.api.attachment.FileHeader.withoutDirectionOverrides;
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
@@ -148,6 +146,8 @@ import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRROR_LEN
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
+import static org.briarproject.briar.api.channel.ChannelTitle.clean;
+import static org.briarproject.briar.api.channel.ChannelTitle.isAllowed;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_SAFE_MIRRORS;
@@ -398,7 +398,7 @@ class ChannelManagerImpl
 		// A title is part of the channel's identity, so it can't be
 		// cleaned up later: characters that could disguise it are left
 		// out from the start
-		String name = truncateUtf8(withoutDirectionOverrides(title),
+		String name = truncateUtf8(clean(title),
 				MAX_AUTHOR_NAME_LENGTH).trim();
 		if (name.isEmpty()) throw new IllegalArgumentException();
 		// The channel gets a key pair of its own, so posts are signed by
@@ -504,7 +504,7 @@ class ChannelManagerImpl
 	@Override
 	public Blog subscribe(String title, PublicKey publicKey)
 			throws DbException {
-		if (hasDirectionOverride(title)) throw new IllegalArgumentException();
+		if (!isAllowed(title)) throw new IllegalArgumentException();
 		Blog blog = channelBlog(title, publicKey);
 		// Subscribing tells no one: it only means we will accept this
 		// channel's posts if we are offered them
@@ -674,7 +674,7 @@ class ChannelManagerImpl
 		// A title that could disguise itself, or the text after it, is
 		// refused rather than cleaned, since the title is part of the
 		// channel's identity
-		if (hasDirectionOverride(title)) throw new FormatException();
+		if (!isAllowed(title)) throw new FormatException();
 		checkLength(title, 1, MAX_AUTHOR_NAME_LENGTH);
 		PublicKey publicKey;
 		try {
@@ -2046,7 +2046,7 @@ class ChannelManagerImpl
 		BdfList descriptor = clientHelper.toList(header.getRaw(1));
 		Blog blog = blogFactory.parseBlog(descriptor);
 		if (!blog.isChannel()) throw new FormatException();
-		if (hasDirectionOverride(blog.getAuthor().getName()))
+		if (!isAllowed(blog.getAuthor().getName()))
 			throw new FormatException();
 		return blog;
 	}

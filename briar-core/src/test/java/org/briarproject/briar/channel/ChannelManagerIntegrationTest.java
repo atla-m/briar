@@ -2709,6 +2709,27 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testATitleCannotFakeALineOrHideCharacters() throws Exception {
+		// A line break could print a fake key line above the real one,
+		// and invisible characters could make two titles look the same.
+		// A new title is cleaned and one from a link is refused. The
+		// zero-width non-joiner stays, since Persian needs it.
+		Channel fake = channelManager0.createChannel("News\nKey: 1234");
+		assertEquals("NewsKey: 1234", fake.getTitle());
+		Channel persian =
+				channelManager0.createChannel("\u0645\u06cc\u200c\u062e");
+		assertEquals("\u0645\u06cc\u200c\u062e", persian.getTitle());
+		Author a = fake.getBlog().getAuthor();
+		for (String title : asList("News\nKey: 1234", "News\u200b",
+				"News\u2028", "News\ufeff")) {
+			byte[] raw = c1.getClientHelper().toByteArray(BdfList.of(
+					LINK_FORMAT_VERSION, title,
+					a.getPublicKey().getEncoded(), new BdfList()));
+			expectBadLink(LINK_PREFIX + Base32.encode(raw).toLowerCase(US));
+		}
+	}
+
+	@Test
 	public void testAFileNameCannotHideItsType() {
 		FileHeader h = new FileHeader(new GroupId(getRandomId()),
 				new MessageId(getRandomId()), "report\u202Efdp.apk",

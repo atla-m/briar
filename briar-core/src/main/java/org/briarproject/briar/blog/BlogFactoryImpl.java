@@ -15,6 +15,7 @@ import javax.inject.Inject;
 
 import static org.briarproject.briar.api.blog.BlogManager.CLIENT_ID;
 import static org.briarproject.briar.api.blog.BlogManager.MAJOR_VERSION;
+import static org.briarproject.briar.api.channel.ChannelTitle.isAllowed;
 
 @Immutable
 @NotNullByDefault
@@ -85,6 +86,9 @@ class BlogFactoryImpl implements BlogFactory {
 		// can't be false, and a channel is not an RSS feed
 		if (rssFeed || !descriptor.getBoolean(2))
 			throw new FormatException();
+		// A channel's title comes from whoever passed the channel on, and
+		// is shown as its name, so it must not be able to disguise itself
+		if (!isAllowed(author.getName())) throw new FormatException();
 		return createChannelBlog(author);
 	}
 }
