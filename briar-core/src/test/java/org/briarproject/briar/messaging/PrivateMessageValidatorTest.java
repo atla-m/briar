@@ -27,8 +27,16 @@ import static org.briarproject.bramble.test.TestUtils.getMessage;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
+import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_CHUNKS;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CONTENT_TYPE;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_NAME;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.MAX_AUTO_DELETE_TIMER_MS;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.MIN_AUTO_DELETE_TIMER_MS;
@@ -36,6 +44,8 @@ import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACH
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_AUTO_DELETE_TIMER;
@@ -97,6 +107,41 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	private final PrivateMessageValidator validator =
 			new PrivateMessageValidator(bdfReaderFactory, metadataEncoder,
 					clock);
+
+	// A shared file: three full chunks and a partial one
+	private final String fileName = getRandomString(MAX_FILE_NAME_LENGTH);
+	private final long fileSize = FILE_CHUNK_PAYLOAD_LENGTH * 3L + 12345;
+	private final BdfList chunkIds = BdfList.of(
+			new MessageId(getRandomId()), new MessageId(getRandomId()),
+			new MessageId(getRandomId()), new MessageId(getRandomId()));
+	private final BdfList fileHeader = BdfList.of(new MessageId(getRandomId()),
+			contentType, fileName, fileSize);
+	private final BdfDictionary fileMessageMeta = BdfDictionary.of(
+			new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
+			new BdfEntry(MSG_KEY_LOCAL, false),
+			new BdfEntry(MSG_KEY_READ, false),
+			new BdfEntry(MSG_KEY_MSG_TYPE, PRIVATE_MESSAGE),
+			new BdfEntry(MSG_KEY_HAS_TEXT, false),
+			new BdfEntry(MSG_KEY_ATTACHMENT_HEADERS, BdfList.of(fileHeader))
+	);
+	private final BdfDictionary manifestMeta = BdfDictionary.of(
+			new BdfEntry(KEY_FILE_NAME, fileName),
+			new BdfEntry(KEY_FILE_CONTENT_TYPE, contentType),
+			new BdfEntry(MSG_KEY_CONTENT_TYPE, contentType),
+			new BdfEntry(KEY_FILE_SIZE, fileSize),
+			new BdfEntry(KEY_FILE_CHUNK_IDS, chunkIds),
+			new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
+			new BdfEntry(MSG_KEY_LOCAL, false),
+			new BdfEntry(MSG_KEY_MSG_TYPE, FILE_MANIFEST)
+	);
+	private final BdfDictionary chunkMeta = BdfDictionary.of(
+			new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
+			new BdfEntry(MSG_KEY_LOCAL, false),
+			new BdfEntry(MSG_KEY_MSG_TYPE, FILE_CHUNK),
+			// Descriptor length is zero as the test doesn't read from the
+			// counting input stream, so the whole body counts as payload
+			new BdfEntry(MSG_KEY_DESCRIPTOR_LENGTH, 0L)
+	);
 
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsFarFutureTimestamp() throws Exception {
@@ -389,7 +434,7 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsUnknownMessageType() throws Exception {
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(ATTACHMENT + 1, contentType));
+		expectParseList(BdfList.of(FILE_CHUNK + 1, contentType));
 
 		validator.validateMessage(message, group);
 	}
@@ -434,6 +479,156 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 
 		testAcceptsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
 				new BdfList(), MAX_AUTO_DELETE_TIMER_MS), maxTimerMeta);
+	}
+
+	// Shared files (client version 0.4)
+
+	@Test
+	public void testAcceptsFileHeaderInPrivateMessage() throws Exception {
+		testAcceptsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, null,
+				BdfList.of(fileHeader), null), fileMessageMeta);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsHeaderWithThreeElements() throws Exception {
+		BdfList header = BdfList.of(new MessageId(getRandomId()), contentType,
+				fileName);
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, null,
+				BdfList.of(header), null));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsHeaderWithFiveElements() throws Exception {
+		BdfList header = BdfList.of(new MessageId(getRandomId()), contentType,
+				fileName, fileSize, "extra");
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, null,
+				BdfList.of(header), null));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileHeaderWithEmptyName() throws Exception {
+		BdfList header = BdfList.of(new MessageId(getRandomId()), contentType,
+				"", fileSize);
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, null,
+				BdfList.of(header), null));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileHeaderWithTooLongName() throws Exception {
+		BdfList header = BdfList.of(new MessageId(getRandomId()), contentType,
+				getRandomString(MAX_FILE_NAME_LENGTH + 1), fileSize);
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, null,
+				BdfList.of(header), null));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileHeaderWithZeroSize() throws Exception {
+		BdfList header = BdfList.of(new MessageId(getRandomId()), contentType,
+				fileName, 0L);
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, null,
+				BdfList.of(header), null));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileHeaderWithTooBigSize() throws Exception {
+		BdfList header = BdfList.of(new MessageId(getRandomId()), contentType,
+				fileName, MAX_FILE_SIZE + 1);
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, null,
+				BdfList.of(header), null));
+	}
+
+	@Test
+	public void testAcceptsFileManifest() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
+				fileSize, chunkIds));
+		expectReadEof(true);
+		expectEncodeMetadata(manifestMeta);
+
+		MessageContext result = validator.validateMessage(message, group);
+		assertEquals(0, result.getDependencies().size());
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileManifestWithWrongChunkCount() throws Exception {
+		// Four chunks are needed for this size, three are listed
+		BdfList tooFew = BdfList.of(chunkIds.get(0), chunkIds.get(1),
+				chunkIds.get(2));
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
+				fileSize, tooFew));
+		expectReadEof(true);
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileManifestWithDuplicateChunk() throws Exception {
+		BdfList duplicate = BdfList.of(chunkIds.get(0), chunkIds.get(1),
+				chunkIds.get(2), chunkIds.get(2));
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
+				fileSize, duplicate));
+		expectReadEof(true);
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileManifestWithTooBigSize() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
+				MAX_FILE_SIZE + 1, chunkIds));
+		expectReadEof(true);
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileManifestWithTrailingData() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
+				fileSize, chunkIds));
+		expectReadEof(false);
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test
+	public void testAcceptsFileChunk() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK, 3));
+		expectEncodeMetadata(chunkMeta);
+
+		MessageContext result = validator.validateMessage(message, group);
+		assertEquals(0, result.getDependencies().size());
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileChunkWithoutIndex() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK));
+		// Single-element list is interpreted as a legacy private message, so
+		// EOF is expected
+		expectReadEof(true);
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileChunkWithNegativeIndex() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK, -1));
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileChunkWithTooBigIndex() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK, MAX_FILE_CHUNKS));
+
+		validator.validateMessage(message, group);
 	}
 
 	private void testRejectsLegacyMessage(BdfList body) throws Exception {

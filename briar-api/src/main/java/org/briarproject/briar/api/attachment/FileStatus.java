@@ -1,4 +1,4 @@
-package org.briarproject.briar.api.privategroup;
+package org.briarproject.briar.api.attachment;
 
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -9,20 +9,20 @@ import javax.annotation.concurrent.Immutable;
  */
 @Immutable
 @NotNullByDefault
-public class GroupFileStatus {
+public class FileStatus {
 
-	private final GroupFileHeader header;
+	private final FileHeader header;
 	private final boolean manifestReceived;
 	private final int chunksReceived;
 
-	public GroupFileStatus(GroupFileHeader header, boolean manifestReceived,
+	public FileStatus(FileHeader header, boolean manifestReceived,
 			int chunksReceived) {
 		this.header = header;
 		this.manifestReceived = manifestReceived;
 		this.chunksReceived = chunksReceived;
 	}
 
-	public GroupFileHeader getHeader() {
+	public FileHeader getHeader() {
 		return header;
 	}
 

@@ -22,6 +22,7 @@ import org.briarproject.briar.api.privategroup.MessageType;
 import org.briarproject.briar.api.privategroup.PrivateGroup;
 import org.briarproject.briar.api.privategroup.PrivateGroupFactory;
 import org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory;
+import org.briarproject.briar.attachment.ChunkedFileStore;
 import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -31,8 +32,6 @@ import java.io.InputStream;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
-import java.util.Set;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
@@ -52,18 +51,12 @@ import static org.briarproject.briar.api.privategroup.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.privategroup.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.FILE_CHUNK_PAYLOAD_LENGTH;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_FILE_CHUNKS;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_FILE_NAME_LENGTH;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CHUNK_IDS;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CONTENT_TYPE;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_NAME;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_SIZE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_HAS_TEXT;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_INITIAL_JOIN_MSG;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_MEMBER;
@@ -261,7 +254,7 @@ class GroupMessageValidator extends BdfMessageValidator {
 					String name = header.getString(2);
 					checkLength(name, 1, MAX_FILE_NAME_LENGTH);
 					long size = header.getLong(3);
-					if (size < 1 || size > MAX_GROUP_FILE_SIZE)
+					if (size < 1 || size > MAX_FILE_SIZE)
 						throw new FormatException();
 				}
 			}
@@ -321,54 +314,21 @@ class GroupMessageValidator extends BdfMessageValidator {
 
 	private BdfMessageContext validateFileManifest(Message m, BdfList body)
 			throws FormatException {
-		// Message type, file name, content type, size, chunk IDs
-		checkSize(body, 5);
-		String name = body.getString(1);
-		checkLength(name, 1, MAX_FILE_NAME_LENGTH);
-		String contentType = body.getString(2);
-		checkLength(contentType, 1, MAX_CONTENT_TYPE_BYTES);
-		long size = body.getLong(3);
-		if (size < 1 || size > MAX_GROUP_FILE_SIZE) throw new FormatException();
-		// Every chunk except the last carries FILE_CHUNK_PAYLOAD_LENGTH
-		// bytes, so the number of chunks follows from the size
-		int expectedChunks = (int) ((size + FILE_CHUNK_PAYLOAD_LENGTH - 1)
-				/ FILE_CHUNK_PAYLOAD_LENGTH);
-		BdfList chunkIds = body.getList(4);
-		checkSize(chunkIds, expectedChunks, MAX_FILE_CHUNKS);
-		if (chunkIds.size() != expectedChunks) throw new FormatException();
-		Set<MessageId> unique = new HashSet<>();
-		for (int i = 0; i < chunkIds.size(); i++) {
-			byte[] id = chunkIds.getRaw(i);
-			checkLength(id, UniqueId.LENGTH);
-			// A chunk can't appear twice in the same file
-			if (!unique.add(new MessageId(id))) throw new FormatException();
-		}
+		// The file's name, type, size and chunk IDs are checked by the
+		// shared file store, which the messaging client uses too
+		BdfDictionary meta = ChunkedFileStore.validateManifest(body);
 		// Manifests aren't signed. They're authenticated by the signed post
 		// that references them by message ID. Return the metadata and no
 		// dependencies: the chunks may arrive before or after the manifest.
-		BdfDictionary meta = new BdfDictionary();
 		meta.put(KEY_TYPE, FILE_MANIFEST.getInt());
 		meta.put(KEY_TIMESTAMP, m.getTimestamp());
-		meta.put(KEY_FILE_NAME, name);
-		meta.put(KEY_FILE_CONTENT_TYPE, contentType);
-		// Also stored under the generic key so that a chunked image can be
-		// read through the attachment reader like a single-message attachment
-		meta.put(MSG_KEY_CONTENT_TYPE, contentType);
-		meta.put(KEY_FILE_SIZE, size);
-		meta.put(KEY_FILE_CHUNK_IDS, chunkIds);
 		return new BdfMessageContext(meta);
 	}
 
 	private BdfMessageContext validateFileChunk(Message m, BdfList descriptor,
 			long descriptorLength) throws FormatException {
-		// Message type, chunk index, followed by the chunk's bytes. The
-		// index makes chunks with identical content distinct messages.
-		checkSize(descriptor, 2);
-		int index = descriptor.getInt(1);
-		if (index < 0 || index >= MAX_FILE_CHUNKS) throw new FormatException();
-		long payload = m.getBody().length - descriptorLength;
-		if (payload < 1 || payload > FILE_CHUNK_PAYLOAD_LENGTH)
-			throw new FormatException();
+		ChunkedFileStore.validateChunk(descriptor,
+				m.getBody().length - descriptorLength);
 		// Chunks aren't signed. They're authenticated by their message IDs,
 		// which are hashes of their content, listed in a manifest that a
 		// signed post references. Return the metadata and no dependencies.

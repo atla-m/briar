@@ -28,6 +28,7 @@ import androidx.annotation.UiThread;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZE;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logException;
@@ -44,6 +45,9 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 	@IoExecutor
 	private final Executor ioExecutor;
 	private final AttachmentStore attachmentStore;
+	// The group the current task stores attachments for
+	@Nullable
+	private volatile GroupId currentGroupId = null;
 	private final AttachmentRetriever retriever;
 	private final ImageCompressor imageCompressor;
 
@@ -82,6 +86,7 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 		uris.addAll(newUris);
 		observeForeverOnce(groupId, id -> {
 			if (id == null) throw new IllegalStateException();
+			currentGroupId = id;
 			boolean needsSize = uris.size() == 1;
 			task = new AttachmentCreationTask(attachmentStore,
 					app.getContentResolver(), this, imageCompressor, id,
@@ -136,7 +141,9 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 			errorMsg = app.getString(
 					R.string.image_attach_error_invalid_mime_type, mimeType);
 		} else if (t instanceof FileTooBigException) {
-			long maxSize = attachmentStore.getMaxAttachmentSize();
+			GroupId g = currentGroupId;
+			long maxSize = g == null ? MAX_IMAGE_SIZE
+					: attachmentStore.getMaxAttachmentSize(g);
 			int mb = (int) Math.max(1, maxSize / 1024 / 1024);
 			errorMsg = app.getString(R.string.image_attach_error_too_big, mb);
 		} else {

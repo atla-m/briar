@@ -1,12 +1,16 @@
 package org.briarproject.briar.messaging;
 
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.MessageDeletedException;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.conversation.ConversationMessageHeader;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.messaging.PrivateMessage;
@@ -19,7 +23,9 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -29,15 +35,21 @@ import javax.annotation.Nullable;
 
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptySet;
+import static java.util.Collections.singleton;
 import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
+import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
+import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_IDS;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.MIN_AUTO_DELETE_TIMER_MS;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.test.BriarTestUtils.assertGroupCount;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.junit.Assert.fail;
 
 public class MessagingManagerIntegrationTest
@@ -307,6 +319,120 @@ public class MessagingManagerIntegrationTest
 	}
 
 	@Test
+	public void testChunkedImage() throws Exception {
+		// An image too big for one message is stored as a chunked file and
+		// referenced like an ordinary attachment, by its manifest ID
+		byte[] imageBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 3 + 12345);
+		GroupId g = messagingManager0.getConversationId(contactId);
+		FileHeader file = messagingManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "image.jpg", "image/jpeg",
+				new ByteArrayInputStream(imageBytes));
+		assertEquals(4, file.getChunkCount());
+		AttachmentHeader h = new AttachmentHeader(g, file.getManifestId(),
+				"image/jpeg");
+		// Message, manifest and four chunks are synced
+		sendMessage(c0, c1, null, singletonList(h), NO_AUTO_DELETE_TIMER, 6);
+
+		// The recipient sees one attachment and can read the whole image
+		PrivateMessageHeader m1 =
+				(PrivateMessageHeader) getMessages(c1).iterator().next();
+		assertEquals(1, m1.getAttachmentHeaders().size());
+		assertEquals(0, m1.getFileHeaders().size());
+		FileHeader received = messagingManager1.getFileHeader(g,
+				file.getManifestId());
+		assertEquals(imageBytes.length, received.getSize());
+		FileStatus status = messagingManager1.getFileStatus(received);
+		assertTrue(status.isComplete());
+		assertEquals(4, status.getChunksReceived());
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		copyAndClose(messagingManager1.getFile(received), out);
+		assertArrayEquals(imageBytes, out.toByteArray());
+		// Chunks can be read individually too
+		assertEquals(12345, messagingManager1.getFileChunk(received, 3).length);
+	}
+
+	@Test
+	public void testSharedFile() throws Exception {
+		// A file of any type is described by a four-element header entry
+		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH + 1);
+		GroupId g = messagingManager0.getConversationId(contactId);
+		FileHeader file = messagingManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "voice.m4a", "audio/mp4",
+				new ByteArrayInputStream(fileBytes));
+		PrivateMessage m = messageFactory.createPrivateMessage(g,
+				c0.getClock().currentTimeMillis(), "Listen to this",
+				emptyList(), singletonList(file), NO_AUTO_DELETE_TIMER);
+		messagingManager0.addLocalMessage(m);
+		// Message, manifest and two chunks are synced
+		syncMessage(c0, c1, contactId, 4, true);
+
+		PrivateMessageHeader m1 =
+				(PrivateMessageHeader) getMessages(c1).iterator().next();
+		assertTrue(m1.hasText());
+		assertEquals(0, m1.getAttachmentHeaders().size());
+		assertEquals(1, m1.getFileHeaders().size());
+		FileHeader received = m1.getFileHeaders().get(0);
+		assertEquals("voice.m4a", received.getName());
+		assertEquals("audio/mp4", received.getContentType());
+		assertEquals(fileBytes.length, received.getSize());
+		assertTrue(messagingManager1.getFileStatus(received).isComplete());
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		copyAndClose(messagingManager1.getFile(received), out);
+		assertArrayEquals(fileBytes, out.toByteArray());
+	}
+
+	@Test
+	public void testDeletingMessageDeletesFile() throws Exception {
+		// The same path is used when a message is auto-deleted, so no part
+		// of a disappearing file must be left behind
+		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 2);
+		GroupId g = messagingManager0.getConversationId(contactId);
+		FileHeader file = messagingManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "clip.mp4", "video/mp4",
+				new ByteArrayInputStream(fileBytes));
+		PrivateMessage m = messageFactory.createPrivateMessage(g,
+				c0.getClock().currentTimeMillis(), null, emptyList(),
+				singletonList(file), NO_AUTO_DELETE_TIMER);
+		messagingManager0.addLocalMessage(m);
+		syncMessage(c0, c1, contactId, 4, true);
+
+		// Manifest and chunks exist on the recipient's device
+		List<MessageId> chunkIds = db1.transactionWithResult(true, txn -> {
+			db1.getMessage(txn, file.getManifestId());
+			BdfDictionary meta = c1.getClientHelper()
+					.getMessageMetadataAsDictionary(txn, file.getManifestId());
+			BdfList list = meta.getList(KEY_FILE_CHUNK_IDS);
+			List<MessageId> ids = new ArrayList<>();
+			for (int i = 0; i < list.size(); i++) {
+				MessageId id = new MessageId(list.getRaw(i));
+				db1.getMessage(txn, id);
+				ids.add(id);
+			}
+			return ids;
+		});
+		assertEquals(2, chunkIds.size());
+
+		// Deleting just that message deletes the manifest and the chunks
+		Set<MessageId> toDelete = singleton(m.getMessage().getId());
+		assertTrue(db1.transactionWithResult(false, txn ->
+				messagingManager1.deleteMessages(txn, contactId, toDelete))
+				.allDeleted());
+		for (MessageId id : chunkIds) assertDeleted(db1, id);
+		assertDeleted(db1, file.getManifestId());
+		assertEquals(0, getMessages(c1).size());
+	}
+
+	private void assertDeleted(DatabaseComponent db, MessageId id)
+			throws Exception {
+		try {
+			db.transaction(true, txn -> db.getMessage(txn, id));
+			fail();
+		} catch (MessageDeletedException e) {
+			// expected
+		}
+	}
+
+	@Test
 	public void testDeletingEmptySet() throws Exception {
 		assertTrue(db0.transactionWithResult(false, txn ->
 				messagingManager0.deleteMessages(txn, contactId, emptySet()))
@@ -328,12 +454,20 @@ public class MessagingManagerIntegrationTest
 			BriarIntegrationTestComponent to, @Nullable String text,
 			List<AttachmentHeader> attachments, long autoDeleteTimer)
 			throws Exception {
+		return sendMessage(from, to, text, attachments, autoDeleteTimer,
+				1 + attachments.size());
+	}
+
+	private PrivateMessage sendMessage(BriarIntegrationTestComponent from,
+			BriarIntegrationTestComponent to, @Nullable String text,
+			List<AttachmentHeader> attachments, long autoDeleteTimer,
+			int messagesToSync) throws Exception {
 		GroupId g = from.getMessagingManager().getConversationId(contactId);
 		PrivateMessage m = messageFactory.createPrivateMessage(g,
 				from.getClock().currentTimeMillis(), text, attachments,
 				autoDeleteTimer);
 		from.getMessagingManager().addLocalMessage(m);
-		syncMessage(from, to, contactId, 1 + attachments.size(), true);
+		syncMessage(from, to, contactId, messagesToSync, true);
 		return m;
 	}
 

@@ -1,4 +1,4 @@
-package org.briarproject.briar.api.privategroup.event;
+package org.briarproject.briar.api.attachment.event;
 
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.sync.GroupId;
@@ -14,13 +14,13 @@ import javax.annotation.concurrent.Immutable;
  */
 @Immutable
 @NotNullByDefault
-public class GroupFileProgressEvent extends Event {
+public class FileProgressEvent extends Event {
 
 	private final GroupId groupId;
 	private final MessageId manifestId;
 	private final int chunksReceived, chunkCount;
 
-	public GroupFileProgressEvent(GroupId groupId, MessageId manifestId,
+	public FileProgressEvent(GroupId groupId, MessageId manifestId,
 			int chunksReceived, int chunkCount) {
 		this.groupId = groupId;
 		this.manifestId = manifestId;

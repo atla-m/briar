@@ -9,6 +9,8 @@ import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -128,25 +130,25 @@ public interface PrivateGroupManager {
 	 * references it is added with {@link #addLocalMessage(GroupMessage)}.
 	 *
 	 * @throws FileTooBigException If the file is larger than
-	 * {@link PrivateGroupConstants#MAX_GROUP_FILE_SIZE}
+	 * {@link PrivateGroupConstants#MAX_FILE_SIZE}
 	 */
-	GroupFileHeader addLocalFile(GroupId groupId, long timestamp, String name,
+	FileHeader addLocalFile(GroupId groupId, long timestamp, String name,
 			String contentType, InputStream in) throws DbException, IOException;
 
 	/**
 	 * Removes an unsent file and its chunks.
 	 */
-	void removeFile(GroupFileHeader header) throws DbException;
+	void removeFile(FileHeader header) throws DbException;
 
 	/**
 	 * Returns how much of the given file has been received.
 	 */
-	GroupFileStatus getFileStatus(GroupFileHeader header) throws DbException;
+	FileStatus getFileStatus(FileHeader header) throws DbException;
 
 	/**
 	 * Returns how much of the given file has been received.
 	 */
-	GroupFileStatus getFileStatus(Transaction txn, GroupFileHeader header)
+	FileStatus getFileStatus(Transaction txn, FileHeader header)
 			throws DbException;
 
 	/**
@@ -157,7 +159,7 @@ public interface PrivateGroupManager {
 	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
 	 * file has not been fully received
 	 */
-	InputStream getFile(GroupFileHeader header) throws DbException;
+	InputStream getFile(FileHeader header) throws DbException;
 
 	/**
 	 * Returns a stream for reading the given file, which must have been
@@ -168,8 +170,22 @@ public interface PrivateGroupManager {
 	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
 	 * file has not been fully received
 	 */
-	InputStream getFile(Transaction txn, GroupFileHeader header)
+	InputStream getFile(Transaction txn, FileHeader header)
 			throws DbException;
+
+	/**
+	 * Returns the bytes of the given chunk of a file, which must have been
+	 * fully received. Every chunk except the last holds
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#FILE_CHUNK_PAYLOAD_LENGTH}
+	 * bytes, so byte offset {@code n} of the file is in chunk
+	 * {@code n / payloadLength}. This gives random access for playing audio
+	 * and video straight from the database, without writing the decrypted
+	 * file to disk.
+	 *
+	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
+	 * file has not been fully received or the index is out of range
+	 */
+	byte[] getFileChunk(FileHeader header, int index) throws DbException;
 
 	/**
 	 * Returns the header of the file whose manifest has the given message ID.
@@ -180,7 +196,7 @@ public interface PrivateGroupManager {
 	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
 	 * message is not a file manifest in the given group, or has not arrived
 	 */
-	GroupFileHeader getFileHeader(Transaction txn, GroupId groupId,
+	FileHeader getFileHeader(Transaction txn, GroupId groupId,
 			MessageId manifestId) throws DbException;
 
 	/**
@@ -189,7 +205,7 @@ public interface PrivateGroupManager {
 	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
 	 * message is not a file manifest in the given group, or has not arrived
 	 */
-	GroupFileHeader getFileHeader(GroupId groupId, MessageId manifestId)
+	FileHeader getFileHeader(GroupId groupId, MessageId manifestId)
 			throws DbException;
 
 	/**

@@ -3,16 +3,18 @@ package org.briarproject.briar.attachment;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
-import org.briarproject.bramble.api.db.TransactionManager;
+import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.Attachment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.AttachmentReader;
-import org.briarproject.briar.api.privategroup.GroupFileHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 
 import java.io.ByteArrayInputStream;
@@ -25,16 +27,19 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCR
 
 public class AttachmentReaderImpl implements AttachmentReader {
 
-	private final TransactionManager db;
+	private final DatabaseComponent db;
 	private final ClientHelper clientHelper;
 	private final PrivateGroupManager privateGroupManager;
+	private final MessagingManager messagingManager;
 
 	@Inject
-	public AttachmentReaderImpl(TransactionManager db,
-			ClientHelper clientHelper, PrivateGroupManager privateGroupManager) {
+	public AttachmentReaderImpl(DatabaseComponent db,
+			ClientHelper clientHelper, PrivateGroupManager privateGroupManager,
+			MessagingManager messagingManager) {
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.privateGroupManager = privateGroupManager;
+		this.messagingManager = messagingManager;
 	}
 
 	@Override
@@ -60,13 +65,11 @@ public class AttachmentReaderImpl implements AttachmentReader {
 			if (!contentType.equals(h.getContentType()))
 				throw new NoSuchMessageException();
 			if (!meta.containsKey(MSG_KEY_DESCRIPTOR_LENGTH)) {
-				// Not a single-message attachment. In a private group the
-				// header may point at the manifest of a chunked image, which
-				// can be read once all its chunks have arrived.
-				GroupFileHeader file = privateGroupManager.getFileHeader(txn,
-						h.getGroupId(), m);
-				InputStream stream = privateGroupManager.getFile(txn, file);
-				return new Attachment(h, stream);
+				// Not a single-message attachment. The header may point at
+				// the manifest of a chunked image, which can be read once all
+				// its chunks have arrived. The group tells us which client
+				// owns the file.
+				return new Attachment(h, getChunkedFile(txn, h));
 			}
 			int offset = meta.getInt(MSG_KEY_DESCRIPTOR_LENGTH);
 			InputStream stream = new ByteArrayInputStream(body, offset,
@@ -75,6 +78,21 @@ public class AttachmentReaderImpl implements AttachmentReader {
 		} catch (FormatException e) {
 			throw new NoSuchMessageException();
 		}
+	}
+
+	private InputStream getChunkedFile(Transaction txn, AttachmentHeader h)
+			throws DbException {
+		ClientId client = db.getGroup(txn, h.getGroupId()).getClientId();
+		if (client.equals(PrivateGroupManager.CLIENT_ID)) {
+			FileHeader file = privateGroupManager.getFileHeader(txn,
+					h.getGroupId(), h.getMessageId());
+			return privateGroupManager.getFile(txn, file);
+		} else if (client.equals(MessagingManager.CLIENT_ID)) {
+			FileHeader file = messagingManager.getFileHeader(txn,
+					h.getGroupId(), h.getMessageId());
+			return messagingManager.getFile(txn, file);
+		}
+		throw new NoSuchMessageException();
 	}
 
 }

@@ -6,14 +6,15 @@ import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
-import org.briarproject.bramble.api.db.TransactionManager;
+import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.test.BrambleMockTestCase;
 import org.briarproject.bramble.test.DbExpectations;
 import org.briarproject.briar.api.attachment.Attachment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
-import org.briarproject.briar.api.privategroup.GroupFileHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 import org.junit.Test;
 
@@ -33,19 +34,28 @@ import static org.junit.Assert.assertArrayEquals;
 
 public class AttachmentReaderImplTest extends BrambleMockTestCase {
 
-	private final TransactionManager db = context.mock(DatabaseComponent.class);
+	private final DatabaseComponent db = context.mock(DatabaseComponent.class);
 	private final ClientHelper clientHelper = context.mock(ClientHelper.class);
 	private final PrivateGroupManager privateGroupManager =
 			context.mock(PrivateGroupManager.class);
+	private final MessagingManager messagingManager =
+			context.mock(MessagingManager.class);
 
 	private final GroupId groupId = new GroupId(getRandomId());
+	private final Group privateGroup = new Group(groupId,
+			PrivateGroupManager.CLIENT_ID, PrivateGroupManager.MAJOR_VERSION,
+			getRandomBytes(12));
+	private final Group conversation = new Group(groupId,
+			MessagingManager.CLIENT_ID, MessagingManager.MAJOR_VERSION,
+			getRandomBytes(12));
 	private final Message message = getMessage(groupId, 1234);
 	private final String contentType = "image/jpeg";
 	private final AttachmentHeader header = new AttachmentHeader(groupId,
 			message.getId(), contentType);
 
 	private final AttachmentReaderImpl attachmentReader =
-			new AttachmentReaderImpl(db, clientHelper, privateGroupManager);
+			new AttachmentReaderImpl(db, clientHelper, privateGroupManager,
+					messagingManager);
 
 	@Test(expected = NoSuchMessageException.class)
 	public void testWrongGroup() throws Exception {
@@ -94,6 +104,8 @@ public class AttachmentReaderImplTest extends BrambleMockTestCase {
 			oneOf(clientHelper)
 					.getMessageMetadataAsDictionary(txn, message.getId());
 			will(returnValue(meta));
+			oneOf(db).getGroup(txn, groupId);
+			will(returnValue(privateGroup));
 			oneOf(privateGroupManager).getFileHeader(txn, groupId,
 					message.getId());
 			will(throwException(new NoSuchMessageException()));
@@ -109,7 +121,7 @@ public class AttachmentReaderImplTest extends BrambleMockTestCase {
 		BdfDictionary meta = BdfDictionary.of(
 				new BdfEntry(MSG_KEY_CONTENT_TYPE, contentType));
 		byte[] fileBytes = getRandomBytes(100_000);
-		GroupFileHeader file = new GroupFileHeader(groupId, message.getId(),
+		FileHeader file = new FileHeader(groupId, message.getId(),
 				"image.jpg", contentType, fileBytes.length);
 		Transaction txn = new Transaction(null, true);
 
@@ -120,10 +132,45 @@ public class AttachmentReaderImplTest extends BrambleMockTestCase {
 			oneOf(clientHelper)
 					.getMessageMetadataAsDictionary(txn, message.getId());
 			will(returnValue(meta));
+			oneOf(db).getGroup(txn, groupId);
+			will(returnValue(privateGroup));
 			oneOf(privateGroupManager).getFileHeader(txn, groupId,
 					message.getId());
 			will(returnValue(file));
 			oneOf(privateGroupManager).getFile(txn, file);
+			will(returnValue(new ByteArrayInputStream(fileBytes)));
+		}});
+
+		Attachment attachment = attachmentReader.getAttachment(header);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		copyAndClose(attachment.getStream(), out);
+		assertArrayEquals(fileBytes, out.toByteArray());
+	}
+
+	@Test
+	public void testReadsChunkedFileInPrivateConversation() throws Exception {
+		// The same lookup in a private conversation goes to the messaging
+		// client, which owns that group
+		BdfDictionary meta = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_CONTENT_TYPE, contentType));
+		byte[] fileBytes = getRandomBytes(100_000);
+		FileHeader file = new FileHeader(groupId, message.getId(),
+				"image.jpg", contentType, fileBytes.length);
+		Transaction txn = new Transaction(null, true);
+
+		context.checking(new DbExpectations() {{
+			oneOf(db).transactionWithResult(with(true), withDbCallable(txn));
+			oneOf(clientHelper).getMessage(txn, message.getId());
+			will(returnValue(message));
+			oneOf(clientHelper)
+					.getMessageMetadataAsDictionary(txn, message.getId());
+			will(returnValue(meta));
+			oneOf(db).getGroup(txn, groupId);
+			will(returnValue(conversation));
+			oneOf(messagingManager).getFileHeader(txn, groupId,
+					message.getId());
+			will(returnValue(file));
+			oneOf(messagingManager).getFile(txn, file);
 			will(returnValue(new ByteArrayInputStream(fileBytes)));
 		}});
 

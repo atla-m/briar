@@ -2,30 +2,22 @@ package org.briarproject.briar.android.attachment;
 
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
-import org.briarproject.briar.api.privategroup.GroupFileHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 import org.briarproject.nullsafety.NotNullByDefault;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
-import static org.briarproject.bramble.util.IoUtils.copyAndClose;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZE;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_FILE_SIZE;
-
 /**
- * An {@link AttachmentStore} for attachments to private group posts. Images
- * that fit into a single message are stored as ordinary attachments. Larger
- * images are stored as chunked files, so they keep their original quality
- * and can be transferred piece by piece. Either way the post references the
- * image by a single message ID, which for a chunked image is the ID of its
- * manifest.
+ * An {@link AttachmentStore} for attachments to private group posts. All
+ * members of a group we can post to run a client with file support, so
+ * large images are always chunked.
  */
 @NotNullByDefault
-public class GroupAttachmentStore implements AttachmentStore {
+public class GroupAttachmentStore extends ChunkingAttachmentStore {
 
 	private final PrivateGroupManager privateGroupManager;
 
@@ -34,46 +26,40 @@ public class GroupAttachmentStore implements AttachmentStore {
 	}
 
 	@Override
-	public AttachmentHeader addLocalAttachment(GroupId groupId, long timestamp,
+	protected AttachmentHeader addSingleAttachment(GroupId groupId,
+			long timestamp, String contentType, InputStream in)
+			throws DbException, IOException {
+		return privateGroupManager.addLocalAttachment(groupId, timestamp,
+				contentType, in);
+	}
+
+	@Override
+	protected void removeSingleAttachment(AttachmentHeader header)
+			throws DbException {
+		privateGroupManager.removeAttachment(header);
+	}
+
+	@Override
+	protected FileHeader addFile(GroupId groupId, long timestamp, String name,
 			String contentType, InputStream in)
 			throws DbException, IOException {
-		// Read the image to find out whether it fits into one message
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		copyAndClose(in, out);
-		byte[] bytes = out.toByteArray();
-		if (bytes.length <= MAX_IMAGE_SIZE) {
-			return privateGroupManager.addLocalAttachment(groupId, timestamp,
-					contentType, new ByteArrayInputStream(bytes));
-		}
-		String name = "image." + getExtension(contentType);
-		GroupFileHeader file = privateGroupManager.addLocalFile(groupId,
-				timestamp, name, contentType, new ByteArrayInputStream(bytes));
-		return new AttachmentHeader(groupId, file.getManifestId(), contentType);
-	}
-
-	private String getExtension(String contentType) {
-		int slash = contentType.indexOf('/');
-		if (slash == -1 || slash == contentType.length() - 1) return "bin";
-		String subtype = contentType.substring(slash + 1);
-		return subtype.equals("jpeg") ? "jpg" : subtype;
+		return privateGroupManager.addLocalFile(groupId, timestamp, name,
+				contentType, in);
 	}
 
 	@Override
-	public void removeAttachment(AttachmentHeader header) throws DbException {
-		// The header may point at a manifest, in which case the chunks are
-		// removed along with it, or at a single attachment message
-		try {
-			GroupFileHeader file = privateGroupManager.getFileHeader(
-					header.getGroupId(), header.getMessageId());
-			privateGroupManager.removeFile(file);
-		} catch (org.briarproject.bramble.api.db.NoSuchMessageException e) {
-			privateGroupManager.removeAttachment(header);
-		}
+	protected FileHeader getFileHeader(GroupId groupId, MessageId manifestId)
+			throws DbException {
+		return privateGroupManager.getFileHeader(groupId, manifestId);
 	}
 
 	@Override
-	public long getMaxAttachmentSize() {
-		// Large images are chunked, so only very large ones need compressing
-		return MAX_GROUP_FILE_SIZE;
+	protected void removeFile(FileHeader header) throws DbException {
+		privateGroupManager.removeFile(header);
+	}
+
+	@Override
+	protected boolean supportsFiles(GroupId groupId) {
+		return true;
 	}
 }
