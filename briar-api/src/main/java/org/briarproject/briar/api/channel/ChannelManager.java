@@ -160,12 +160,14 @@ public interface ChannelManager {
 
 	/**
 	 * Turns sharing with contacts on or off for a channel we hold. On, the
-	 * channel is offered to every contact who can take it, now and as
-	 * contacts are added, and a contact's offer of the channel is accepted
-	 * without asking, so two contacts who both turn this on exchange the
-	 * channel's posts over any connection. Off, nothing is offered and
-	 * offers are shown for a decision, as for any blog. Turning it on
-	 * tells contacts that we follow the channel.
+	 * channel's posts are offered to every contact, now and as contacts are
+	 * added, over any connection, and posts of it from contacts are
+	 * accepted; no invitation or other message is sent. A contact's Briar
+	 * drops the posts unless the contact holds the channel and has turned
+	 * this on too, so posts flow between two contacts who both turned it
+	 * on, and each can tell the other follows the channel. Off, nothing is
+	 * offered or accepted. A channel shared with a contact by invitation
+	 * is left to the sharing protocol either way.
 	 */
 	void setSharingWithContacts(GroupId g, boolean on) throws DbException;
 
