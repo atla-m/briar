@@ -16,6 +16,7 @@ import org.briarproject.bramble.api.plugin.duplex.DuplexPlugin;
 import org.briarproject.bramble.api.plugin.duplex.DuplexTransportConnection;
 import org.briarproject.bramble.api.properties.TransportProperties;
 import org.briarproject.bramble.api.sync.Group;
+import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.bramble.api.system.TaskScheduler;
@@ -37,6 +38,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -132,23 +135,31 @@ public class NearbyChannelSharerImplTest extends BrambleTestCase {
 					with(any(Executor.class)), with(10 * 60 * 1000L),
 					with(any(TimeUnit.class)));
 			will(returnValue(deadline));
-			oneOf(protocol).serve(with(group.getId()),
-					with(any(InputStream.class)),
-					with(any(OutputStream.class)));
-			will(new CustomAction("wait for the connection to close") {
-				@Override
-				public Object invoke(org.jmock.api.Invocation i)
-						throws Throwable {
-					serving.countDown();
-					// Generous: the whole suite may be running alongside
-					if (!closed.await(60, SECONDS)) throw new AssertionError();
-					throw new IOException("Closed");
-				}
-			});
 			oneOf(deadline).cancel();
 		}});
-		NearbyChannelSharerImpl sharer = startSharing(
-				r -> new Thread(r).start(), new FakeListener(conn));
+		// Not a mock: the mockery holds its lock while a mocked method
+		// runs, so a mocked exchange that waits would keep sharing from
+		// being turned off until it gave up
+		NearbyChannelProtocol waiting =
+				new NearbyChannelProtocol(null, null, null, null) {
+					@Override
+					public void serve(GroupId g, InputStream in,
+							OutputStream out) throws IOException {
+						serving.countDown();
+						try {
+							closed.await();
+						} catch (InterruptedException e) {
+							throw new IOException(e);
+						}
+						throw new IOException("Closed");
+					}
+				};
+		List<Thread> threads = new CopyOnWriteArrayList<>();
+		NearbyChannelSharerImpl sharer = startSharing(waiting, r -> {
+			Thread t = new Thread(r);
+			threads.add(t);
+			t.start();
+		}, new FakeListener(conn));
 		assertTrue(serving.await(5, SECONDS));
 
 		context.checking(new Expectations() {{
@@ -158,9 +169,17 @@ public class NearbyChannelSharerImplTest extends BrambleTestCase {
 		}});
 		sharer.setSharingNearby(group.getId(), false);
 		assertTrue(closed.await(5, SECONDS));
+		// The exchange cancels its deadline as it ends
+		for (Thread t : threads) t.join(5_000);
 	}
 
 	private NearbyChannelSharerImpl startSharing(Executor ioExecutor,
+			KeyAgreementListener listener) throws Exception {
+		return startSharing(protocol, ioExecutor, listener);
+	}
+
+	private NearbyChannelSharerImpl startSharing(
+			NearbyChannelProtocol protocol, Executor ioExecutor,
 			KeyAgreementListener listener) throws Exception {
 		NearbyChannelSharerImpl sharer = new NearbyChannelSharerImpl(db,
 				blogManager, protocol, pluginManager, crypto, scheduler,
