@@ -8,6 +8,7 @@ import org.briarproject.briar.android.account.SetupActivity;
 import org.briarproject.briar.android.account.SetupFragment;
 import org.briarproject.briar.android.account.UnlockActivity;
 import org.briarproject.briar.android.blog.BlogActivity;
+import org.briarproject.briar.android.blog.ScanChannelLinkActivity;
 import org.briarproject.briar.android.blog.BlogFragment;
 import org.briarproject.briar.android.blog.BlogPostFragment;
 import org.briarproject.briar.android.blog.FeedFragment;
@@ -154,6 +155,8 @@ public interface ActivityComponent {
 	void inject(ForumActivity activity);
 
 	void inject(BlogActivity activity);
+
+	void inject(ScanChannelLinkActivity activity);
 
 	void inject(WriteBlogPostActivity activity);
 

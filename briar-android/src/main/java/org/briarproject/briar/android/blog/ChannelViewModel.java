@@ -75,6 +75,8 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 			new MutableLiveEvent<>();
 	private final MutableLiveEvent<GroupId> subscribed =
 			new MutableLiveEvent<>();
+	private final MutableLiveEvent<QrCodeInfo> qrCode =
+			new MutableLiveEvent<>();
 	private final MutableLiveEvent<String> channelLink =
 			new MutableLiveEvent<>();
 	private final MutableLiveEvent<Integer> message =
@@ -165,6 +167,36 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 
 	LiveEvent<Integer> getMessage() {
 		return message;
+	}
+
+	void showQrCode(GroupId g) {
+		dbExecutor.execute(() -> {
+			try {
+				// The link names the key, so the fingerprint comes from it
+				String link = channelManager.getChannelLink(g);
+				Blog blog = channelManager.readLink(link);
+				qrCode.postEvent(new QrCodeInfo(link,
+						ChannelFingerprint.of(blog.getAuthor())));
+			} catch (FormatException e) {
+				handleException(new DbException(e));
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
+	LiveEvent<QrCodeInfo> getQrCode() {
+		return qrCode;
+	}
+
+	static class QrCodeInfo {
+
+		final String link, fingerprint;
+
+		private QrCodeInfo(String link, String fingerprint) {
+			this.link = link;
+			this.fingerprint = fingerprint;
+		}
 	}
 
 	void copyLink(GroupId g) {

@@ -578,6 +578,11 @@
 	<string name="channels_actions">Channel actions</string>
 	<string name="channels_copy_link">Copy channel link</string>
 	<string name="channels_link_copied">Channel link copied</string>
+	<string name="channels_show_qr">Show link as QR code</string>
+	<string name="channels_show_qr_explanation">Another phone can read this from your screen: on its Channels screen, choose Subscribe using a link, then Scan QR code. The code holds the channel\'s link, which names its key and its addresses on the internet. Check that the key above matches on both phones.</string>
+	<string name="channels_show_qr_error">Could not make a QR code for this link</string>
+	<string name="channels_scan_qr">Scan QR code</string>
+	<string name="channels_scan_qr_not_link">This QR code is not a channel link</string>
 	<string name="channels_publish">Save to a file</string>
 	<string name="channels_publish_with_files_title">Include images and files?</string>
 	<string name="channels_publish_with_files_message">With them, whoever gets this file has everything at once, but it can be large. Without them, they get the posts and can get the files later from mirrors or contacts.</string>
