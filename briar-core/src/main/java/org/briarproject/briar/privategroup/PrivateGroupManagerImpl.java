@@ -11,6 +11,7 @@ import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataParser;
 import org.briarproject.bramble.api.db.DatabaseComponent;
+import org.briarproject.bramble.api.db.DatabaseConfig;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.db.Transaction;
@@ -121,7 +122,7 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			PrivateGroupFactory privateGroupFactory,
 			ContactManager contactManager, IdentityManager identityManager,
 			AuthorManager authorManager, MessageTracker messageTracker,
-			CryptoComponent crypto) {
+			CryptoComponent crypto, DatabaseConfig databaseConfig) {
 		super(db, clientHelper, metadataParser);
 		this.privateGroupFactory = privateGroupFactory;
 		this.contactManager = contactManager;
@@ -130,7 +131,7 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 		this.messageTracker = messageTracker;
 		fileClient = new PrivateGroupFileClient(clientHelper);
 		fileStore = new ChunkedFileStore(db, clientHelper, crypto,
-				fileClient);
+				fileClient, databaseConfig);
 		hooks = new CopyOnWriteArrayList<>();
 	}
 

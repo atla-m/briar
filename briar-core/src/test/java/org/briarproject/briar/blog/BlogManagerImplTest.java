@@ -21,6 +21,7 @@ import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.test.BrambleMockTestCase;
+import org.briarproject.bramble.test.TestDatabaseConfig;
 import org.briarproject.bramble.test.DbExpectations;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogCommentHeader;
@@ -39,6 +40,7 @@ import static org.briarproject.bramble.test.TestUtils.getContact;
 import static org.briarproject.bramble.test.TestUtils.getGroup;
 import static org.briarproject.bramble.test.TestUtils.getLocalAuthor;
 import static org.briarproject.bramble.test.TestUtils.getMessage;
+import static org.briarproject.bramble.test.TestUtils.getTestDirectory;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_AUTHOR;
@@ -95,7 +97,7 @@ public class BlogManagerImplTest extends BrambleMockTestCase {
 		MetadataParser metadataParser = context.mock(MetadataParser.class);
 		blogManager = new BlogManagerImpl(db, identityManager, authorManager,
 				clientHelper, metadataParser, blogFactory, blogPostFactory,
-				crypto);
+				crypto, new TestDatabaseConfig(getTestDirectory()));
 
 		localAuthor1 = getLocalAuthor();
 		localAuthor2 = getLocalAuthor();

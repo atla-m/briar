@@ -42,6 +42,7 @@ import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.briar.api.client.MessageTree;
 import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.InsufficientStorageException;
 import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
@@ -402,6 +403,8 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 						timestamp + 2, null, author, previousMsgId);
 			} catch (FileTooBigException e) {
 				fileError.postEvent(R.string.file_too_big);
+			} catch (InsufficientStorageException e) {
+				fileError.postEvent(R.string.file_no_storage);
 			} catch (IOException | DbException e) {
 				logException(LOG, WARNING, e);
 				fileError.postEvent(R.string.file_send_failed);

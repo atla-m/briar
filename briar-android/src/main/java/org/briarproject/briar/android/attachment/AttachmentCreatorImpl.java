@@ -13,6 +13,7 @@ import org.briarproject.briar.android.attachment.media.ImageCompressor;
 import org.briarproject.briar.api.attachment.Attachment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.InsufficientStorageException;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.IOException;
@@ -146,6 +147,8 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 					: attachmentStore.getMaxAttachmentSize(g);
 			int mb = (int) Math.max(1, maxSize / 1024 / 1024);
 			errorMsg = app.getString(R.string.image_attach_error_too_big, mb);
+		} else if (t instanceof InsufficientStorageException) {
+			errorMsg = app.getString(R.string.file_no_storage);
 		} else {
 			errorMsg = null; // generic error
 		}
