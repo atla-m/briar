@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -271,7 +272,22 @@ public class BlogFragment extends BaseFragment
 				new MaterialAlertDialogBuilder(requireContext(),
 						R.style.BriarDialogTheme);
 		builder.setTitle(R.string.channels_share_nearby);
-		builder.setMessage(R.string.channels_share_nearby_dialog);
+		// An owner has new posts before anyone else, which tells someone
+		// nearby who is publishing, so the owner is warned of that too
+		BlogItem blog = viewModel.getBlog().getValue();
+		boolean owner = blog != null && blog.isOwnChannel();
+		CharSequence message = owner
+				? TextUtils.concat(
+						getText(R.string.channels_share_nearby_dialog),
+						"\n\n",
+						getText(R.string.channels_share_nearby_dialog_owner),
+						"\n\n",
+						getText(R.string.channels_share_nearby_dialog_end))
+				: TextUtils.concat(
+						getText(R.string.channels_share_nearby_dialog),
+						"\n\n",
+						getText(R.string.channels_share_nearby_dialog_end));
+		builder.setMessage(message);
 		builder.setPositiveButton(R.string.channels_share_nearby_confirm,
 				(d, w) -> viewModel.setSharingNearby(true));
 		builder.setNegativeButton(R.string.cancel, (d, w) ->
@@ -308,9 +324,21 @@ public class BlogFragment extends BaseFragment
 					View v = getLayoutInflater()
 							.inflate(R.layout.dialog_channel_contacts, null);
 					TextView explanation = v.findViewById(R.id.explanation);
-					explanation.setText(sw == null ?
+					CharSequence text = getText(sw == null ?
 							R.string.channels_share_choose_contacts_explanation :
 							R.string.channels_share_with_contacts_explanation);
+					// An owner's contacts get new posts from the owner first,
+					// which can tell them who publishes the channel
+					BlogItem blog = viewModel.getBlog().getValue();
+					if (blog != null && blog.isOwnChannel()) {
+						text = TextUtils.concat(text, "\n\n",
+								getText(R.string.channels_share_contacts_owner));
+					}
+					if (sw != null) {
+						text = TextUtils.concat(text, "\n\n",
+								getText(R.string.channels_share_contacts_later));
+					}
+					explanation.setText(text);
 					LinearLayout boxes = v.findViewById(R.id.contacts);
 					TextView none = v.findViewById(R.id.noContacts);
 					List<CheckBox> checks = new ArrayList<>();

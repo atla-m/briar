@@ -36,6 +36,7 @@ import javax.inject.Inject;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModelProvider;
@@ -171,15 +172,27 @@ public class WriteBlogPostActivity extends BriarActivity
 			sendController.onImageButtonClicked();
 			return true;
 		} else if (id == R.id.action_attach_file) {
-			try {
-				fileLauncher.launch(new String[] {"*/*"});
-			} catch (RuntimeException e) {
-				Toast.makeText(this, R.string.error_start_activity,
-						LENGTH_LONG).show();
-			}
+			// Unlike images, which are re-encoded, a file is published
+			// with its name and any metadata it hides, so say so first
+			new AlertDialog.Builder(this, R.style.BriarDialogTheme)
+					.setTitle(R.string.blogs_attach_file)
+					.setMessage(R.string.blogs_attach_file_warning)
+					.setPositiveButton(R.string.blogs_attach_file_choose,
+							(d, w) -> chooseFile())
+					.setNegativeButton(R.string.cancel, null)
+					.show();
 			return true;
 		}
 		return super.onOptionsItemSelected(item);
+	}
+
+	private void chooseFile() {
+		try {
+			fileLauncher.launch(new String[] {"*/*"});
+		} catch (RuntimeException e) {
+			Toast.makeText(this, R.string.error_start_activity,
+					LENGTH_LONG).show();
+		}
 	}
 
 	@Override

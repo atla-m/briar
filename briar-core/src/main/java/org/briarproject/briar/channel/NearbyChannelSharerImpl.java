@@ -47,13 +47,14 @@ import static org.briarproject.bramble.util.IoUtils.tryToClose;
 import static org.briarproject.bramble.util.LogUtils.logException;
 
 /**
- * Shares a channel with anyone nearby who holds its link, over Bluetooth.
- * The connection is the one used to add a contact in person, keyed not
- * by a secret from a QR code but by a value anyone with the link can
- * compute from the channel's public key: whoever connects has the link,
- * and that is all the connection proves or needs to. While sharing is
- * on, the phone listens for such connections and serves its copy, and
- * scans for nearby phones that listen, and reads theirs.
+ * Shares a channel with anyone nearby, over Bluetooth. The connection is
+ * the one used to add a contact in person, keyed not by a secret from a
+ * QR code but by a value computed from the channel's public key. That
+ * value is not a secret and proves nothing: the phone lists it among its
+ * Bluetooth services, where anyone in range can read it without the
+ * link, and whoever connects is served. While sharing is on, the phone
+ * listens for such connections and serves its copy, and scans for nearby
+ * phones that listen, and reads theirs.
  */
 @ThreadSafe
 @NotNullByDefault
@@ -153,8 +154,9 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager {
 
 	/**
 	 * Returns the value the connection is keyed by. Anyone with the link
-	 * can compute it: it is not a secret, and proves only that whoever
-	 * connects holds the link.
+	 * can compute it, and anyone in range can read it from the phone's
+	 * list of Bluetooth services, so it proves nothing about whoever
+	 * connects.
 	 */
 	private byte[] getCommitment(GroupId g) throws DbException {
 		Blog blog = db.transactionWithResult(true,

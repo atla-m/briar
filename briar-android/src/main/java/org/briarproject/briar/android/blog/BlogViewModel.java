@@ -187,13 +187,15 @@ class BlogViewModel extends BaseViewModel {
 				Blog b = blogManager.getBlog(groupId);
 				boolean ours = a.getId().equals(b.getAuthor().getId());
 				boolean removable = blogManager.canBeRemoved(b);
+				boolean ownChannel = false;
 				if (b.isChannel()) {
+					ownChannel = channelManager.getChannel(groupId) != null;
 					sharingWithContacts.postValue(
 							channelManager.isSharingWithContacts(groupId));
 					nearbyExpiry.postValue(
 							nearbyManager.getNearbyExpiry(groupId));
 				}
-				blog.postValue(new BlogItem(b, ours, removable));
+				blog.postValue(new BlogItem(b, ours, removable, ownChannel));
 				logDuration(LOG, "Loading blog", start);
 			} catch (DbException e) {
 				handleException(e);
