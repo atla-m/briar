@@ -167,6 +167,27 @@ public class BlogFactoryImplTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testAChannelWeHoldIsReadWhateverItsTitle() throws Exception {
+		// A channel stored before the rules for titles were tightened must
+		// still load, or no list of blogs could be read. Only a channel
+		// that arrives has its title checked.
+		Author old = new Author(author.getId(), author.getFormatVersion(),
+				"News\u200d", author.getPublicKey());
+		BdfList oldList = BdfList.of(old.getFormatVersion(), old.getName(),
+				old.getPublicKey());
+		expectEncoding();
+		context.checking(new Expectations() {{
+			allowing(clientHelper).toList(old);
+			will(returnValue(oldList));
+			allowing(clientHelper).parseAndValidateAuthor(oldList);
+			will(returnValue(old));
+		}});
+		Group g = factory.createChannelBlog(old).getGroup();
+		assertEquals(g.getId(), factory.parseBlog(g).getId());
+		expectRejected(BdfList.of(oldList, false, true));
+	}
+
+	@Test
 	public void testParsingAGroupAgreesWithCreatingIt() throws Exception {
 		expectEncoding();
 		Group g = factory.createChannelBlog(author).getGroup();

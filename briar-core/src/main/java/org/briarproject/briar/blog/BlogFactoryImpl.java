@@ -68,11 +68,16 @@ class BlogFactoryImpl implements BlogFactory {
 	@Override
 	public Blog parseBlog(Group g) throws FormatException {
 		BdfList descriptor = clientHelper.toList(g.getDescriptor());
-		return parseBlog(descriptor);
+		return parseBlog(descriptor, false);
 	}
 
 	@Override
 	public Blog parseBlog(BdfList descriptor) throws FormatException {
+		return parseBlog(descriptor, true);
+	}
+
+	private Blog parseBlog(BdfList descriptor, boolean checkTitle)
+			throws FormatException {
 		// Author, RSS feed, and for a channel a third element
 		if (descriptor.size() != 2 && descriptor.size() != 3)
 			throw new FormatException();
@@ -87,8 +92,11 @@ class BlogFactoryImpl implements BlogFactory {
 		if (rssFeed || !descriptor.getBoolean(2))
 			throw new FormatException();
 		// A channel's title comes from whoever passed the channel on, and
-		// is shown as its name, so it must not be able to disguise itself
-		if (!isAllowed(author.getName())) throw new FormatException();
+		// is shown as its name, so it must not be able to disguise itself.
+		// A channel we already hold was let in by the rules of its time,
+		// and refusing it now would leave every list of blogs unreadable
+		if (checkTitle && !isAllowed(author.getName()))
+			throw new FormatException();
 		return createChannelBlog(author);
 	}
 }

@@ -74,6 +74,7 @@ import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.blog.MessageType.POST;
+import static org.briarproject.briar.api.channel.ChannelTitle.isAllowed;
 
 @Immutable
 @NotNullByDefault
@@ -409,6 +410,10 @@ public class BlogPostValidator extends BdfMessageValidator {
 		Group wGroup = groupFactory.createGroup(CLIENT_ID, MAJOR_VERSION,
 				descriptor);
 		Blog wBlog = blogFactory.parseBlog(wGroup);
+		// The copied descriptor comes from whoever reblogged the post, and
+		// the original blog's title is shown with the copy
+		if (wBlog.isChannel() && !isAllowed(wBlog.getAuthor().getName()))
+			throw new FormatException();
 		byte[] wBody = clientHelper.toByteArray(wBodyList);
 		Message wMessage =
 				messageFactory.createMessage(wGroup.getId(), wTimestamp, wBody);

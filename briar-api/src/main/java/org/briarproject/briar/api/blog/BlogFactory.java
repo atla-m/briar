@@ -26,13 +26,17 @@ public interface BlogFactory {
 	Blog createChannelBlog(Author author);
 
 	/**
-	 * Parses a blog with the given Group
+	 * Parses a blog with the given Group. A channel's title isn't checked,
+	 * because a group we hold may have been stored before the rules for
+	 * titles were tightened; a group built from bytes received from
+	 * someone must have its title checked by the caller.
 	 */
 	Blog parseBlog(Group g) throws FormatException;
 
 	/**
 	 * Parses a blog from its group descriptor, which may have been
-	 * received from a contact.
+	 * received from a contact, refusing a channel whose title could
+	 * disguise itself.
 	 */
 	Blog parseBlog(BdfList descriptor) throws FormatException;
 
