@@ -175,6 +175,15 @@ public interface ChannelManager {
 			throws DbException;
 
 	/**
+	 * Reads an attachment's file, as a mirror serves it, and stores the
+	 * chunks of the given file it carries, bounded by the manifest.
+	 *
+	 * @return The number of chunks read
+	 */
+	int importChannelFile(GroupId g, MessageId manifestId, InputStream in)
+			throws DbException, IOException, FormatException;
+
+	/**
 	 * Returns the channel a link describes, without subscribing to it, so
 	 * the person can be shown what they are about to subscribe to.
 	 *

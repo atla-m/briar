@@ -76,7 +76,7 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	protected final ChannelManager channelManager;
 	protected final AttachmentRetriever attachmentRetriever;
 	@IoExecutor
-	private final Executor ioExecutor;
+	protected final Executor ioExecutor;
 
 	protected final MutableLiveData<LiveResult<ListUpdate>> blogPosts =
 			new MutableLiveData<>();

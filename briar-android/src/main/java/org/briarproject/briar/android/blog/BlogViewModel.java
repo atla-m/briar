@@ -25,6 +25,8 @@ import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogInvitationResponse;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.channel.ChannelManager;
+import org.briarproject.briar.api.channel.ChannelNearbyManager;
+import org.briarproject.briar.api.channel.event.ChannelNearbyEvent;
 import org.briarproject.briar.api.blog.BlogSharingManager;
 import org.briarproject.briar.api.blog.event.BlogInvitationResponseReceivedEvent;
 import org.briarproject.briar.api.blog.event.BlogAttachmentReceivedEvent;
@@ -45,6 +47,8 @@ import javax.inject.Inject;
 import androidx.annotation.UiThread;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
+import org.briarproject.briar.android.viewmodel.LiveEvent;
+import org.briarproject.briar.android.viewmodel.MutableLiveEvent;
 
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logDuration;
@@ -81,17 +85,47 @@ class BlogViewModel extends BaseViewModel {
 			AttachmentRetriever attachmentRetriever,
 			@IoExecutor Executor ioExecutor,
 			BlogSharingManager blogSharingManager,
-			SharingController sharingController) {
+			SharingController sharingController,
+			ChannelNearbyManager nearbyManager) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
 				eventBus, identityManager, notificationManager, blogManager,
 				channelManager, attachmentRetriever, ioExecutor);
 		this.blogSharingManager = blogSharingManager;
 		this.sharingController = sharingController;
+		this.nearbyManager = nearbyManager;
+	}
+
+	private final ChannelNearbyManager nearbyManager;
+	// When sharing nearby turns itself off, or zero if it is off
+	private final MutableLiveData<Long> nearbyExpiry = new MutableLiveData<>();
+	private final MutableLiveEvent<Boolean> nearbyUnavailable =
+			new MutableLiveEvent<>();
+
+	LiveData<Long> getNearbyExpiry() {
+		return nearbyExpiry;
+	}
+
+	LiveEvent<Boolean> getNearbyUnavailable() {
+		return nearbyUnavailable;
+	}
+
+	void setSharingNearby(boolean on) {
+		GroupId g = groupId;
+		if (g == null) return;
+		ioExecutor.execute(() -> {
+			boolean ok = nearbyManager.setSharingNearby(g, on);
+			if (!ok) nearbyUnavailable.postEvent(true);
+			nearbyExpiry.postValue(nearbyManager.getNearbyExpiry(g));
+		});
 	}
 
 	@Override
 	public void eventOccurred(Event e) {
-		if (e instanceof FileProgressEvent) {
+		if (e instanceof ChannelNearbyEvent) {
+			ChannelNearbyEvent n = (ChannelNearbyEvent) e;
+			if (n.getGroupId().equals(groupId))
+				nearbyExpiry.postValue(n.getExpiry());
+		} else if (e instanceof FileProgressEvent) {
 			FileProgressEvent p = (FileProgressEvent) e;
 			if (p.getGroupId().equals(groupId)) onFileProgress(p);
 		} else if (e instanceof BlogAttachmentReceivedEvent) {
@@ -151,6 +185,8 @@ class BlogViewModel extends BaseViewModel {
 				if (b.isChannel()) {
 					sharingWithContacts.postValue(
 							channelManager.isSharingWithContacts(groupId));
+					nearbyExpiry.postValue(
+							nearbyManager.getNearbyExpiry(groupId));
 				}
 				blog.postValue(new BlogItem(b, ours, removable));
 				logDuration(LOG, "Loading blog", start);
