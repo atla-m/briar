@@ -64,6 +64,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
@@ -1632,6 +1633,42 @@ public class ChannelManagerIntegrationTest
 		} finally {
 			server.shutdown();
 		}
+	}
+
+	@Test
+	public void testNothingAReaderGetsNamesTheOwner() throws Exception {
+		// A channel exists so that its publisher is a key pair rather than
+		// a person. Its file, which every reader and mirror gets, and its
+		// link, which anyone can pass on, must not carry the owner's name,
+		// identity key or author ID, even with posts, images and files.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH + 1);
+		channelManager0.setMirrors(g,
+				singletonList("https://mirror.example/c.briar"));
+		byte[] file = exportChannel(g);
+		byte[] link = channelManager0.getChannelLink(g).getBytes(UTF_8);
+		byte[][] owner = {author0.getPublicKey().getEncoded(),
+				author0.getId().getBytes(), author0.getName().getBytes(UTF_8)};
+		for (byte[] o : owner) {
+			assertFalse(contains(file, o));
+			assertFalse(contains(link, o));
+		}
+		// The channel's own key is what the file is signed by
+		assertTrue(contains(file, channel.getLocalAuthor().getPublicKey()
+				.getEncoded()));
+	}
+
+	private static boolean contains(byte[] haystack, byte[] needle) {
+		outer:
+		for (int i = 0; i + needle.length <= haystack.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if (haystack[i + j] != needle[j]) continue outer;
+			}
+			return true;
+		}
+		return false;
 	}
 
 	@Test
