@@ -16,10 +16,10 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.android.contactselection.ContactSelectorControllerImpl;
 import org.briarproject.briar.android.controller.handler.ResultExceptionHandler;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
-import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.conversation.ConversationManager;
 import org.briarproject.briar.api.identity.AuthorManager;
+import org.briarproject.briar.api.messaging.ForwardedPost;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.messaging.PrivateMessage;
 import org.briarproject.briar.api.messaging.PrivateMessageFactory;
@@ -33,13 +33,9 @@ import java.util.logging.Logger;
 import javax.annotation.concurrent.Immutable;
 import javax.inject.Inject;
 
-import static java.util.Collections.emptyList;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logException;
-import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
-import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
-import static org.briarproject.briar.android.util.UiUtils.getSpanned;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 
@@ -53,7 +49,6 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 
 	private final ContactManager contacts;
 	private final TransactionManager db;
-	private final BlogManager blogManager;
 	private final ChannelManager channelManager;
 	private final MessagingManager messagingManager;
 	private final PrivateMessageFactory privateMessageFactory;
@@ -64,7 +59,7 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 	ForwardPostControllerImpl(@DatabaseExecutor Executor dbExecutor,
 			LifecycleManager lifecycleManager, ContactManager contactManager,
 			AuthorManager authorManager, TransactionManager db,
-			BlogManager blogManager, ChannelManager channelManager,
+			ChannelManager channelManager,
 			MessagingManager messagingManager,
 			PrivateMessageFactory privateMessageFactory,
 			ConversationManager conversationManager,
@@ -72,7 +67,6 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 		super(dbExecutor, lifecycleManager, contactManager, authorManager);
 		this.contacts = contactManager;
 		this.db = db;
-		this.blogManager = blogManager;
 		this.channelManager = channelManager;
 		this.messagingManager = messagingManager;
 		this.privateMessageFactory = privateMessageFactory;
@@ -99,21 +93,17 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 			ResultExceptionHandler<Void, DbException> handler) {
 		runOnDbThread(() -> {
 			try {
-				// Outside the transaction below: building a link opens a
-				// transaction of its own, and they can't be nested
-				String link = channelManager.getChannelLink(blogId);
+				// The post goes as the channel signed it, with the
+				// channel's link, so the recipient's device can check the
+				// text is the channel's and not ours. Read outside the
+				// transaction below: it opens one of its own
+				ForwardedPost post =
+						channelManager.getForwardedPost(blogId, postId);
 				db.transaction(false, txn -> {
-					// A blog post's text is HTML, a private message's is
-					// not, so forward what a reader would have seen
-					// A private message allows slightly less text than a
-					// blog post, and the link carries the rest
-					String text = truncateUtf8(getSpanned(
-							blogManager.getPostText(txn, postId)).toString()
-							.trim(), MAX_PRIVATE_MESSAGE_TEXT_LENGTH);
 					int sent = 0;
 					for (ContactId c : contacts) {
 						try {
-							forward(txn, c, text, link);
+							forward(txn, c, post);
 							sent++;
 						} catch (NoSuchContactException
 								| NoSuchGroupException e) {
@@ -131,8 +121,8 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 		});
 	}
 
-	private void forward(Transaction txn, ContactId c, String text,
-			String link) throws DbException {
+	private void forward(Transaction txn, ContactId c, ForwardedPost post)
+			throws DbException {
 		Contact contact = contacts.getContact(txn, c);
 		GroupId g = messagingManager.getContactGroup(contact).getId();
 		long timestamp =
@@ -140,9 +130,11 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 		long timer = autoDeleteManager.getAutoDeleteTimer(txn, c, timestamp);
 		PrivateMessage m;
 		try {
-			m = privateMessageFactory.createPrivateMessage(g, timestamp, text,
-					emptyList(), emptyList(), timer, link);
-		} catch (FormatException e) {
+			m = privateMessageFactory.createForwardedPost(g, timestamp, timer,
+					post);
+		} catch (FormatException | IllegalArgumentException e) {
+			// A post near the size limit, with its link and signature,
+			// can be too long for a private message
 			throw new DbException(e);
 		}
 		messagingManager.addLocalMessage(txn, m);

@@ -15,7 +15,19 @@ import org.briarproject.bramble.api.sync.MessageContext;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.bramble.test.BrambleMockTestCase;
+import org.briarproject.bramble.api.FormatException;
+import org.briarproject.bramble.api.client.ClientHelper;
+import org.briarproject.briar.api.blog.Blog;
+import org.briarproject.briar.api.blog.BlogManager;
+import org.briarproject.briar.channel.ChannelLinkParser;
+import org.briarproject.briar.channel.ChannelLinkParser.ParsedLink;
 import org.jmock.Expectations;
+import org.jmock.imposters.ByteBuddyClassImposteriser;
+
+import java.security.GeneralSecurityException;
+
+import javax.annotation.Nullable;
+
 import org.junit.Test;
 
 import java.io.InputStream;
@@ -23,7 +35,12 @@ import java.io.InputStream;
 import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
 import static org.briarproject.bramble.test.TestUtils.getClientId;
+import static java.util.Collections.emptyList;
+import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_SIGNATURE_LENGTH;
+import static org.briarproject.bramble.test.TestUtils.getAuthor;
 import static org.briarproject.bramble.test.TestUtils.getGroup;
+import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_POST;
+import static org.briarproject.briar.blog.BlogPostValidator.getSignedPost;
 import static org.briarproject.bramble.test.TestUtils.getMessage;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
@@ -69,6 +86,8 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 			context.mock(MetadataEncoder.class);
 	private final Clock clock = context.mock(Clock.class);
 	private final BdfReader reader = context.mock(BdfReader.class);
+	private final ClientHelper clientHelper = context.mock(ClientHelper.class);
+	private final ChannelLinkParser linkParser = mockClass();
 
 	private final Group group = getGroup(getClientId(), 123);
 	private final Message message = getMessage(group.getId());
@@ -114,7 +133,32 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 
 	private final PrivateMessageValidator validator =
 			new PrivateMessageValidator(bdfReaderFactory, metadataEncoder,
-					clock);
+					clock, clientHelper, linkParser);
+
+	// A forwarded channel post: the channel the link names, and the parts
+	// of the post its signature covers
+	private final Blog channel = new Blog(
+			getGroup(BlogManager.CLIENT_ID, BlogManager.MAJOR_VERSION),
+			getAuthor(), false, true);
+	private final long postTimestamp = message.getTimestamp() - 1000;
+	private final byte[] postSignature = getRandomBytes(MAX_SIGNATURE_LENGTH);
+	private final BdfList forwardedPost =
+			BdfList.of(postTimestamp, null, postSignature);
+	private final BdfDictionary forwardedMeta = BdfDictionary.of(
+			new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
+			new BdfEntry(MSG_KEY_LOCAL, false),
+			new BdfEntry(MSG_KEY_READ, false),
+			new BdfEntry(MSG_KEY_MSG_TYPE, PRIVATE_MESSAGE),
+			new BdfEntry(MSG_KEY_HAS_TEXT, true),
+			new BdfEntry(MSG_KEY_ATTACHMENT_HEADERS, new BdfList()),
+			new BdfEntry(MSG_KEY_CHANNEL_LINK, channelLink)
+	);
+
+	private ChannelLinkParser mockClass() {
+		// The parser is a class, not an interface
+		context.setImposteriser(ByteBuddyClassImposteriser.INSTANCE);
+		return context.mock(ChannelLinkParser.class);
+	}
 
 	// A shared file: three full chunks and a partial one
 	private final String fileName = getRandomString(MAX_FILE_NAME_LENGTH);
@@ -719,18 +763,66 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	}
 
 	@Test
-	public void testAcceptsForwardedChannelLink() throws Exception {
-		BdfDictionary meta = BdfDictionary.of(
-				new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
-				new BdfEntry(MSG_KEY_LOCAL, false),
-				new BdfEntry(MSG_KEY_READ, false),
-				new BdfEntry(MSG_KEY_MSG_TYPE, PRIVATE_MESSAGE),
-				new BdfEntry(MSG_KEY_HAS_TEXT, true),
-				new BdfEntry(MSG_KEY_ATTACHMENT_HEADERS, new BdfList()),
-				new BdfEntry(MSG_KEY_CHANNEL_LINK, channelLink)
-		);
+	public void testAcceptsSignedForwardedPost() throws Exception {
+		expectCheckForwardedPost(channelLink, null, true);
 		testAcceptsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
-				new BdfList(), null, channelLink), meta);
+				new BdfList(), null, channelLink, forwardedPost), forwardedMeta);
+	}
+
+	@Test
+	public void testAcceptsForwardedPostWithAttachmentHeaders()
+			throws Exception {
+		// The post's own images aren't forwarded, but their headers are
+		// covered by its signature, so they come along for the check
+		BdfList headers = BdfList.of(attachmentHeader);
+		expectCheckForwardedPost(channelLink, headers, true);
+		testAcceptsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, channelLink,
+				BdfList.of(postTimestamp, headers, postSignature)),
+				forwardedMeta);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsForwardedPostWithBadSignature() throws Exception {
+		// The text isn't what the channel signed: a contact changed it
+		expectCheckForwardedPost(channelLink, null, false);
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, channelLink, forwardedPost));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsForwardedPostWhoseLinkCannotBeRead()
+			throws Exception {
+		context.checking(new Expectations() {{
+			oneOf(linkParser).parse(channelLink);
+			will(throwException(new FormatException()));
+		}});
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, channelLink, forwardedPost));
+	}
+
+	/**
+	 * A forward with the link alone, as client version 0.5 sent, showed
+	 * the sender's text as the channel's, so it is no longer accepted.
+	 */
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsUnsignedForwardedPost() throws Exception {
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, channelLink));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsForwardedPostWithoutText() throws Exception {
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, null,
+				BdfList.of(attachmentHeader), null, channelLink,
+				forwardedPost));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsForwardedPostWithoutSignature() throws Exception {
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, channelLink,
+				BdfList.of(postTimestamp, null, new byte[0])));
 	}
 
 	@Test
@@ -745,21 +837,22 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 				new BdfEntry(MSG_KEY_ATTACHMENT_HEADERS, new BdfList()),
 				new BdfEntry(MSG_KEY_CHANNEL_LINK, link)
 		);
+		expectCheckForwardedPost(link, null, true);
 		testAcceptsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
-				new BdfList(), null, link), meta);
+				new BdfList(), null, link, forwardedPost), meta);
 	}
 
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsTooLongForwardedChannelLink() throws Exception {
 		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
 				new BdfList(), null,
-				getRandomString(MAX_FORWARDED_LINK_LENGTH + 1)));
+				getRandomString(MAX_FORWARDED_LINK_LENGTH + 1), forwardedPost));
 	}
 
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsEmptyForwardedChannelLink() throws Exception {
 		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
-				new BdfList(), null, ""));
+				new BdfList(), null, "", forwardedPost));
 	}
 
 	/**
@@ -770,13 +863,27 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsNullForwardedChannelLink() throws Exception {
 		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
-				new BdfList(), null, null));
+				new BdfList(), null, null, forwardedPost));
 	}
 
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsNonStringForwardedChannelLink() throws Exception {
 		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
-				new BdfList(), null, 123));
+				new BdfList(), null, 123, forwardedPost));
+	}
+
+	private void expectCheckForwardedPost(String link,
+			@Nullable BdfList headers, boolean valid) throws Exception {
+		BdfList signed = getSignedPost(channel.getId(), postTimestamp, text,
+				headers);
+		context.checking(new Expectations() {{
+			oneOf(linkParser).parse(link);
+			will(returnValue(new ParsedLink(channel, emptyList())));
+			oneOf(clientHelper).verifySignature(postSignature,
+					SIGNING_LABEL_POST, signed,
+					channel.getAuthor().getPublicKey());
+			if (!valid) will(throwException(new GeneralSecurityException()));
+		}});
 	}
 
 	private void testRejectsPrivateMessage(BdfList body) throws Exception {

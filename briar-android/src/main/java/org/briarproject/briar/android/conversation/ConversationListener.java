@@ -3,6 +3,7 @@ package org.briarproject.briar.android.conversation;
 import android.view.View;
 
 import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -27,7 +28,7 @@ interface ConversationListener {
 	 * Called when the notice above a forwarded channel post is tapped,
 	 * which offers to subscribe to the channel it came from.
 	 */
-	void onForwardedChannelClick(String channelLink);
+	void onForwardedChannelClick(MessageId messageId, String channelLink);
 
 	void onLinkClick(String url);
 

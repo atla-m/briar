@@ -15,7 +15,7 @@ import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES;
-import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_ONLY;
 
 @Immutable
@@ -95,8 +95,8 @@ public class PrivateMessage {
 
 	/**
 	 * Constructor for private messages in the
-	 * {@link PrivateMessageFormat#TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD
-	 * TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD} format.
+	 * {@link PrivateMessageFormat#TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD
+	 * TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD} format.
 	 *
 	 * @param channelLink the link of the channel a forwarded post came
 	 * from, or null if the message is not a forward
@@ -110,7 +110,7 @@ public class PrivateMessage {
 		this.fileHeaders = fileHeaders;
 		this.autoDeleteTimer = autoDeleteTimer;
 		this.channelLink = channelLink;
-		format = TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+		format = TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD;
 	}
 
 	public Message getMessage() {

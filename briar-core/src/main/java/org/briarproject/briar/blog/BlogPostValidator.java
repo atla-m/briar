@@ -294,7 +294,7 @@ public class BlogPostValidator extends BdfMessageValidator {
 	 * is named by the message holding it; a file by the message holding
 	 * its manifest, with the name and size shown before it has arrived.
 	 */
-	private BdfList validateAttachmentHeaders(BdfList headers)
+	public static BdfList validateAttachmentHeaders(BdfList headers)
 			throws FormatException {
 		// The format with headers is only used when there are some
 		checkSize(headers, 1, MAX_BLOG_POST_ATTACHMENTS);

@@ -505,7 +505,8 @@ public class ConversationActivity extends BriarActivity
 	}
 
 	@Override
-	public void onForwardedChannelClick(String channelLink) {
+	public void onForwardedChannelClick(MessageId messageId,
+			String channelLink) {
 		// The link is whatever the contact's device put in it, so say
 		// which channel it names before subscribing to it
 		Blog blog;
@@ -523,18 +524,19 @@ public class ConversationActivity extends BriarActivity
 				R.string.blogs_forwarded_subscribe_message, blog.getName(),
 				ChannelFingerprint.of(blog.getAuthor())));
 		builder.setPositiveButton(R.string.channels_subscribe_button,
-				(dialog, which) -> subscribeFromForwardedLink(channelLink));
+				(dialog, which) -> subscribeFromForward(messageId));
 		builder.setNegativeButton(R.string.cancel, null);
 		builder.show();
 	}
 
-	private void subscribeFromForwardedLink(String channelLink) {
+	private void subscribeFromForward(MessageId messageId) {
 		// Subscribing tells nobody, not even the contact who forwarded the
-		// post, and gives us the channel's future posts rather than this
-		// one copy of one of them
+		// post, and gives us the channel's future posts as well as this
+		// one, which is stored in the channel, checked against its key
 		runOnDbThread(() -> {
 			try {
-				channelManager.subscribeFromLink(channelLink);
+				channelManager.subscribeFromForward(
+						messagingManager.getForwardedPost(messageId));
 				runOnUiThreadUnlessDestroyed(() -> Toast.makeText(this,
 						R.string.blogs_forwarded_subscribed, LENGTH_SHORT)
 						.show());

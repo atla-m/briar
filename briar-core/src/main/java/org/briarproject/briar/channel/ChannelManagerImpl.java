@@ -17,6 +17,7 @@ import org.briarproject.bramble.api.data.BdfWriter;
 import org.briarproject.bramble.api.data.BdfWriterFactory;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.MessageDeletedException;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.Event;
@@ -59,6 +60,8 @@ import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.channel.FetchResult;
 import org.briarproject.briar.api.channel.NoSuchChannelException;
+import org.briarproject.briar.api.messaging.ForwardedPost;
+import org.briarproject.briar.channel.ChannelLinkParser.ParsedLink;
 import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -236,6 +239,7 @@ class ChannelManagerImpl
 	private final WeakSingletonProvider<OkHttpClient> httpClientProvider;
 	private final SecureRandom secureRandom;
 	private final IsolatedSocketFactory isolatedSocketFactory;
+	private final ChannelLinkParser linkParser;
 	private final AtomicBoolean fetcherStarted = new AtomicBoolean(false);
 	// Channels and files being fetched now, so that a scheduled fetch,
 	// "Fetch now" and the file triggers don't read the same bytes twice
@@ -266,7 +270,9 @@ class ChannelManagerImpl
 			WeakSingletonProvider<OkHttpClient> httpClientProvider,
 			ChannelContactSharing contactSharing,
 			SecureRandom secureRandom,
-			IsolatedSocketFactory isolatedSocketFactory) {
+			IsolatedSocketFactory isolatedSocketFactory,
+			ChannelLinkParser linkParser) {
+		this.linkParser = linkParser;
 		this.contactSharing = contactSharing;
 		this.isolatedSocketFactory = isolatedSocketFactory;
 		this.secureRandom = secureRandom;
@@ -521,18 +527,63 @@ class ChannelManagerImpl
 
 	@Override
 	public Blog readLink(String link) throws FormatException {
-		return parseLink(link).blog;
+		return linkParser.parse(link).blog;
 	}
 
-	private static class ParsedLink {
+	@Override
+	public ForwardedPost getForwardedPost(GroupId g, MessageId post)
+			throws DbException {
+		// Throws if the group isn't a channel. Outside the transaction
+		// below, since it opens one of its own
+		String link = getChannelLink(g);
+		return db.transactionWithResult(true, txn -> {
+			Message m;
+			try {
+				m = db.getMessage(txn, post);
+			} catch (MessageDeletedException e) {
+				throw new NoSuchMessageException();
+			}
+			if (!m.getGroupId().equals(g)) throw new NoSuchMessageException();
+			try {
+				// [type, text, signature] or [type, text, headers, signature]
+				BdfList body = clientHelper.toList(m.getBody());
+				if (body.getInt(0) != POST.getInt() ||
+						body.size() < 3 || body.size() > 4) {
+					throw new NoSuchMessageException();
+				}
+				// A post with images alone has nothing a message could show
+				String text = body.getOptionalString(1);
+				if (text == null) throw new NoSuchMessageException();
+				BdfList headers = body.size() == 4 ? body.getList(2) : null;
+				byte[] sig = body.getRaw(body.size() - 1);
+				return new ForwardedPost(link, m.getTimestamp(), text, headers,
+						sig);
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+		});
+	}
 
-		private final Blog blog;
-		private final List<String> mirrors;
-
-		private ParsedLink(Blog blog, List<String> mirrors) {
-			this.blog = blog;
-			this.mirrors = mirrors;
-		}
+	@Override
+	public Blog subscribeFromForward(ForwardedPost post)
+			throws DbException, FormatException {
+		Blog blog = subscribeFromLink(post.getChannelLink());
+		// The post is stored as the channel's validator stores one from a
+		// contact or a file: checked against the channel's key, and
+		// offered to contacts that can see the channel. The link said
+		// which channel, and the post's signature was checked against
+		// its key when the message arrived, so the post belongs here.
+		BdfList headers = post.getAttachmentHeaders();
+		BdfList body = headers == null
+				? BdfList.of(POST.getInt(), post.getText(), post.getSignature())
+				: BdfList.of(POST.getInt(), post.getText(), headers,
+				post.getSignature());
+		Message m = clientHelper.createMessage(blog.getId(),
+				post.getTimestamp(), body);
+		db.transaction(false, txn -> {
+			if (db.containsGroup(txn, blog.getId())) db.importMessage(txn, m);
+		});
+		return blog;
 	}
 
 	@Override
@@ -642,7 +693,7 @@ class ChannelManagerImpl
 	@Override
 	public Blog subscribeFromLink(String link)
 			throws DbException, FormatException {
-		ParsedLink parsed = parseLink(link);
+		ParsedLink parsed = linkParser.parse(link);
 		Blog blog = parsed.blog;
 		// A link for a channel we already hold, our own included, may
 		// come from anyone who has the public link, so it doesn't get
@@ -659,51 +710,6 @@ class ChannelManagerImpl
 		db.transaction(false, txn -> blogManager.addBlog(txn, blog));
 		if (!parsed.mirrors.isEmpty()) storeMirrors(blog.getId(), parsed.mirrors);
 		return blog;
-	}
-
-	private ParsedLink parseLink(String link) throws FormatException {
-		Matcher matcher = LINK_REGEX.matcher(link);
-		if (!matcher.find()) throw new FormatException();
-		// Discard the prefix and anything around the link
-		byte[] raw = Base32.decode(matcher.group(2), false);
-		if (raw.length > MAX_LINK_BYTES) throw new FormatException();
-		BdfList parsed = clientHelper.toList(raw);
-		checkSize(parsed, 4);
-		if (parsed.getInt(0) != LINK_FORMAT_VERSION)
-			throw new FormatException();
-		String title = parsed.getString(1);
-		// A title that could disguise itself, or the text after it, is
-		// refused rather than cleaned, since the title is part of the
-		// channel's identity
-		if (!isAllowed(title)) throw new FormatException();
-		checkLength(title, 1, MAX_AUTHOR_NAME_LENGTH);
-		PublicKey publicKey;
-		try {
-			publicKey = new SignaturePublicKey(parsed.getRaw(2));
-		} catch (IllegalArgumentException e) {
-			// A link comes from outside, so a key of the wrong length
-			// is a malformed link rather than a bug
-			throw new FormatException();
-		}
-		List<String> mirrors = parseMirrors(parsed.getList(3));
-		// A link comes from outside, and a mirror the HTTP client can't
-		// parse would throw at every scheduled fetch
-		for (String mirror : mirrors) {
-			if (HttpUrl.parse(mirror) == null) throw new FormatException();
-		}
-		return new ParsedLink(channelBlog(title, publicKey), mirrors);
-	}
-
-	private static List<String> parseMirrors(BdfList list)
-			throws FormatException {
-		if (list.size() > MAX_MIRRORS) throw new FormatException();
-		List<String> mirrors = new ArrayList<>(list.size());
-		for (int i = 0; i < list.size(); i++) {
-			String mirror = list.getString(i);
-			checkLength(mirror, 1, MAX_MIRROR_LENGTH);
-			mirrors.add(mirror);
-		}
-		return mirrors;
 	}
 
 	@Override
@@ -754,7 +760,7 @@ class ChannelManagerImpl
 					clientHelper.getGroupMetadataAsDictionary(txn, g);
 			BdfList list = meta.getOptionalList(GROUP_KEY_MIRRORS);
 			if (list == null) return emptyList();
-			return parseMirrors(list);
+			return ChannelLinkParser.parseMirrors(list);
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}

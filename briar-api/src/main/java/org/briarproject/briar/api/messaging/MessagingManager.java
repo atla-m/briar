@@ -2,6 +2,7 @@ package org.briarproject.briar.api.messaging;
 
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.GroupId;
@@ -35,7 +36,7 @@ public interface MessagingManager extends ConversationClient {
 	/**
 	 * The current minor version of the messaging client.
 	 */
-	int MINOR_VERSION = 6;
+	int MINOR_VERSION = 7;
 
 	/**
 	 * Stores a local private message.
@@ -177,6 +178,15 @@ public interface MessagingManager extends ConversationClient {
 	 */
 	@Nullable
 	String getMessageText(Transaction txn, MessageId m) throws DbException;
+
+	/**
+	 * Returns the channel post a forwarded private message carries, with
+	 * the link of the channel it came from, as checked when the message
+	 * arrived.
+	 *
+	 * @throws NoSuchMessageException If the message is not a forward
+	 */
+	ForwardedPost getForwardedPost(MessageId m) throws DbException;
 
 	/**
 	 * Returns the private message format supported by the given contact.

@@ -20,6 +20,7 @@ import static android.view.View.VISIBLE;
 import static org.briarproject.bramble.util.StringUtils.trim;
 import static org.briarproject.briar.android.util.UiUtils.formatDate;
 import static org.briarproject.briar.android.util.UiUtils.formatDuration;
+import static org.briarproject.briar.android.util.UiUtils.getSpanned;
 import static org.briarproject.briar.android.util.UiUtils.makeLinksClickable;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 
@@ -59,7 +60,11 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 		setTopNotice(item);
 
 		if (item.getText() != null) {
-			text.setText(trim(item.getText()));
+			// A forwarded channel post's text is the post's own, which is
+			// HTML like any blog post's, since it is shown as the channel
+			// signed it
+			if (item.getChannelLink() == null) text.setText(trim(item.getText()));
+			else text.setText(getSpanned(item.getText()));
 			Linkify.addLinks(text, Linkify.WEB_URLS);
 			makeLinksClickable(text, listener::onLinkClick);
 		}
@@ -118,7 +123,7 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 			topNotice.setText(ctx.getString(R.string.blogs_forwarded_from,
 					ctx.getString(R.string.blogs_forwarded_subscribe)));
 			topNotice.setOnClickListener(
-					v -> listener.onForwardedChannelClick(link));
+					v -> listener.onForwardedChannelClick(item.getId(), link));
 		} else {
 			topNotice.setVisibility(GONE);
 		}

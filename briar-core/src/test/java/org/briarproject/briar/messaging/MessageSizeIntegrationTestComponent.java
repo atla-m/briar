@@ -8,6 +8,7 @@ import org.briarproject.bramble.test.TestDnsModule;
 import org.briarproject.bramble.test.TestPluginConfigModule;
 import org.briarproject.bramble.test.TestSocksModule;
 import org.briarproject.briar.autodelete.AutoDeleteModule;
+import org.briarproject.briar.blog.BlogModule;
 import org.briarproject.briar.avatar.AvatarModule;
 import org.briarproject.briar.client.BriarClientModule;
 import org.briarproject.briar.conversation.ConversationModule;
@@ -25,6 +26,7 @@ import dagger.Component;
 		BriarClientModule.class,
 		AutoDeleteModule.class,
 		AvatarModule.class,
+		BlogModule.class,
 		ConversationModule.class,
 		ForumModule.class,
 		IdentityModule.class,

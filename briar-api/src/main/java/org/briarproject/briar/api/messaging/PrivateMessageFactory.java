@@ -53,16 +53,13 @@ public interface PrivateMessageFactory {
 
 	/**
 	 * Creates a private message in the
-	 * {@link PrivateMessageFormat#TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD
-	 * TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD} format, which can carry the
-	 * link of the channel a forwarded post came from. This format requires
-	 * the contact to support client version 0.5 or higher.
-	 *
-	 * @param channelLink the channel the text was forwarded from, or null
-	 * for an ordinary message
+	 * {@link PrivateMessageFormat#TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD
+	 * TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD} format, carrying a
+	 * channel post with the link of its channel and the parts of the post
+	 * its signature covers. The message's text is the post's text, so the
+	 * recipient can check it against the signature. This format requires
+	 * the contact to support client version 0.7 or higher.
 	 */
-	PrivateMessage createPrivateMessage(GroupId groupId, long timestamp,
-			@Nullable String text, List<AttachmentHeader> headers,
-			List<FileHeader> fileHeaders, long autoDeleteTimer,
-			@Nullable String channelLink) throws FormatException;
+	PrivateMessage createForwardedPost(GroupId groupId, long timestamp,
+			long autoDeleteTimer, ForwardedPost post) throws FormatException;
 }

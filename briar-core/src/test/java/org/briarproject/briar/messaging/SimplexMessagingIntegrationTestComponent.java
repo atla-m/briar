@@ -15,6 +15,7 @@ import org.briarproject.bramble.test.TestSocksModule;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.messaging.PrivateMessageFactory;
 import org.briarproject.briar.autodelete.AutoDeleteModule;
+import org.briarproject.briar.blog.BlogModule;
 import org.briarproject.briar.client.BriarClientModule;
 import org.briarproject.briar.conversation.ConversationModule;
 
@@ -27,6 +28,7 @@ import dagger.Component;
 		AutoDeleteModule.class,
 		BrambleCoreIntegrationTestModule.class,
 		BrambleCoreModule.class,
+		BlogModule.class,
 		BriarClientModule.class,
 		ConversationModule.class,
 		MessagingModule.class,

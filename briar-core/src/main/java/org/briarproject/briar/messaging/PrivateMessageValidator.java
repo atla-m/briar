@@ -1,6 +1,7 @@
 package org.briarproject.briar.messaging;
 
 import org.briarproject.bramble.api.FormatException;
+import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.UniqueId;
 import org.briarproject.bramble.api.client.BdfMessageContext;
 import org.briarproject.bramble.api.data.BdfDictionary;
@@ -12,6 +13,8 @@ import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.Message;
+import org.briarproject.briar.api.blog.Blog;
+import org.briarproject.briar.channel.ChannelLinkParser;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.sync.MessageContext;
 import org.briarproject.bramble.api.sync.validation.MessageValidator;
@@ -22,6 +25,7 @@ import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.io.InputStream;
 
 import javax.annotation.concurrent.Immutable;
@@ -39,7 +43,11 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCR
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
+import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_SIGNATURE_LENGTH;
+import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_FORWARDED_LINK_LENGTH;
+import static org.briarproject.briar.blog.BlogPostValidator.getSignedPost;
+import static org.briarproject.briar.blog.BlogPostValidator.validateAttachmentHeaders;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
@@ -63,12 +71,17 @@ class PrivateMessageValidator implements MessageValidator {
 	private final BdfReaderFactory bdfReaderFactory;
 	private final MetadataEncoder metadataEncoder;
 	private final Clock clock;
+	private final ClientHelper clientHelper;
+	private final ChannelLinkParser linkParser;
 
 	PrivateMessageValidator(BdfReaderFactory bdfReaderFactory,
-			MetadataEncoder metadataEncoder, Clock clock) {
+			MetadataEncoder metadataEncoder, Clock clock,
+			ClientHelper clientHelper, ChannelLinkParser linkParser) {
 		this.bdfReaderFactory = bdfReaderFactory;
 		this.metadataEncoder = metadataEncoder;
 		this.clock = clock;
+		this.clientHelper = clientHelper;
+		this.linkParser = linkParser;
 	}
 
 	@Override
@@ -144,7 +157,11 @@ class PrivateMessageValidator implements MessageValidator {
 		// describe a chunked file (see below).
 		// Client version 0.5: As 0.4, plus the link of the channel a
 		// forwarded post came from.
-		checkSize(body, 3, 5);
+		// Client version 0.7: As 0.5, plus the parts of the forwarded post
+		// that the channel's signature covers, checked against the key in
+		// the link. A link without them, as 0.5 sent, is refused: the text
+		// of such a forward was the sender's, shown as the channel's.
+		checkSize(body, 3, 6);
 		String text = body.getOptionalString(1);
 		checkLength(text, 0, MAX_PRIVATE_MESSAGE_TEXT_LENGTH);
 		BdfList headers = body.getList(2);
@@ -176,9 +193,13 @@ class PrivateMessageValidator implements MessageValidator {
 		// null in that position is not a valid encoding: a sender with
 		// nothing to forward sends the shorter body instead
 		String channelLink = null;
-		if (body.size() == 5) {
+		if (body.size() == 5) throw new FormatException();
+		if (body.size() == 6) {
 			channelLink = body.getString(4);
 			checkLength(channelLink, 1, MAX_FORWARDED_LINK_LENGTH);
+			// The text is the post's, so there must be some to check
+			if (text == null) throw new FormatException();
+			verifyForwardedPost(channelLink, text, body.getList(5));
 		}
 		// Return the metadata
 		BdfDictionary meta = new BdfDictionary();
@@ -193,6 +214,33 @@ class PrivateMessageValidator implements MessageValidator {
 			meta.put(MSG_KEY_AUTO_DELETE_TIMER, timer);
 		}
 		return new BdfMessageContext(meta);
+	}
+
+	/**
+	 * Checks that the text of a forward was posted to the channel its
+	 * link names: the timestamp, attachment headers and signature of the
+	 * post are carried with it, and the signature is checked with the
+	 * key in the link over what the channel signed. Without this a
+	 * forward could show any text under a real channel's name and key.
+	 */
+	private void verifyForwardedPost(String channelLink, String text,
+			BdfList post) throws FormatException {
+		// Post timestamp, optional attachment headers, signature
+		checkSize(post, 3);
+		long timestamp = post.getLong(0);
+		if (timestamp < 0) throw new FormatException();
+		BdfList headers = post.getOptionalList(1);
+		if (headers != null) validateAttachmentHeaders(headers);
+		byte[] sig = post.getRaw(2);
+		checkLength(sig, 1, MAX_SIGNATURE_LENGTH);
+		Blog blog = linkParser.parse(channelLink).blog;
+		BdfList signed = getSignedPost(blog.getId(), timestamp, text, headers);
+		try {
+			clientHelper.verifySignature(sig, SIGNING_LABEL_POST, signed,
+					blog.getAuthor().getPublicKey());
+		} catch (GeneralSecurityException e) {
+			throw new FormatException();
+		}
 	}
 
 	private BdfMessageContext validateFileManifest(Message m, BdfList body)

@@ -7,6 +7,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.messaging.ForwardedPost;
 import org.briarproject.briar.api.messaging.PrivateMessage;
 import org.briarproject.briar.api.messaging.PrivateMessageFactory;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -17,6 +18,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 import javax.inject.Inject;
 
+import static java.util.Collections.emptyList;
 import static org.briarproject.bramble.util.StringUtils.utf8IsTooLong;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
@@ -102,36 +104,25 @@ class PrivateMessageFactoryImpl implements PrivateMessageFactory {
 	}
 
 	@Override
-	public PrivateMessage createPrivateMessage(GroupId groupId, long timestamp,
-			@Nullable String text, List<AttachmentHeader> headers,
-			List<FileHeader> fileHeaders, long autoDeleteTimer,
-			@Nullable String channelLink) throws FormatException {
-		if (channelLink == null) {
-			// Nothing to forward, so don't spend an element saying so
-			return createPrivateMessage(groupId, timestamp, text, headers,
-					fileHeaders, autoDeleteTimer);
-		}
-		if (text == null && headers.isEmpty() && fileHeaders.isEmpty())
+	public PrivateMessage createForwardedPost(GroupId groupId, long timestamp,
+			long autoDeleteTimer, ForwardedPost post) throws FormatException {
+		String text = post.getText();
+		if (utf8IsTooLong(text, MAX_PRIVATE_MESSAGE_TEXT_LENGTH))
 			throw new IllegalArgumentException();
-		if (text != null &&
-				utf8IsTooLong(text, MAX_PRIVATE_MESSAGE_TEXT_LENGTH))
-			throw new IllegalArgumentException();
-		if (headers.size() + fileHeaders.size() > MAX_ATTACHMENTS_PER_MESSAGE)
-			throw new IllegalArgumentException();
+		String channelLink = post.getChannelLink();
 		if (utf8IsTooLong(channelLink, MAX_FORWARDED_LINK_LENGTH))
 			throw new IllegalArgumentException();
-		BdfList attachmentList = serialiseAttachmentHeaders(headers);
-		for (FileHeader f : fileHeaders) {
-			attachmentList.add(BdfList.of(f.getManifestId(),
-					f.getContentType(), f.getName(), f.getSize()));
-		}
-		// Serialise the message
+		// Serialise the message: the text is the post's, and the post's
+		// timestamp, attachment headers and signature follow the link,
+		// so the recipient can check the text against the channel's key
 		Long timer = autoDeleteTimer == NO_AUTO_DELETE_TIMER ?
 				null : autoDeleteTimer;
-		BdfList body = BdfList.of(PRIVATE_MESSAGE, text, attachmentList, timer,
-				channelLink);
+		BdfList signed = BdfList.of(post.getTimestamp(),
+				post.getAttachmentHeaders(), post.getSignature());
+		BdfList body = BdfList.of(PRIVATE_MESSAGE, text, new BdfList(), timer,
+				channelLink, signed);
 		Message m = clientHelper.createMessage(groupId, timestamp, body);
-		return new PrivateMessage(m, text != null, headers, fileHeaders,
+		return new PrivateMessage(m, true, emptyList(), emptyList(),
 				autoDeleteTimer, channelLink);
 	}
 

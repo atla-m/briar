@@ -11,6 +11,7 @@ import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.blog.Blog;
+import org.briarproject.briar.api.messaging.ForwardedPost;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.IOException;
@@ -206,6 +207,31 @@ public interface ChannelManager {
 	 * @throws FormatException If the link is malformed
 	 */
 	Blog readLink(String link) throws FormatException;
+
+	/**
+	 * Returns a post of a channel we hold in the form a private message
+	 * carries it: the channel's link and the parts of the post its
+	 * signature covers, so the recipient can check the text is the
+	 * channel's and not the sender's.
+	 *
+	 * @throws NoSuchChannelException If the group is not a channel
+	 * @throws NoSuchMessageException If the message is not a post of the
+	 * channel with text
+	 */
+	ForwardedPost getForwardedPost(GroupId g, MessageId post)
+			throws DbException;
+
+	/**
+	 * Subscribes to the channel a forwarded post came from, as
+	 * {@link #subscribeFromLink(String)} does, and stores the post in
+	 * it, checked against the channel's key like any other, so the
+	 * channel holds the post that brought the reader to it before its
+	 * first fetch.
+	 *
+	 * @throws FormatException If the link is malformed
+	 */
+	Blog subscribeFromForward(ForwardedPost post)
+			throws DbException, FormatException;
 
 	/**
 	 * Writes a channel's posts to the given stream, in the format its

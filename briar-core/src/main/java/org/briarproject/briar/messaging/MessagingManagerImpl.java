@@ -42,6 +42,7 @@ import org.briarproject.briar.api.conversation.ConversationManager;
 import org.briarproject.briar.api.conversation.ConversationManager.ConversationClient;
 import org.briarproject.briar.api.conversation.ConversationMessageHeader;
 import org.briarproject.briar.api.conversation.DeletionResult;
+import org.briarproject.briar.api.messaging.ForwardedPost;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.messaging.PrivateMessage;
 import org.briarproject.briar.api.messaging.PrivateMessageFormat;
@@ -632,6 +633,23 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
+	}
+
+	@Override
+	public ForwardedPost getForwardedPost(MessageId m) throws DbException {
+		return db.transactionWithResult(true, txn -> {
+			try {
+				BdfList body = clientHelper.getMessageAsList(txn, m);
+				// Type, text, headers, timer, link, signed parts of the post
+				if (body.size() != 6) throw new NoSuchMessageException();
+				BdfList post = body.getList(5);
+				return new ForwardedPost(body.getString(4), post.getLong(0),
+						body.getString(1), post.getOptionalList(1),
+						post.getRaw(2));
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+		});
 	}
 
 	@Override

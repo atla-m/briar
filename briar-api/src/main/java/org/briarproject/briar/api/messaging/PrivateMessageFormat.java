@@ -49,7 +49,17 @@ public enum PrivateMessageFormat {
 	 * is held back until the recipient asks for it. Support for this format
 	 * was added in client version 0.6.
 	 */
-	TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
+	TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE,
+	/**
+	 * Seventh version of the private message format, in which a forwarded
+	 * channel post carries, besides the channel's link, the parts of the
+	 * post that the channel's signature covers. The recipient checks the
+	 * signature with the key in the link, so a forward can't put words in
+	 * a channel's mouth. A forward with the link alone, as the fifth and
+	 * sixth versions sent, is refused. Support for this format was added
+	 * in client version 0.7.
+	 */
+	TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD;
 
 	/**
 	 * Returns true if this format supports image attachments.
@@ -72,15 +82,17 @@ public enum PrivateMessageFormat {
 	public boolean supportsFiles() {
 		return this == TEXT_IMAGES_AUTO_DELETE_FILES ||
 				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD ||
-				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
+				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE ||
+				this == TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD;
 	}
 
 	/**
-	 * Returns true if this format can carry a forwarded channel post.
+	 * Returns true if this format can carry a forwarded channel post. Only
+	 * a signed forward counts: a client that reads the earlier, unsigned
+	 * kind would show any text as the channel's.
 	 */
 	public boolean supportsForwarding() {
-		return this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD ||
-				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
+		return this == TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD;
 	}
 
 	/**
@@ -89,6 +101,7 @@ public enum PrivateMessageFormat {
 	 * which an older client would reject.
 	 */
 	public boolean supportsLargeFiles() {
-		return this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
+		return this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE ||
+				this == TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD;
 	}
 }

@@ -27,6 +27,9 @@ import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
 import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostHeader;
+import org.briarproject.briar.api.messaging.ForwardedPost;
+import org.briarproject.briar.api.messaging.MessagingManager;
+import org.briarproject.briar.api.messaging.PrivateMessage;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.attachment.CountingInputStream;
@@ -59,6 +62,7 @@ import java.util.List;
 
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
+import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static java.util.Collections.singletonList;
 import static java.util.Locale.US;
 import static java.util.concurrent.TimeUnit.DAYS;
@@ -2478,6 +2482,66 @@ public class ChannelManagerIntegrationTest
 		c1.getNearbyChannelProtocol().read(g,
 				new ByteArrayInputStream(served.toByteArray()),
 				new ByteArrayOutputStream());
+	}
+
+	@Test
+	public void testAForwardedPostIsCheckedAndSeedsTheChannel()
+			throws Exception {
+		// A forward carries the post as the channel signed it, so the
+		// recipient's device checks the text is the channel's, and their
+		// copy of the channel holds the post from the moment they subscribe
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		String text = "<b>Bread</b> at the corner shop";
+		MessageId postId = channelManager0.post(g, text);
+		ForwardedPost post = channelManager0.getForwardedPost(g, postId);
+		assertEquals(text, post.getText());
+		assertEquals(channelManager0.getChannelLink(g), post.getChannelLink());
+
+		PrivateMessage m = forward(post);
+		sync0To1(1, true);
+
+		// The recipient's device checked the signature on arrival
+		ForwardedPost received = c1.getMessagingManager()
+				.getForwardedPost(m.getMessage().getId());
+		assertEquals(text, received.getText());
+		assertEquals(post.getChannelLink(), received.getChannelLink());
+		assertFalse(db1.transactionWithResult(true,
+				txn -> db1.containsGroup(txn, g)));
+
+		Blog blog = channelManager1.subscribeFromForward(received);
+		assertEquals(g, blog.getId());
+		awaitPendingMessageDelivery(1);
+		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
+		assertEquals(1, headers.size());
+		assertEquals(postId, headers.iterator().next().getId());
+		assertEquals(text, blogManager1.getPostText(postId));
+	}
+
+	@Test
+	public void testAForwardWithChangedTextIsRefused() throws Exception {
+		// A contact changes a post's text and forwards it with the real
+		// channel's link and signature: the recipient's device refuses the
+		// message, so nothing is shown under the channel's name
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		MessageId postId = channelManager0.post(g, "Bread at the corner shop");
+		ForwardedPost post = channelManager0.getForwardedPost(g, postId);
+		ForwardedPost forged = new ForwardedPost(post.getChannelLink(),
+				post.getTimestamp(), "The corner shop has closed",
+				post.getAttachmentHeaders(), post.getSignature());
+		forward(forged);
+		syncMessage(c0, c1, contactId1From0, 1, 0, 1, 0);
+	}
+
+	private PrivateMessage forward(ForwardedPost post) throws Exception {
+		MessagingManager messaging0 = c0.getMessagingManager();
+		GroupId conversation = messaging0.getConversationId(contactId1From0);
+		PrivateMessage m = c0.getPrivateMessageFactory().createForwardedPost(
+				conversation, c0.getClock().currentTimeMillis(),
+				NO_AUTO_DELETE_TIMER, post);
+		messaging0.addLocalMessage(m);
+		return m;
 	}
 
 	@Test
