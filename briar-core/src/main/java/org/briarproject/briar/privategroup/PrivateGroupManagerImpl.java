@@ -48,7 +48,6 @@ import org.briarproject.briar.api.privategroup.Visibility;
 import org.briarproject.briar.api.privategroup.event.ContactRelationshipRevealedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupAttachmentReceivedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupDissolvedEvent;
-import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.privategroup.event.GroupMessageAddedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -66,7 +65,6 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
@@ -106,7 +104,7 @@ import static org.briarproject.briar.privategroup.GroupConstants.MISSING_ATTACHM
 @ThreadSafe
 @NotNullByDefault
 class PrivateGroupManagerImpl extends BdfIncomingMessageHook
-		implements PrivateGroupManager, ChunkedFileStore.Client {
+		implements PrivateGroupManager {
 
 	private final PrivateGroupFactory privateGroupFactory;
 	private final ContactManager contactManager;
@@ -114,6 +112,7 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 	private final AuthorManager authorManager;
 	private final MessageTracker messageTracker;
 	private final List<PrivateGroupHook> hooks;
+	private final PrivateGroupFileClient fileClient;
 	private final ChunkedFileStore fileStore;
 
 	@Inject
@@ -129,7 +128,9 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 		this.identityManager = identityManager;
 		this.authorManager = authorManager;
 		this.messageTracker = messageTracker;
-		this.fileStore = new ChunkedFileStore(db, clientHelper, crypto, this);
+		fileClient = new PrivateGroupFileClient(clientHelper);
+		fileStore = new ChunkedFileStore(db, clientHelper, crypto,
+				fileClient);
 		hooks = new CopyOnWriteArrayList<>();
 	}
 
@@ -390,40 +391,11 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 	// The mechanics live in ChunkedFileStore, which the messaging client
 	// uses too; this class supplies the group-specific parts below.
 
-	@Override
-	public int getManifestType() {
-		return FILE_MANIFEST.getInt();
-	}
 
-	@Override
-	public int getChunkType() {
-		return FILE_CHUNK.getInt();
-	}
 
-	@Override
-	public BdfDictionary getLocalFileMetadata(int messageType,
-			long timestamp) {
-		BdfDictionary meta = new BdfDictionary();
-		meta.put(KEY_TYPE, messageType);
-		meta.put(KEY_TIMESTAMP, timestamp);
-		return meta;
-	}
 
-	@Override
-	public BdfDictionary getManifestQuery() {
-		return BdfDictionary.of(
-				new BdfEntry(KEY_TYPE, FILE_MANIFEST.getInt()));
-	}
 
-	@Override
-	public BdfDictionary getChunkQuery() {
-		return BdfDictionary.of(new BdfEntry(KEY_TYPE, FILE_CHUNK.getInt()));
-	}
 
-	@Override
-	public long getMissingFileCleanupDurationMs() {
-		return MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
-	}
 
 	@Override
 	public FileHeader addLocalFile(GroupId groupId, long timestamp,
@@ -484,17 +456,6 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 	 * post may reference a chunked image as a plain attachment entry, so
 	 * manifests can appear in either kind of entry.
 	 */
-	private Set<MessageId> getReferencedIds(BdfDictionary postMeta)
-			throws FormatException {
-		Set<MessageId> ids = new HashSet<>();
-		if (!postMeta.containsKey(KEY_ATTACHMENT_HEADERS)) return ids;
-		BdfList list = postMeta.getList(KEY_ATTACHMENT_HEADERS);
-		for (int i = 0; i < list.size(); i++) {
-			ids.add(new MessageId(list.getList(i).getRaw(0)));
-		}
-		return ids;
-	}
-
 	@Override
 	public PrivateGroup getPrivateGroup(GroupId g) throws DbException {
 		PrivateGroup privateGroup;
@@ -856,18 +817,6 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 		db.startCleanupTimer(txn, m.getId());
 	}
 
-	@Override
-	public boolean isManifestReferenced(Transaction txn, GroupId g,
-			MessageId manifestId) throws DbException, FormatException {
-		BdfDictionary query = BdfDictionary.of(
-				new BdfEntry(KEY_TYPE, POST.getInt()));
-		Map<MessageId, BdfDictionary> posts =
-				clientHelper.getMessageMetadataAsDictionary(txn, g, query);
-		for (BdfDictionary meta : posts.values()) {
-			if (getReferencedIds(meta).contains(manifestId)) return true;
-		}
-		return false;
-	}
 
 	private void stopAttachmentCleanupTimers(Transaction txn, Message m,
 			List<AttachmentHeader> headers)
@@ -943,7 +892,7 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			stopAttachmentCleanupTimers(txn, m, attachments);
 		// nor are any files it references, nor their chunks
 		fileStore.onFilesReferenced(txn, m.getGroupId(),
-				getReferencedIds(meta));
+				fileClient.getReferencedIds(meta));
 		// track message and broadcast event
 		messageTracker.trackIncomingMessage(txn, m);
 		attachGroupMessageAddedEvent(txn, m, meta, false);

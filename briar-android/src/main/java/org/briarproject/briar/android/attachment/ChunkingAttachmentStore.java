@@ -14,8 +14,12 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.logging.Logger;
 
+import static java.util.logging.Level.WARNING;
+import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.IoUtils.copyAndClose;
+import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZE;
 
@@ -29,6 +33,9 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZ
  */
 @NotNullByDefault
 abstract class ChunkingAttachmentStore implements AttachmentStore {
+
+	private static final Logger LOG =
+			getLogger(ChunkingAttachmentStore.class.getName());
 
 	protected abstract AttachmentHeader addSingleAttachment(GroupId groupId,
 			long timestamp, String contentType, InputStream in)
@@ -101,6 +108,9 @@ abstract class ChunkingAttachmentStore implements AttachmentStore {
 		try {
 			return supportsFiles(groupId) ? MAX_FILE_SIZE : MAX_IMAGE_SIZE;
 		} catch (DbException e) {
+			// Fall back to the single-message limit, so the image is
+			// compressed more than it needs to be but the send succeeds
+			logException(LOG, WARNING, e);
 			return MAX_IMAGE_SIZE;
 		}
 	}

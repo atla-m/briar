@@ -97,7 +97,7 @@ import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_TIMEST
 @NotNullByDefault
 class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		ConversationClient, OpenDatabaseHook, ContactHook,
-		ClientVersioningHook, CleanupHook, ChunkedFileStore.Client {
+		ClientVersioningHook, CleanupHook {
 
 	private static final Logger LOG =
 			getLogger(MessagingManagerImpl.class.getName());
@@ -110,6 +110,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 	private final ClientVersioningManager clientVersioningManager;
 	private final ContactGroupFactory contactGroupFactory;
 	private final AutoDeleteManager autoDeleteManager;
+	private final MessagingFileClient fileClient;
 	private final ChunkedFileStore fileStore;
 
 	@Inject
@@ -131,7 +132,9 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		this.clientVersioningManager = clientVersioningManager;
 		this.contactGroupFactory = contactGroupFactory;
 		this.autoDeleteManager = autoDeleteManager;
-		this.fileStore = new ChunkedFileStore(db, clientHelper, crypto, this);
+		fileClient = new MessagingFileClient(clientHelper);
+		fileStore = new ChunkedFileStore(db, clientHelper, crypto,
+				fileClient);
 	}
 
 	@Override
@@ -247,7 +250,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		// Any files the message references, and their chunks, are wanted
 		// now. An image entry may point at a chunked image's manifest, so
 		// all referenced IDs are checked, not just the file entries.
-		fileStore.onFilesReferenced(txn, groupId, getReferencedIds(meta));
+		fileStore.onFilesReferenced(txn, groupId,
+				fileClient.getReferencedIds(meta));
 		logDuration(LOG, "Receiving private message", start);
 	}
 
@@ -292,17 +296,6 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 	 * Returns the IDs of all messages referenced by a message's attachment
 	 * header list: single-message attachments and file manifests alike.
 	 */
-	private Set<MessageId> getReferencedIds(BdfDictionary meta)
-			throws FormatException {
-		Set<MessageId> ids = new HashSet<>();
-		if (!meta.containsKey(MSG_KEY_ATTACHMENT_HEADERS)) return ids;
-		BdfList list = meta.getList(MSG_KEY_ATTACHMENT_HEADERS);
-		for (int i = 0; i < list.size(); i++) {
-			ids.add(new MessageId(list.getList(i).getRaw(0)));
-		}
-		return ids;
-	}
-
 	private void stopAttachmentCleanupTimers(Transaction txn, Message m,
 			List<AttachmentHeader> headers)
 			throws DbException, FormatException {
@@ -445,53 +438,12 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 	// private group client uses too; this class supplies the parts that are
 	// specific to private conversations.
 
-	@Override
-	public int getManifestType() {
-		return FILE_MANIFEST;
-	}
 
-	@Override
-	public int getChunkType() {
-		return FILE_CHUNK;
-	}
 
-	@Override
-	public BdfDictionary getLocalFileMetadata(int messageType,
-			long timestamp) {
-		BdfDictionary meta = new BdfDictionary();
-		meta.put(MSG_KEY_TIMESTAMP, timestamp);
-		meta.put(MSG_KEY_LOCAL, true);
-		meta.put(MSG_KEY_MSG_TYPE, messageType);
-		return meta;
-	}
 
-	@Override
-	public BdfDictionary getManifestQuery() {
-		return BdfDictionary.of(new BdfEntry(MSG_KEY_MSG_TYPE, FILE_MANIFEST));
-	}
 
-	@Override
-	public BdfDictionary getChunkQuery() {
-		return BdfDictionary.of(new BdfEntry(MSG_KEY_MSG_TYPE, FILE_CHUNK));
-	}
 
-	@Override
-	public boolean isManifestReferenced(Transaction txn, GroupId g,
-			MessageId manifestId) throws DbException, FormatException {
-		BdfDictionary query = BdfDictionary.of(
-				new BdfEntry(MSG_KEY_MSG_TYPE, PRIVATE_MESSAGE));
-		Map<MessageId, BdfDictionary> messages =
-				clientHelper.getMessageMetadataAsDictionary(txn, g, query);
-		for (BdfDictionary meta : messages.values()) {
-			if (getReferencedIds(meta).contains(manifestId)) return true;
-		}
-		return false;
-	}
 
-	@Override
-	public long getMissingFileCleanupDurationMs() {
-		return MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
-	}
 
 	@Override
 	public FileHeader addLocalFile(GroupId groupId, long timestamp,
@@ -717,7 +669,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 				// message leaves no part of its files behind. Delete the
 				// message itself first, so that a file it shares is only
 				// kept if some other message still references it.
-				Collection<MessageId> referenced = getReferencedIds(meta);
+				Collection<MessageId> referenced =
+						fileClient.getReferencedIds(meta);
 				db.deleteMessage(txn, m);
 				db.deleteMessageMetadata(txn, m);
 				for (MessageId id : referenced) {
