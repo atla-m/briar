@@ -12,6 +12,9 @@ import org.briarproject.briar.android.threaded.BaseThreadItemViewHolder;
 import org.briarproject.briar.android.threaded.ThreadItemAdapter;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import javax.annotation.Nullable;
 
@@ -66,11 +69,20 @@ class GroupMessageAdapter extends ThreadItemAdapter<GroupMessageItem>
 	@Override
 	@Nullable
 	public GroupMessageItem findItem(MessageId id) {
-		for (GroupMessageItem item : getCurrentList()) {
-			if (item.getId().equals(id)) return item;
+		// Every reply's quote looks its parent up while the list is
+		// scrolled, so keep an index rather than scan the list each time
+		if (byId == null || indexedList != getCurrentList()) {
+			indexedList = getCurrentList();
+			byId = new HashMap<>(indexedList.size());
+			for (GroupMessageItem item : indexedList) byId.put(item.getId(), item);
 		}
-		return null;
+		return byId.get(id);
 	}
+
+	@Nullable
+	private List<GroupMessageItem> indexedList = null;
+	@Nullable
+	private Map<MessageId, GroupMessageItem> byId = null;
 
 	@Override
 	public void onQuoteClick(MessageId parentId) {

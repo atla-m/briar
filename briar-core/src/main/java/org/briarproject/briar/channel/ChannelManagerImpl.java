@@ -111,6 +111,7 @@ import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
+import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_INITIAL;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_INTERVAL;
 import static org.briarproject.briar.api.channel.ChannelConstants.FILES_DIRECTORY;
@@ -1405,6 +1406,54 @@ class ChannelManagerImpl
 	}
 
 	/**
+	 * Returns the IDs of the images and files the channel's delivered
+	 * posts carry, which a stream may go on to supply.
+	 */
+	private Set<MessageId> getWantedIds(GroupId g) throws DbException {
+		return db.transactionWithResult(true, txn -> {
+			if (!db.containsGroup(txn, g)) throw new NoSuchChannelException();
+			return new HashSet<>(getReferenceTimestamps(txn, g).keySet());
+		});
+	}
+
+	/**
+	 * Decides whether a stream entry is stored. A post is, and the images
+	 * and files it carries become wanted; an image, manifest or chunk is
+	 * stored only if wanted; a request never is. Anything else is signed
+	 * or otherwise checked by the validator.
+	 */
+	private boolean isWanted(byte[] body, MessageId id,
+			Set<MessageId> wanted) {
+		try {
+			BdfReader r = bdfReaderFactory.createReader(
+					new ByteArrayInputStream(body));
+			BdfList list = r.readList();
+			if (list.isEmpty()) return true;
+			long type = list.getLong(0);
+			if (type == FILE_REQUEST.getInt()) return false;
+			if (type == ATTACHMENT.getInt() || type == FILE_MANIFEST.getInt())
+				return wanted.contains(id);
+			if (type == FILE_CHUNK.getInt()) {
+				return list.size() > 1 &&
+						wanted.contains(new MessageId(list.getRaw(1)));
+			}
+			if (type == POST.getInt() && list.size() == 4) {
+				// [type, text, headers, signature]: each header is
+				// [id, contentType] or [manifestId, contentType, name, size]
+				BdfList headers = list.getList(2);
+				for (int i = 0; i < headers.size(); i++) {
+					BdfList h = headers.getList(i);
+					if (!h.isEmpty()) wanted.add(new MessageId(h.getRaw(0)));
+				}
+			}
+			return true;
+		} catch (IOException e) {
+			// Leave it to the validator
+			return true;
+		}
+	}
+
+	/**
 	 * Returns the type of the message with the given body, or -1 if the
 	 * body doesn't start with a list whose first element is an integer.
 	 */
@@ -1473,7 +1522,8 @@ class ChannelManagerImpl
 		// before a post written in between, so by its own timestamp it
 		// would land in the middle of the file once its post is sent,
 		// and every reader would have to start again. It takes its
-		// post's timestamp instead, and goes just before the post.
+		// post's timestamp instead, and goes just after the post, so a
+		// reader knows the post carries it before it arrives.
 		Map<MessageId, Long> carried = getReferenceTimestamps(txn, g);
 		Map<MessageId, Integer> ranks = new HashMap<>(ids.size());
 		for (MessageId m : ids) {
@@ -1489,12 +1539,12 @@ class ChannelManagerImpl
 				throw new DbException(e);
 			}
 			if (timestamp == null) timestamp = db.getMessage(txn, m).getTimestamp();
-			int rank = 2;
+			int rank = 0;
 			if (type != null && (type == FILE_MANIFEST.getInt() ||
 					type == ATTACHMENT.getInt())) {
 				Long post = carried.get(m);
 				if (post != null) timestamp = post;
-				rank = 0;
+				rank = 1;
 			} else if (type != null && type == FILE_CHUNK.getInt()) {
 				try {
 					byte[] manifestId = meta.getOptionalRaw(KEY_FILE_MANIFEST_ID);
@@ -1504,7 +1554,7 @@ class ChannelManagerImpl
 				} catch (FormatException e) {
 					throw new DbException(e);
 				}
-				rank = 1;
+				rank = 2;
 			}
 			timestamps.put(m, timestamp);
 			ranks.put(m, rank);
@@ -1624,6 +1674,7 @@ class ChannelManagerImpl
 			g = requireNonNull(expected);
 		}
 		p.started = true;
+		Set<MessageId> wanted = null;
 		while (!r.eof()) {
 			// The limits apply to the file, so what earlier fetches of
 			// it stored counts against them too. Going over one is not a
@@ -1643,10 +1694,15 @@ class ChannelManagerImpl
 			// The message ID is a hash of the group, timestamp and body,
 			// so a stream can't claim a message it didn't carry
 			Message m = messageFactory.createMessage(g, timestamp, body);
-			// The owner's file never carries requests, and one from a
-			// mirror is unsigned, kept for ever and passed to contacts,
-			// so it is skipped. It still counts against the budget.
-			if (messageType(body) != FILE_REQUEST.getInt()) {
+			// Posts are signed; images, manifests and chunks are not, and
+			// a mirror could serve any number of them. An honest file
+			// writes each post before the images and files it carries,
+			// so one that no post has carried, in this stream or before,
+			// is not the channel's and is skipped. So is a request, which
+			// the owner's file never carries. Skipped entries still count
+			// against the budget.
+			if (wanted == null) wanted = getWantedIds(g);
+			if (isWanted(body, m.getId(), wanted)) {
 				db.transaction(false, txn -> {
 					if (!db.containsGroup(txn, g))
 						throw new NoSuchChannelException();
