@@ -397,6 +397,13 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	}
 
 	@Override
+	public boolean isChunkOf(Transaction txn, MessageId manifestId, int index,
+			byte[] body, int descriptorLength) throws DbException {
+		return fileStore.isChunkOf(txn, manifestId, index, body,
+				descriptorLength);
+	}
+
+	@Override
 	public void removeFile(FileHeader header) throws DbException {
 		fileStore.removeFile(header);
 	}

@@ -118,6 +118,14 @@ public interface BlogManager {
 	FileStatus getFileStatus(FileHeader header) throws DbException;
 
 	/**
+	 * Returns true if the given message body is the chunk at the given
+	 * index of the file the given manifest describes, so that a chunk from
+	 * a mirror can be checked before it is stored.
+	 */
+	boolean isChunkOf(Transaction txn, MessageId manifestId, int index,
+			byte[] body, int descriptorLength) throws DbException;
+
+	/**
 	 * Asks for the chunks of a file its author held back because it is
 	 * larger than
 	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE}.

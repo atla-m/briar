@@ -366,13 +366,33 @@ class ChannelManagerImpl
 	@Override
 	public Blog subscribe(String title, PublicKey publicKey)
 			throws DbException {
-		String name = truncateUtf8(title, MAX_AUTHOR_NAME_LENGTH);
-		Author author = authorFactory.createAuthor(name, publicKey);
-		Blog blog = blogFactory.createChannelBlog(author);
+		Blog blog = channelBlog(title, publicKey);
 		// Subscribing tells no one: it only means we will accept this
 		// channel's posts if we are offered them
 		db.transaction(false, txn -> blogManager.addBlog(txn, blog));
 		return blog;
+	}
+
+	private Blog channelBlog(String title, PublicKey publicKey) {
+		String name = truncateUtf8(title, MAX_AUTHOR_NAME_LENGTH);
+		Author author = authorFactory.createAuthor(name, publicKey);
+		return blogFactory.createChannelBlog(author);
+	}
+
+	@Override
+	public Blog readLink(String link) throws FormatException {
+		return parseLink(link).blog;
+	}
+
+	private static class ParsedLink {
+
+		private final Blog blog;
+		private final List<String> mirrors;
+
+		private ParsedLink(Blog blog, List<String> mirrors) {
+			this.blog = blog;
+			this.mirrors = mirrors;
+		}
 	}
 
 	@Override
@@ -398,6 +418,20 @@ class ChannelManagerImpl
 	@Override
 	public Blog subscribeFromLink(String link)
 			throws DbException, FormatException {
+		ParsedLink parsed = parseLink(link);
+		Blog blog = parsed.blog;
+		// A link for a channel we already hold, our own included, may
+		// come from anyone who has the public link, so it doesn't get
+		// to replace the mirrors we have
+		boolean held = db.transactionWithResult(true,
+				txn -> db.containsGroup(txn, blog.getId()));
+		if (held) return blog;
+		db.transaction(false, txn -> blogManager.addBlog(txn, blog));
+		if (!parsed.mirrors.isEmpty()) setMirrors(blog.getId(), parsed.mirrors);
+		return blog;
+	}
+
+	private ParsedLink parseLink(String link) throws FormatException {
 		Matcher matcher = LINK_REGEX.matcher(link);
 		if (!matcher.find()) throw new FormatException();
 		// Discard the prefix and anything around the link
@@ -423,9 +457,7 @@ class ChannelManagerImpl
 		for (String mirror : mirrors) {
 			if (HttpUrl.parse(mirror) == null) throw new FormatException();
 		}
-		Blog blog = subscribe(title, publicKey);
-		if (!mirrors.isEmpty()) setMirrors(blog.getId(), mirrors);
-		return blog;
+		return new ParsedLink(channelBlog(title, publicKey), mirrors);
 	}
 
 	private static List<String> parseMirrors(BdfList list)
@@ -1035,13 +1067,20 @@ class ChannelManagerImpl
 			// A file's chunks all take the timestamp after its manifest's
 			if (timestamp != manifestTimestamp + 1)
 				throw new FormatException();
-			checkChunkDescriptor(body, h.getManifestId());
+			int[] descriptor = checkChunkDescriptor(body, h.getManifestId());
+			int index = descriptor[0], descriptorLength = descriptor[1];
 			Message m = messageFactory.createMessage(g, timestamp, body);
-			db.transaction(false, txn -> {
+			// Checked against the manifest before it is stored, so a
+			// mirror serving junk leaves no trace and is not asked again
+			boolean stored = db.transactionWithResult(false, txn -> {
 				if (!db.containsGroup(txn, g))
 					throw new NoSuchChannelException();
+				if (!blogManager.isChunkOf(txn, h.getManifestId(), index,
+						body, descriptorLength)) return false;
 				db.importMessage(txn, m);
+				return true;
 			});
+			if (!stored) throw new FormatException();
 			read++;
 		}
 		return read;
@@ -1049,21 +1088,40 @@ class ChannelManagerImpl
 
 	/**
 	 * Checks that a message body starts with the descriptor of a chunk of
-	 * the given file.
+	 * the given file, and returns the chunk's index and the descriptor's
+	 * length in bytes.
 	 */
-	private void checkChunkDescriptor(byte[] body, MessageId manifestId)
+	private int[] checkChunkDescriptor(byte[] body, MessageId manifestId)
 			throws FormatException {
 		try {
-			BdfReader r = bdfReaderFactory.createReader(
-					new ByteArrayInputStream(body));
+			CountingInputStream in = new CountingInputStream(
+					new ByteArrayInputStream(body), body.length);
+			BdfReader r = bdfReaderFactory.createReader(in);
 			BdfList descriptor = r.readList();
 			checkSize(descriptor, 3);
 			if (descriptor.getInt(0) != FILE_CHUNK.getInt())
 				throw new FormatException();
 			if (!Arrays.equals(descriptor.getRaw(1), manifestId.getBytes()))
 				throw new FormatException();
+			return new int[] {descriptor.getInt(2), (int) in.getBytesRead()};
 		} catch (IOException e) {
 			throw new FormatException();
+		}
+	}
+
+	/**
+	 * Returns the type of the message with the given body, or -1 if the
+	 * body doesn't start with a list whose first element is an integer.
+	 */
+	private int messageType(byte[] body) {
+		try {
+			BdfReader r = bdfReaderFactory.createReader(
+					new ByteArrayInputStream(body));
+			BdfList descriptor = r.readList();
+			if (descriptor.isEmpty()) return -1;
+			return descriptor.getInt(0);
+		} catch (IOException e) {
+			return -1;
 		}
 	}
 
@@ -1215,11 +1273,16 @@ class ChannelManagerImpl
 			// The message ID is a hash of the group, timestamp and body,
 			// so a stream can't claim a message it didn't carry
 			Message m = messageFactory.createMessage(g, timestamp, body);
-			db.transaction(false, txn -> {
-				if (!db.containsGroup(txn, g))
-					throw new NoSuchChannelException();
-				db.importMessage(txn, m);
-			});
+			// The owner's file never carries requests, and one from a
+			// mirror is unsigned, kept for ever and passed to contacts,
+			// so it is skipped. It still counts against the budget.
+			if (messageType(body) != FILE_REQUEST.getInt()) {
+				db.transaction(false, txn -> {
+					if (!db.containsGroup(txn, g))
+						throw new NoSuchChannelException();
+					db.importMessage(txn, m);
+				});
+			}
 			// Counted once it has been stored, so a fetch that fails
 			// part way through an entry doesn't spend the file's budget
 			// on a message it never imported
