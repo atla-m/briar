@@ -2,6 +2,7 @@ package org.briarproject.briar.channel;
 
 import org.briarproject.bramble.api.FeatureFlags;
 import org.briarproject.bramble.api.event.EventBus;
+import org.briarproject.bramble.api.contact.ContactManager;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.briar.api.channel.ChannelManager;
 
@@ -23,11 +24,13 @@ public class ChannelModule {
 	@Singleton
 	ChannelManager provideChannelManager(ChannelManagerImpl channelManager,
 			LifecycleManager lifecycleManager, EventBus eventBus,
-			FeatureFlags featureFlags) {
+			ContactManager contactManager, FeatureFlags featureFlags) {
 		if (!featureFlags.shouldEnableBlogsInCore()) {
 			return channelManager;
 		}
 		lifecycleManager.registerOpenDatabaseHook(channelManager);
+		// Offers channels shared with contacts to new contacts
+		contactManager.registerContactHook(channelManager);
 		// Listens for Tor becoming active, then fetches on a timer
 		eventBus.addListener(channelManager);
 		return channelManager;

@@ -62,6 +62,8 @@ class BlogViewModel extends BaseViewModel {
 	private volatile GroupId groupId;
 
 	private final MutableLiveData<BlogItem> blog = new MutableLiveData<>();
+	private final MutableLiveData<Boolean> sharingWithContacts =
+			new MutableLiveData<>();
 	private final MutableLiveData<Boolean> blogRemoved =
 			new MutableLiveData<>();
 
@@ -146,6 +148,10 @@ class BlogViewModel extends BaseViewModel {
 				Blog b = blogManager.getBlog(groupId);
 				boolean ours = a.getId().equals(b.getAuthor().getId());
 				boolean removable = blogManager.canBeRemoved(b);
+				if (b.isChannel()) {
+					sharingWithContacts.postValue(
+							channelManager.isSharingWithContacts(groupId));
+				}
 				blog.postValue(new BlogItem(b, ours, removable));
 				logDuration(LOG, "Loading blog", start);
 			} catch (DbException e) {
@@ -193,6 +199,23 @@ class BlogViewModel extends BaseViewModel {
 				Blog b = blogManager.getBlog(groupId);
 				blogManager.removeBlog(b);
 				logDuration(LOG, "Removing blog", start);
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
+	LiveData<Boolean> getSharingWithContacts() {
+		return sharingWithContacts;
+	}
+
+	void setSharingWithContacts(boolean on) {
+		GroupId g = groupId;
+		if (g == null) return;
+		runOnDbThread(() -> {
+			try {
+				channelManager.setSharingWithContacts(g, on);
+				sharingWithContacts.postValue(on);
 			} catch (DbException e) {
 				handleException(e);
 			}

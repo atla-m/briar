@@ -606,6 +606,12 @@
 	<string name="channels_subscribe_explanation">Paste a channel link to subscribe. You will be able to read the channel\'s posts. Nobody is told that you subscribed.</string>
 	<string name="channels_link_hint">Channel link</string>
 	<string name="channels_subscribe_button">Subscribe</string>
+	<string name="channels_share_with_contacts">Share with my contacts</string>
+	<string name="channels_share_with_contacts_explanation">Your contacts will know you follow this channel. Its posts then pass between you and any contact who also shares it, over any connection, including Bluetooth.</string>
+	<string name="channels_share_with_contacts_confirm">Share</string>
+	<string name="channels_share_nearby">Share with anyone nearby who has it</string>
+	<string name="channels_share_nearby_soon">Not available yet.</string>
+	<string name="channels_where_posts_come_from">Posts arrive from the channel\'s addresses over the internet, or from contacts you share it with.</string>
 	<string name="channels_subscribe_error">That is not a valid channel link</string>
 	<string name="channels_import">Read a published channel file</string>
 	<string name="channels_imported">Channel file read</string>

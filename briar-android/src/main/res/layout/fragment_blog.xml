@@ -1,9 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<org.briarproject.briar.android.view.BriarRecyclerView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
 	xmlns:app="http://schemas.android.com/apk/res-auto"
 	xmlns:tools="http://schemas.android.com/tools"
-	android:id="@+id/postList"
 	android:layout_width="match_parent"
 	android:layout_height="match_parent"
-	app:scrollToEnd="false"
-	tools:context=".android.blog.BlogActivity" />
+	android:orientation="vertical"
+	tools:context=".android.blog.BlogActivity">
+
+	<include
+		android:id="@+id/channelSharing"
+		layout="@layout/view_channel_sharing"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:visibility="gone" />
+
+	<org.briarproject.briar.android.view.BriarRecyclerView
+		android:id="@+id/postList"
+		android:layout_width="match_parent"
+		android:layout_height="0dp"
+		android:layout_weight="1"
+		app:scrollToEnd="false" />
+
+</LinearLayout>

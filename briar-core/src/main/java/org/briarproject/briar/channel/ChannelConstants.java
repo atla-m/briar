@@ -15,6 +15,13 @@ interface ChannelConstants {
 	// Group metadata on a channel's own group, kept by owner and
 	// subscriber alike
 	String GROUP_KEY_MIRRORS = "channelMirrors";
+
+	/**
+	 * Group metadata key: true if the channel is shared with every
+	 * contact, present and future, and invitations to it are accepted
+	 * without asking.
+	 */
+	String GROUP_KEY_SHARE_WITH_CONTACTS = "channelShareWithContacts";
 	String GROUP_KEY_ETAG = "channelEtag";
 	String GROUP_KEY_LAST_MODIFIED = "channelLastModified";
 
