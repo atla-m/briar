@@ -18,6 +18,7 @@ import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageContext;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.Clock;
+import org.briarproject.briar.api.privategroup.MessageType;
 import org.briarproject.briar.api.privategroup.PrivateGroup;
 import org.briarproject.briar.api.privategroup.PrivateGroupFactory;
 import org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory;
@@ -30,6 +31,8 @@ import java.io.InputStream;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
@@ -45,12 +48,22 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCR
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_JOIN;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.privategroup.MessageType.ATTACHMENT;
+import static org.briarproject.briar.api.privategroup.MessageType.FILE_CHUNK;
+import static org.briarproject.briar.api.privategroup.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.FILE_CHUNK_PAYLOAD_LENGTH;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_FILE_CHUNKS;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_FILE_SIZE;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CONTENT_TYPE;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_NAME;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_SIZE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_HAS_TEXT;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_INITIAL_JOIN_MSG;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_MEMBER;
@@ -88,8 +101,8 @@ class GroupMessageValidator extends BdfMessageValidator {
 					"Timestamp is too far in the future");
 		}
 		try {
-			// An attachment is a BDF list (the descriptor) followed by the
-			// attachment's raw bytes, so the body can't be parsed as a single
+			// An attachment or file chunk is a BDF list (the descriptor)
+			// followed by raw bytes, so the body can't be parsed as a single
 			// list. Read the first list and check what type of message it is.
 			InputStream in = new ByteArrayInputStream(m.getBody());
 			CountingInputStream countIn =
@@ -98,8 +111,10 @@ class GroupMessageValidator extends BdfMessageValidator {
 			BdfList list = reader.readList();
 			long bytesRead = countIn.getBytesRead();
 			BdfMessageContext context;
-			if (isAttachment(list)) {
+			if (isType(list, ATTACHMENT)) {
 				context = validateAttachment(m, list, bytesRead);
+			} else if (isType(list, FILE_CHUNK)) {
+				context = validateFileChunk(m, list, bytesRead);
 			} else {
 				// All other message types consist of a single list
 				if (!reader.eof()) throw new FormatException();
@@ -112,11 +127,12 @@ class GroupMessageValidator extends BdfMessageValidator {
 		}
 	}
 
-	private boolean isAttachment(BdfList list) throws FormatException {
+	private boolean isType(BdfList list, MessageType t)
+			throws FormatException {
 		if (list.isEmpty()) throw new FormatException();
 		Object type = list.get(0);
 		return type instanceof Number &&
-				((Number) type).longValue() == ATTACHMENT.getInt();
+				((Number) type).longValue() == t.getInt();
 	}
 
 	@Override
@@ -127,6 +143,10 @@ class GroupMessageValidator extends BdfMessageValidator {
 
 		// Message type (int)
 		int type = body.getInt(0);
+
+		// File manifests have no member, they're authenticated by the signed
+		// post that references them
+		if (type == FILE_MANIFEST.getInt()) return validateFileManifest(m, body);
 
 		// Member (author)
 		BdfList memberList = body.getList(1);
@@ -224,17 +244,26 @@ class GroupMessageValidator extends BdfMessageValidator {
 			text = body.getOptionalString(4);
 			checkLength(text, 1, MAX_GROUP_POST_TEXT_LENGTH);
 			// The format with attachment headers is only used when there
-			// are attachments, so the list must not be empty
+			// are attachments or files, so the list must not be empty
 			headers = body.getList(5);
 			checkSize(headers, 1, MAX_GROUP_POST_ATTACHMENTS);
 			for (int i = 0; i < headers.size(); i++) {
 				BdfList header = headers.getList(i);
-				// Message ID, content type
-				checkSize(header, 2);
+				// Image attachment: message ID, content type.
+				// Shared file: manifest ID, content type, name, size.
+				checkSize(header, 2, 4);
+				if (header.size() == 3) throw new FormatException();
 				byte[] id = header.getRaw(0);
 				checkLength(id, UniqueId.LENGTH);
 				String contentType = header.getString(1);
 				checkLength(contentType, 1, MAX_CONTENT_TYPE_BYTES);
+				if (header.size() == 4) {
+					String name = header.getString(2);
+					checkLength(name, 1, MAX_FILE_NAME_LENGTH);
+					long size = header.getLong(3);
+					if (size < 1 || size > MAX_GROUP_FILE_SIZE)
+						throw new FormatException();
+				}
 			}
 			signature = body.getRaw(6);
 		} else {
@@ -288,6 +317,63 @@ class GroupMessageValidator extends BdfMessageValidator {
 		}
 		return BdfList.of(g.getId(), timestamp, memberList, parentId,
 				previousMessageId, text, attachmentHeaders);
+	}
+
+	private BdfMessageContext validateFileManifest(Message m, BdfList body)
+			throws FormatException {
+		// Message type, file name, content type, size, chunk IDs
+		checkSize(body, 5);
+		String name = body.getString(1);
+		checkLength(name, 1, MAX_FILE_NAME_LENGTH);
+		String contentType = body.getString(2);
+		checkLength(contentType, 1, MAX_CONTENT_TYPE_BYTES);
+		long size = body.getLong(3);
+		if (size < 1 || size > MAX_GROUP_FILE_SIZE) throw new FormatException();
+		// Every chunk except the last carries FILE_CHUNK_PAYLOAD_LENGTH
+		// bytes, so the number of chunks follows from the size
+		int expectedChunks = (int) ((size + FILE_CHUNK_PAYLOAD_LENGTH - 1)
+				/ FILE_CHUNK_PAYLOAD_LENGTH);
+		BdfList chunkIds = body.getList(4);
+		checkSize(chunkIds, expectedChunks, MAX_FILE_CHUNKS);
+		if (chunkIds.size() != expectedChunks) throw new FormatException();
+		Set<MessageId> unique = new HashSet<>();
+		for (int i = 0; i < chunkIds.size(); i++) {
+			byte[] id = chunkIds.getRaw(i);
+			checkLength(id, UniqueId.LENGTH);
+			// A chunk can't appear twice in the same file
+			if (!unique.add(new MessageId(id))) throw new FormatException();
+		}
+		// Manifests aren't signed. They're authenticated by the signed post
+		// that references them by message ID. Return the metadata and no
+		// dependencies: the chunks may arrive before or after the manifest.
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(KEY_TYPE, FILE_MANIFEST.getInt());
+		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(KEY_FILE_NAME, name);
+		meta.put(KEY_FILE_CONTENT_TYPE, contentType);
+		// Also stored under the generic key so that a chunked image can be
+		// read through the attachment reader like a single-message attachment
+		meta.put(MSG_KEY_CONTENT_TYPE, contentType);
+		meta.put(KEY_FILE_SIZE, size);
+		meta.put(KEY_FILE_CHUNK_IDS, chunkIds);
+		return new BdfMessageContext(meta);
+	}
+
+	private BdfMessageContext validateFileChunk(Message m, BdfList descriptor,
+			long descriptorLength) throws FormatException {
+		// Message type only, followed by the chunk's bytes
+		checkSize(descriptor, 1);
+		long payload = m.getBody().length - descriptorLength;
+		if (payload < 1 || payload > FILE_CHUNK_PAYLOAD_LENGTH)
+			throw new FormatException();
+		// Chunks aren't signed. They're authenticated by their message IDs,
+		// which are hashes of their content, listed in a manifest that a
+		// signed post references. Return the metadata and no dependencies.
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(KEY_TYPE, FILE_CHUNK.getInt());
+		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptorLength);
+		return new BdfMessageContext(meta);
 	}
 
 	private BdfMessageContext validateAttachment(Message m, BdfList descriptor,

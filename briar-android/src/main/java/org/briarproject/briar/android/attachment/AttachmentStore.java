@@ -22,4 +22,12 @@ public interface AttachmentStore {
 
 	void removeAttachment(AttachmentHeader header) throws DbException;
 
+	/**
+	 * Returns the maximum size of an attachment this store accepts, in
+	 * bytes. Images larger than this are compressed to fit before being
+	 * stored. Stores that split attachments into chunks can accept far more
+	 * than a single message, so most images keep their original quality.
+	 */
+	long getMaxAttachmentSize();
+
 }

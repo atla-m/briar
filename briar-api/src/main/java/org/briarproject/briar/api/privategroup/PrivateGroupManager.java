@@ -34,9 +34,10 @@ public interface PrivateGroupManager {
 	/**
 	 * The current minor version of the private group client.
 	 * <p>
-	 * Version 0.1 added image attachments to posts.
+	 * Version 0.1 added image attachments to posts. Version 0.2 added
+	 * chunked file sharing.
 	 */
-	int MINOR_VERSION = 1;
+	int MINOR_VERSION = 2;
 
 	/**
 	 * Adds a new private group and joins it.
@@ -119,6 +120,77 @@ public interface PrivateGroupManager {
 	 * Removes an unsent attachment.
 	 */
 	void removeAttachment(AttachmentHeader header) throws DbException;
+
+	/**
+	 * Stores a local file for the given private group, split into chunks
+	 * that each fit into a single message, plus a manifest listing the
+	 * chunks. The file is not shared with other members until a post that
+	 * references it is added with {@link #addLocalMessage(GroupMessage)}.
+	 *
+	 * @throws FileTooBigException If the file is larger than
+	 * {@link PrivateGroupConstants#MAX_GROUP_FILE_SIZE}
+	 */
+	GroupFileHeader addLocalFile(GroupId groupId, long timestamp, String name,
+			String contentType, InputStream in) throws DbException, IOException;
+
+	/**
+	 * Removes an unsent file and its chunks.
+	 */
+	void removeFile(GroupFileHeader header) throws DbException;
+
+	/**
+	 * Returns how much of the given file has been received.
+	 */
+	GroupFileStatus getFileStatus(GroupFileHeader header) throws DbException;
+
+	/**
+	 * Returns how much of the given file has been received.
+	 */
+	GroupFileStatus getFileStatus(Transaction txn, GroupFileHeader header)
+			throws DbException;
+
+	/**
+	 * Returns a stream for reading the given file, which must have been
+	 * fully received. The stream reads the file's chunks from the database
+	 * one at a time, so the whole file is never held in memory.
+	 *
+	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
+	 * file has not been fully received
+	 */
+	InputStream getFile(GroupFileHeader header) throws DbException;
+
+	/**
+	 * Returns a stream for reading the given file, which must have been
+	 * fully received. The stream reads the file's chunks from the database
+	 * one at a time, in transactions of its own, so it may be used after
+	 * the given transaction has ended.
+	 *
+	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
+	 * file has not been fully received
+	 */
+	InputStream getFile(Transaction txn, GroupFileHeader header)
+			throws DbException;
+
+	/**
+	 * Returns the header of the file whose manifest has the given message ID.
+	 * This allows a file to be looked up when only its manifest ID is known,
+	 * for example when a post references a chunked image the same way it
+	 * references a single-message attachment.
+	 *
+	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
+	 * message is not a file manifest in the given group, or has not arrived
+	 */
+	GroupFileHeader getFileHeader(Transaction txn, GroupId groupId,
+			MessageId manifestId) throws DbException;
+
+	/**
+	 * Returns the header of the file whose manifest has the given message ID.
+	 *
+	 * @throws org.briarproject.bramble.api.db.NoSuchMessageException If the
+	 * message is not a file manifest in the given group, or has not arrived
+	 */
+	GroupFileHeader getFileHeader(GroupId groupId, MessageId manifestId)
+			throws DbException;
 
 	/**
 	 * Returns the private group with the given ID.

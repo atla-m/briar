@@ -37,10 +37,16 @@ class ImageCompressorImpl implements ImageCompressor {
 	@Override
 	public InputStream compressImage(InputStream is, String contentType)
 			throws IOException {
+		return compressImage(is, contentType, MAX_IMAGE_SIZE,
+				MAX_ATTACHMENT_DIMENSION);
+	}
+
+	@Override
+	public InputStream compressImage(InputStream is, String contentType,
+			long maxBytes, int maxDimension) throws IOException {
 		try {
-			Bitmap bitmap =
-					createBitmap(is, contentType, MAX_ATTACHMENT_DIMENSION);
-			return compressImage(bitmap);
+			Bitmap bitmap = createBitmap(is, contentType, maxDimension);
+			return compressImage(bitmap, maxBytes);
 		} finally {
 			tryToClose(is, LOG, WARNING);
 		}
@@ -48,11 +54,16 @@ class ImageCompressorImpl implements ImageCompressor {
 
 	@Override
 	public InputStream compressImage(Bitmap bitmap) throws IOException {
+		return compressImage(bitmap, MAX_IMAGE_SIZE);
+	}
+
+	private InputStream compressImage(Bitmap bitmap, long maxBytes)
+			throws IOException {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		for (int quality = 100; quality >= 0; quality -= 10) {
 			if (!bitmap.compress(JPEG, quality, out))
 				throw new IOException();
-			if (out.size() <= MAX_IMAGE_SIZE) {
+			if (out.size() <= maxBytes) {
 				if (LOG.isLoggable(INFO)) {
 					LOG.info("Compressed image to "
 							+ out.size() + " bytes, quality " + quality);

@@ -10,6 +10,7 @@ import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.sync.InvalidMessageException;
+import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.test.ValidatorTestCase;
 import org.briarproject.briar.api.privategroup.MessageType;
@@ -30,21 +31,32 @@ import static org.briarproject.bramble.test.TestUtils.getAuthor;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
+import static org.briarproject.bramble.test.TestUtils.getMessage;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_JOIN;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.privategroup.MessageType.ATTACHMENT;
+import static org.briarproject.briar.api.privategroup.MessageType.FILE_CHUNK;
+import static org.briarproject.briar.api.privategroup.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.FILE_CHUNK_PAYLOAD_LENGTH;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.GROUP_SALT_LENGTH;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_FILE_SIZE;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_NAME_LENGTH;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CONTENT_TYPE;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_NAME;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_SIZE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_HAS_TEXT;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_INITIAL_JOIN_MSG;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_MEMBER;
@@ -98,6 +110,14 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 			BdfList.of(new MessageId(getRandomId()), contentType);
 	private final BdfList attachmentHeaders = BdfList.of(attachmentHeader);
 	private final long now = message.getTimestamp() + 1000;
+	// A file spanning four chunks
+	private final String fileName = getRandomString(MAX_FILE_NAME_LENGTH);
+	private final long fileSize = FILE_CHUNK_PAYLOAD_LENGTH * 3L + 12345;
+	private final BdfList fileEntry = BdfList.of(new MessageId(getRandomId()),
+			contentType, fileName, fileSize);
+	private final BdfList chunkIds = BdfList.of(new MessageId(getRandomId()),
+			new MessageId(getRandomId()), new MessageId(getRandomId()),
+			new MessageId(getRandomId()));
 
 	private final GroupMessageValidator validator =
 			new GroupMessageValidator(privateGroupFactory, clientHelper,
@@ -765,6 +785,172 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 		validator.validateMessage(message, group, body);
 	}
 
+
+	// POST with a shared file (four-element header entry)
+
+	@Test
+	public void testAcceptsPostWithFile() throws Exception {
+		BdfList headers = BdfList.of(fileEntry);
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectPostWithAttachments(null, text, headers, true);
+		BdfMessageContext messageContext =
+				validator.validateMessage(message, group, body);
+		assertEquals(headers,
+				messageContext.getDictionary().getList(KEY_ATTACHMENT_HEADERS));
+	}
+
+	@Test
+	public void testAcceptsPostWithImageAndFile() throws Exception {
+		BdfList headers = BdfList.of(attachmentHeader, fileEntry);
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, null, headers, memberSignature);
+		expectPostWithAttachments(null, null, headers, true);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithThreeElementHeaderEntry() throws Exception {
+		BdfList headers = BdfList.of(BdfList.of(new MessageId(getRandomId()),
+				contentType, fileName));
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithTooLongFileName() throws Exception {
+		BdfList headers = BdfList.of(BdfList.of(new MessageId(getRandomId()),
+				contentType, getRandomString(MAX_FILE_NAME_LENGTH + 1),
+				fileSize));
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithZeroFileSize() throws Exception {
+		BdfList headers = BdfList.of(BdfList.of(new MessageId(getRandomId()),
+				contentType, fileName, 0L));
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithTooBigFileSize() throws Exception {
+		BdfList headers = BdfList.of(BdfList.of(new MessageId(getRandomId()),
+				contentType, fileName, MAX_GROUP_FILE_SIZE + 1));
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, headers, memberSignature);
+		expectParseAuthor(memberList, member);
+		validator.validateMessage(message, group, body);
+	}
+
+	// FILE_MANIFEST message
+
+	@Test
+	public void testAcceptsFileManifest() throws Exception {
+		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
+				contentType, fileSize, chunkIds);
+		BdfMessageContext messageContext =
+				validator.validateMessage(message, group, body);
+		BdfDictionary meta = messageContext.getDictionary();
+		assertEquals(FILE_MANIFEST.getInt(), meta.getInt(KEY_TYPE).intValue());
+		assertEquals(message.getTimestamp(),
+				meta.getLong(KEY_TIMESTAMP).longValue());
+		assertEquals(fileName, meta.getString(KEY_FILE_NAME));
+		assertEquals(contentType, meta.getString(KEY_FILE_CONTENT_TYPE));
+		assertEquals(contentType, meta.getString(MSG_KEY_CONTENT_TYPE));
+		assertEquals(fileSize, meta.getLong(KEY_FILE_SIZE).longValue());
+		assertEquals(chunkIds, meta.getList(KEY_FILE_CHUNK_IDS));
+		assertEquals(Collections.emptyList(), messageContext.getDependencies());
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsFileManifestWithWrongChunkCount() throws Exception {
+		// The size implies four chunks, but only three are listed
+		BdfList threeIds = BdfList.of(new MessageId(getRandomId()),
+				new MessageId(getRandomId()), new MessageId(getRandomId()));
+		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
+				contentType, fileSize, threeIds);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsFileManifestWithDuplicateChunkIds()
+			throws Exception {
+		MessageId dupe = new MessageId(getRandomId());
+		BdfList dupes = BdfList.of(dupe, new MessageId(getRandomId()), dupe,
+				new MessageId(getRandomId()));
+		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
+				contentType, fileSize, dupes);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsFileManifestWithTooLongName() throws Exception {
+		BdfList body = BdfList.of(FILE_MANIFEST.getInt(),
+				getRandomString(MAX_FILE_NAME_LENGTH + 1), contentType,
+				fileSize, chunkIds);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsFileManifestWithTooBigSize() throws Exception {
+		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
+				contentType, MAX_GROUP_FILE_SIZE + 1, chunkIds);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsFileManifestWithTooShortChunkId() throws Exception {
+		BdfList shortIds = BdfList.of(getRandomBytes(MessageId.LENGTH - 1),
+				new MessageId(getRandomId()), new MessageId(getRandomId()),
+				new MessageId(getRandomId()));
+		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
+				contentType, fileSize, shortIds);
+		validator.validateMessage(message, group, body);
+	}
+
+	// FILE_CHUNK message, validated from the raw body like an attachment
+
+	@Test
+	public void testAcceptsFileChunk() throws Exception {
+		Message chunk = getMessage(groupId, 1000);
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK.getInt()));
+		// Descriptor length is zero as the test doesn't read from the
+		// counting input stream
+		BdfDictionary meta = BdfDictionary.of(
+				new BdfEntry(KEY_TYPE, FILE_CHUNK.getInt()),
+				new BdfEntry(KEY_TIMESTAMP, chunk.getTimestamp()),
+				new BdfEntry(MSG_KEY_DESCRIPTOR_LENGTH, 0L)
+		);
+		expectEncodeMetadata(meta);
+		validator.validateMessage(chunk, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileChunkWithTooLongPayload() throws Exception {
+		// With a zero-length descriptor the whole body is payload, and a
+		// maximum-length body exceeds the chunk payload length
+		Message chunk = getMessage(groupId, MAX_MESSAGE_BODY_LENGTH);
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK.getInt()));
+		validator.validateMessage(chunk, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileChunkWithTooLongDescriptor() throws Exception {
+		Message chunk = getMessage(groupId, 1000);
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK.getInt(), 1));
+		validator.validateMessage(chunk, group);
+	}
 
 	// ATTACHMENT message, which is validated from the raw body because the
 	// descriptor is followed by the attachment's bytes

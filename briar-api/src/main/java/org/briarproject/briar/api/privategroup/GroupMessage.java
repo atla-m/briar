@@ -20,18 +20,27 @@ public class GroupMessage extends ThreadedMessage {
 
 	private final boolean hasText;
 	private final List<AttachmentHeader> attachmentHeaders;
+	private final List<GroupFileHeader> fileHeaders;
 
 	public GroupMessage(Message message, @Nullable MessageId parent,
 			Author member) {
-		this(message, parent, member, true, emptyList());
+		this(message, parent, member, true, emptyList(), emptyList());
 	}
 
 	public GroupMessage(Message message, @Nullable MessageId parent,
 			Author member, boolean hasText,
 			List<AttachmentHeader> attachmentHeaders) {
+		this(message, parent, member, hasText, attachmentHeaders, emptyList());
+	}
+
+	public GroupMessage(Message message, @Nullable MessageId parent,
+			Author member, boolean hasText,
+			List<AttachmentHeader> attachmentHeaders,
+			List<GroupFileHeader> fileHeaders) {
 		super(message, parent, member);
 		this.hasText = hasText;
 		this.attachmentHeaders = attachmentHeaders;
+		this.fileHeaders = fileHeaders;
 	}
 
 	public Author getMember() {
@@ -40,7 +49,7 @@ public class GroupMessage extends ThreadedMessage {
 
 	/**
 	 * Returns true if the message has text. A message without text must
-	 * have at least one attachment.
+	 * have at least one attachment or file.
 	 */
 	public boolean hasText() {
 		return hasText;
@@ -51,6 +60,13 @@ public class GroupMessage extends ThreadedMessage {
 	 */
 	public List<AttachmentHeader> getAttachmentHeaders() {
 		return attachmentHeaders;
+	}
+
+	/**
+	 * Returns the headers of the files shared by the message, if any.
+	 */
+	public List<GroupFileHeader> getFileHeaders() {
+		return fileHeaders;
 	}
 
 }
