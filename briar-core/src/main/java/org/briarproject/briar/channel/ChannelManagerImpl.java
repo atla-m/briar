@@ -114,6 +114,8 @@ import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_L
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.StringUtils.toHexString;
 import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
+import static org.briarproject.briar.api.attachment.FileHeader.hasDirectionOverride;
+import static org.briarproject.briar.api.attachment.FileHeader.withoutDirectionOverrides;
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
@@ -385,7 +387,11 @@ class ChannelManagerImpl
 
 	@Override
 	public Channel createChannel(String title) throws DbException {
-		String name = truncateUtf8(title, MAX_AUTHOR_NAME_LENGTH);
+		// A title is part of the channel's identity, so it can't be
+		// cleaned up later: characters that could disguise it are left
+		// out from the start
+		String name = truncateUtf8(withoutDirectionOverrides(title),
+				MAX_AUTHOR_NAME_LENGTH).trim();
 		if (name.isEmpty()) throw new IllegalArgumentException();
 		// The channel gets a key pair of its own, so posts are signed by
 		// the channel rather than by the identity that created it
@@ -490,6 +496,7 @@ class ChannelManagerImpl
 	@Override
 	public Blog subscribe(String title, PublicKey publicKey)
 			throws DbException {
+		if (hasDirectionOverride(title)) throw new IllegalArgumentException();
 		Blog blog = channelBlog(title, publicKey);
 		// Subscribing tells no one: it only means we will accept this
 		// channel's posts if we are offered them
@@ -656,6 +663,10 @@ class ChannelManagerImpl
 		if (parsed.getInt(0) != LINK_FORMAT_VERSION)
 			throw new FormatException();
 		String title = parsed.getString(1);
+		// A title that could disguise itself, or the text after it, is
+		// refused rather than cleaned, since the title is part of the
+		// channel's identity
+		if (hasDirectionOverride(title)) throw new FormatException();
 		checkLength(title, 1, MAX_AUTHOR_NAME_LENGTH);
 		PublicKey publicKey;
 		try {
@@ -1972,6 +1983,8 @@ class ChannelManagerImpl
 		BdfList descriptor = clientHelper.toList(header.getRaw(1));
 		Blog blog = blogFactory.parseBlog(descriptor);
 		if (!blog.isChannel()) throw new FormatException();
+		if (hasDirectionOverride(blog.getAuthor().getName()))
+			throw new FormatException();
 		return blog;
 	}
 

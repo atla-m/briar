@@ -4,6 +4,8 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.util.regex.Pattern;
+
 import javax.annotation.concurrent.Immutable;
 
 /**
@@ -16,6 +18,12 @@ import javax.annotation.concurrent.Immutable;
 @NotNullByDefault
 public class FileHeader {
 
+	// Embeddings, overrides and isolates, U+202A to U+202E and U+2066 to
+	// U+2069. The marks U+200E and U+200F only affect neutral characters
+	// beside them, so they are left alone.
+	private static final Pattern DIRECTION_OVERRIDES =
+			Pattern.compile("[\u202A-\u202E\u2066-\u2069]");
+
 	private final GroupId groupId;
 	private final MessageId manifestId;
 	private final String name, contentType;
@@ -25,9 +33,27 @@ public class FileHeader {
 			String contentType, long size) {
 		this.groupId = groupId;
 		this.manifestId = manifestId;
-		this.name = name;
+		this.name = withoutDirectionOverrides(name);
 		this.contentType = contentType;
 		this.size = size;
+	}
+
+	/**
+	 * Removes the characters that override the direction of the text
+	 * around them. A file name using them can be shown with its real type
+	 * hidden: "report\u202Efdp.apk" shows as "reportkpa.pdf". Names don't
+	 * need them, in Persian or any other language.
+	 */
+	public static String withoutDirectionOverrides(String s) {
+		return DIRECTION_OVERRIDES.matcher(s).replaceAll("");
+	}
+
+	/**
+	 * Returns true if the string holds a character that overrides the
+	 * direction of the text around it.
+	 */
+	public static boolean hasDirectionOverride(String s) {
+		return DIRECTION_OVERRIDES.matcher(s).find();
 	}
 
 	public GroupId getGroupId() {

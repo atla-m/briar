@@ -2644,6 +2644,28 @@ public class ChannelManagerIntegrationTest
 		}
 	}
 
+	@Test
+	public void testATitleCannotHideItsDirection() throws Exception {
+		// "report\u202Efdp" shows as "reportpdf" reversed. A title is
+		// part of the channel's identity, so a new one is cleaned and
+		// one from a link is refused.
+		Channel channel = channelManager0.createChannel("news\u202Efdp");
+		assertEquals("newsfdp", channel.getTitle());
+		Author a = channel.getBlog().getAuthor();
+		byte[] raw = c1.getClientHelper().toByteArray(BdfList.of(
+				LINK_FORMAT_VERSION, "news\u202Efdp",
+				a.getPublicKey().getEncoded(), new BdfList()));
+		expectBadLink(LINK_PREFIX + Base32.encode(raw).toLowerCase(US));
+	}
+
+	@Test
+	public void testAFileNameCannotHideItsType() {
+		FileHeader h = new FileHeader(new GroupId(getRandomId()),
+				new MessageId(getRandomId()), "report\u202Efdp.apk",
+				"application/pdf", 100);
+		assertEquals("reportfdp.apk", h.getName());
+	}
+
 	private boolean isStored(MessageId m) throws Exception {
 		try {
 			db1.transactionWithResult(true,
