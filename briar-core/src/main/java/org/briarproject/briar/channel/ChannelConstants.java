@@ -32,4 +32,11 @@ interface ChannelConstants {
 	 */
 	String GROUP_KEY_FETCH_MESSAGES = "channelFetchMessages";
 
+	/**
+	 * Manifest metadata key: how many bytes of the attachment's file a
+	 * mirror has served and we have stored, so a fetch cut off part way
+	 * continues from there.
+	 */
+	String MSG_KEY_FILE_FETCH_OFFSET = "channelFileFetchOffset";
+
 }

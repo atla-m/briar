@@ -65,7 +65,9 @@ public class ChannelManageFragment extends BaseFragment
 	private GroupId publishing = null;
 	private boolean publishingWithFiles = false;
 	@Nullable
-	private ChannelItem publishingToFolder = null;
+	private GroupId publishingToFolder = null;
+	@Nullable
+	private String publishingToFolderTitle = null;
 	@Nullable
 	private GroupId editingMirrors = null;
 
@@ -87,11 +89,12 @@ public class ChannelManageFragment extends BaseFragment
 	}
 
 	private void onFolderChosen(@Nullable Uri uri) {
-		ChannelItem channel = publishingToFolder;
+		GroupId g = publishingToFolder;
+		String title = publishingToFolderTitle;
 		publishingToFolder = null;
-		if (uri != null && channel != null) {
-			viewModel.publishToFolder(channel.getId(), uri,
-					channel.getTitle());
+		publishingToFolderTitle = null;
+		if (uri != null && g != null && title != null) {
+			viewModel.publishToFolder(g, uri, title);
 		}
 	}
 
@@ -101,6 +104,45 @@ public class ChannelManageFragment extends BaseFragment
 
 	public static ChannelManageFragment newInstance() {
 		return new ChannelManageFragment();
+	}
+
+	// A picker can outlive the process, and its result comes back to a
+	// fresh fragment, so what was being done is kept with the state
+	private static final String STATE_PUBLISHING = "publishing";
+	private static final String STATE_WITH_FILES = "publishingWithFiles";
+	private static final String STATE_TO_FOLDER = "publishingToFolder";
+	private static final String STATE_TO_FOLDER_TITLE =
+			"publishingToFolderTitle";
+	private static final String STATE_MIRRORS = "editingMirrors";
+
+	@Override
+	public void onCreate(@Nullable Bundle savedInstanceState) {
+		super.onCreate(savedInstanceState);
+		if (savedInstanceState == null) return;
+		byte[] b = savedInstanceState.getByteArray(STATE_PUBLISHING);
+		if (b != null) publishing = new GroupId(b);
+		publishingWithFiles = savedInstanceState.getBoolean(STATE_WITH_FILES);
+		b = savedInstanceState.getByteArray(STATE_TO_FOLDER);
+		if (b != null) publishingToFolder = new GroupId(b);
+		publishingToFolderTitle =
+				savedInstanceState.getString(STATE_TO_FOLDER_TITLE);
+		b = savedInstanceState.getByteArray(STATE_MIRRORS);
+		if (b != null) editingMirrors = new GroupId(b);
+	}
+
+	@Override
+	public void onSaveInstanceState(Bundle outState) {
+		super.onSaveInstanceState(outState);
+		if (publishing != null)
+			outState.putByteArray(STATE_PUBLISHING, publishing.getBytes());
+		outState.putBoolean(STATE_WITH_FILES, publishingWithFiles);
+		if (publishingToFolder != null) {
+			outState.putByteArray(STATE_TO_FOLDER,
+					publishingToFolder.getBytes());
+		}
+		outState.putString(STATE_TO_FOLDER_TITLE, publishingToFolderTitle);
+		if (editingMirrors != null)
+			outState.putByteArray(STATE_MIRRORS, editingMirrors.getBytes());
 	}
 
 	@Override
@@ -266,7 +308,8 @@ public class ChannelManageFragment extends BaseFragment
 			} else if (id == R.id.action_channel_publish) {
 				askWhetherToIncludeFiles(channel);
 			} else if (id == R.id.action_channel_publish_folder) {
-				publishingToFolder = channel;
+				publishingToFolder = channel.getId();
+				publishingToFolderTitle = channel.getTitle();
 				try {
 					folderLauncher.launch(null);
 				} catch (ActivityNotFoundException e) {
