@@ -65,6 +65,9 @@ public interface ChannelConstants {
 
 	/**
 	 * The largest number of messages we will read from a channel stream.
+	 * This is the tighter of the two limits for all but the largest
+	 * messages, because a stream carries a little more than each message
+	 * it holds.
 	 */
 	int MAX_STREAM_MESSAGES =
 			(int) (MAX_STREAM_BYTES / MAX_MESSAGE_BODY_LENGTH) + 1;

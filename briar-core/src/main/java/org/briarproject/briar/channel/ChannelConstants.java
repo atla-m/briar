@@ -25,4 +25,11 @@ interface ChannelConstants {
 	 */
 	String GROUP_KEY_FETCH_OFFSET = "channelFetchOffset";
 
+	/**
+	 * Group metadata key for how many of the channel's messages we have
+	 * read and imported from that file, so that the limit on how many a
+	 * file may carry applies to the file rather than to each fetch.
+	 */
+	String GROUP_KEY_FETCH_MESSAGES = "channelFetchMessages";
+
 }
