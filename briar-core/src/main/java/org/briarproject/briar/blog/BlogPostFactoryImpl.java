@@ -101,7 +101,8 @@ class BlogPostFactoryImpl implements BlogPostFactory {
 				.sign(SIGNING_LABEL_POST, signed, author.getPrivateKey());
 		BdfList message = BdfList.of(POST.getInt(), text, headers, sig);
 		Message m = clientHelper.createMessage(groupId, timestamp, message);
-		return new BlogPost(m, parent, author);
+		return new BlogPost(m, parent, author, attachments, files,
+				text != null);
 	}
 
 	@Override

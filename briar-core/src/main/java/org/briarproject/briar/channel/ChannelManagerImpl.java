@@ -16,6 +16,8 @@ import org.briarproject.bramble.api.data.BdfWriter;
 import org.briarproject.bramble.api.data.BdfWriterFactory;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventListener;
@@ -69,7 +71,6 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
-import static java.util.Collections.emptyList;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
@@ -77,6 +78,8 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
+import static java.util.Collections.emptyList;
+import static java.util.Objects.requireNonNull;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_AUTHOR_NAME_LENGTH;
 import static org.briarproject.bramble.util.LogUtils.logException;
@@ -238,19 +241,33 @@ class ChannelManagerImpl
 	}
 
 	@Override
-	public void post(GroupId g, String text) throws DbException {
-		db.transaction(false, txn -> {
+	public MessageId post(GroupId g, String text) throws DbException {
+		return post(g, text, emptyList(), emptyList());
+	}
+
+	@Override
+	public MessageId post(GroupId g, @Nullable String text,
+			List<AttachmentHeader> attachments, List<FileHeader> files)
+			throws DbException {
+		return db.transactionWithResult(false, txn -> {
 			Channel channel = getChannel(txn, g);
 			if (channel == null) throw new NoSuchChannelException();
 			long timestamp = clock.currentTimeMillis();
 			BlogPost post;
 			try {
-				post = blogPostFactory.createBlogPost(g, timestamp, null,
-						channel.getLocalAuthor(), text);
+				if (attachments.isEmpty() && files.isEmpty()) {
+					post = blogPostFactory.createBlogPost(g, timestamp, null,
+							channel.getLocalAuthor(), requireNonNull(text));
+				} else {
+					post = blogPostFactory.createBlogPost(g, timestamp, null,
+							channel.getLocalAuthor(), text, attachments,
+							files);
+				}
 			} catch (FormatException | GeneralSecurityException e) {
 				throw new DbException(e);
 			}
 			blogManager.addLocalPost(txn, post);
+			return post.getMessage().getId();
 		});
 	}
 

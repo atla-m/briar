@@ -38,6 +38,7 @@ import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.attachment.ChunkedFileStore;
+import org.briarproject.briar.api.blog.event.BlogAttachmentReceivedEvent;
 import org.briarproject.briar.api.blog.event.BlogPostAddedEvent;
 import org.briarproject.briar.api.identity.AuthorInfo;
 import org.briarproject.briar.api.identity.AuthorManager;
@@ -64,6 +65,8 @@ import javax.inject.Inject;
 
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_DO_NOT_SHARE;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_SHARE;
+import static java.util.Collections.emptyList;
+import static org.briarproject.briar.api.blog.BlogConstants.KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_AUTHOR;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_COMMENT;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_ORIGINAL_MSG_ID;
@@ -224,6 +227,7 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	 */
 	private void handleAttachment(Transaction txn, Message m)
 			throws DbException, FormatException {
+		txn.attach(new BlogAttachmentReceivedEvent(m.getGroupId(), m.getId()));
 		if (!fileClient.isManifestReferenced(txn, m.getGroupId(), m.getId())) {
 			db.setCleanupTimerDuration(txn, m.getId(),
 					MISSING_ATTACHMENT_CLEANUP_DURATION_MS);
@@ -393,6 +397,13 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 			meta.put(KEY_AUTHOR, clientHelper.toList(p.getAuthor()));
 			meta.put(KEY_READ, true);
 			meta.put(KEY_RSS_FEED, b.isRssFeed());
+			List<AttachmentHeader> attachments = p.getAttachmentHeaders();
+			List<FileHeader> files = p.getFileHeaders();
+			if (!attachments.isEmpty() || !files.isEmpty()) {
+				meta.put(KEY_ATTACHMENT_HEADERS,
+						encodeAttachmentHeaders(attachments, files));
+				shareAttachments(txn, groupId, attachments, files);
+			}
 			clientHelper.addLocalMessage(txn, p.getMessage(), meta, true,
 					false);
 
@@ -737,6 +748,85 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 		removeHooks.add(hook);
 	}
 
+	/**
+	 * Encodes the headers of the images and files a post carries, in the
+	 * same shape the post's signature covers: an image is a message ID and
+	 * a content type, a file adds its name and size.
+	 */
+	private BdfList encodeAttachmentHeaders(List<AttachmentHeader> attachments,
+			List<FileHeader> files) {
+		BdfList headers = new BdfList();
+		for (AttachmentHeader a : attachments) {
+			headers.add(BdfList.of(a.getMessageId(), a.getContentType()));
+		}
+		for (FileHeader f : files) {
+			headers.add(BdfList.of(f.getManifestId(), f.getContentType(),
+					f.getName(), f.getSize()));
+		}
+		return headers;
+	}
+
+	/**
+	 * Marks the images and files a local post references as shared and
+	 * permanent, now that the post revealing them is being stored. An
+	 * entry may point at a chunked image's manifest, in which case its
+	 * chunks are shared too.
+	 */
+	private void shareAttachments(Transaction txn, GroupId groupId,
+			List<AttachmentHeader> attachments, List<FileHeader> files)
+			throws DbException {
+		Set<MessageId> referenced = new HashSet<>();
+		for (AttachmentHeader a : attachments) {
+			referenced.add(a.getMessageId());
+		}
+		for (FileHeader f : files) referenced.add(f.getManifestId());
+		for (MessageId id : referenced) {
+			if (fileStore.isManifest(txn, id)) {
+				fileStore.shareFile(txn, groupId, id);
+			} else {
+				db.setMessageShared(txn, id);
+				db.setMessagePermanent(txn, id);
+			}
+		}
+	}
+
+	/**
+	 * Parses the images a post carries, which are the two-element entries
+	 * of its header list.
+	 */
+	private List<AttachmentHeader> parseAttachmentHeaders(GroupId g,
+			BdfDictionary meta) throws FormatException {
+		if (!meta.containsKey(KEY_ATTACHMENT_HEADERS)) return emptyList();
+		BdfList list = meta.getList(KEY_ATTACHMENT_HEADERS);
+		List<AttachmentHeader> headers = new ArrayList<>(list.size());
+		for (int i = 0; i < list.size(); i++) {
+			BdfList header = list.getList(i);
+			if (header.size() != 2) continue;
+			MessageId m = new MessageId(header.getRaw(0));
+			headers.add(new AttachmentHeader(g, m, header.getString(1)));
+		}
+		return headers;
+	}
+
+	/**
+	 * Parses the files a post shares, which are the four-element entries
+	 * of its header list.
+	 */
+	private List<FileHeader> parseFileHeaders(GroupId g, BdfDictionary meta)
+			throws FormatException {
+		if (!meta.containsKey(KEY_ATTACHMENT_HEADERS)) return emptyList();
+		BdfList list = meta.getList(KEY_ATTACHMENT_HEADERS);
+		List<FileHeader> headers = new ArrayList<>();
+		for (int i = 0; i < list.size(); i++) {
+			BdfList header = list.getList(i);
+			if (header.size() != 4) continue;
+			MessageId manifestId = new MessageId(header.getRaw(0));
+			headers.add(new FileHeader(g, manifestId, header.getString(2),
+					header.getString(1), header.getLong(3)));
+		}
+		return headers;
+	}
+
 	private BlogPostHeader getPostHeaderFromMetadata(Transaction txn,
 			GroupId groupId, MessageId id) throws DbException, FormatException {
 		BdfDictionary meta =
@@ -783,8 +873,10 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 			return new BlogCommentHeader(type, groupId, comment, parent, id,
 					timestamp, timeReceived, author, authorInfo, read);
 		} else {
-			return new BlogPostHeader(type, groupId, id, timestamp,
-					timeReceived, author, authorInfo, isFeedPost, read);
+			return new BlogPostHeader(type, groupId, id, null, timestamp,
+					timeReceived, author, authorInfo, isFeedPost, read,
+					parseAttachmentHeaders(groupId, meta),
+					parseFileHeaders(groupId, meta));
 		}
 	}
 

@@ -624,6 +624,15 @@ public class ChannelManagerIntegrationTest
 
 		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
 		assertEquals(1, headers.size());
+		// The post's header names the file, so it can be shown with its
+		// name and size before the file itself has arrived
+		BlogPostHeader header = headers.iterator().next();
+		assertEquals(1, header.getFileHeaders().size());
+		assertTrue(header.getAttachmentHeaders().isEmpty());
+		FileHeader named = header.getFileHeaders().get(0);
+		assertEquals("notice.pdf", named.getName());
+		assertEquals(fileBytes.length, named.getSize());
+		assertEquals(file.getManifestId(), named.getManifestId());
 		FileHeader received = blogManager1.getFileHeader(g,
 				file.getManifestId());
 		assertEquals("notice.pdf", received.getName());
@@ -631,6 +640,33 @@ public class ChannelManagerIntegrationTest
 		ByteArrayOutputStream read = new ByteArrayOutputStream();
 		copyAndClose(blogManager1.getFile(received), read);
 		assertArrayEquals(fileBytes, read.toByteArray());
+	}
+
+	@Test
+	public void testPostHeaderNamesTheImagesItCarries() throws Exception {
+		// The poster's own copy of the post must name its images too,
+		// otherwise the screen that wrote them cannot show them back
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		byte[] imageBytes = getRandomBytes(123);
+		AttachmentHeader image = blogManager0.addLocalAttachment(g,
+				c0.getClock().currentTimeMillis(), "image/jpeg",
+				new ByteArrayInputStream(imageBytes));
+
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				c0.getClock().currentTimeMillis() + 1, null,
+				channel.getLocalAuthor(), "Look at this",
+				singletonList(image), emptyList());
+		blogManager0.addLocalPost(post);
+
+		Collection<BlogPostHeader> headers = blogManager0.getPostHeaders(g);
+		assertEquals(1, headers.size());
+		BlogPostHeader header = headers.iterator().next();
+		assertEquals(1, header.getAttachmentHeaders().size());
+		assertTrue(header.getFileHeaders().isEmpty());
+		AttachmentHeader named = header.getAttachmentHeaders().get(0);
+		assertEquals(image.getMessageId(), named.getMessageId());
+		assertEquals("image/jpeg", named.getContentType());
 	}
 
 	private byte[] exportChannel(GroupId g) throws Exception {
