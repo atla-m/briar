@@ -669,6 +669,259 @@ public class ChannelManagerIntegrationTest
 		assertEquals("image/jpeg", named.getContentType());
 	}
 
+	@Test
+	public void testANewMessageIsTimestampedAfterTheOnesAlreadyThere()
+			throws Exception {
+		// What keeps a published file growing only at its end, and so
+		// what lets a reader ask a mirror for just the part it is
+		// missing. Two messages written in the same millisecond would
+		// otherwise be ordered by their IDs, which are hashes.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		long moment = c0.getClock().currentTimeMillis();
+		assertEquals(moment, blogManager0.getNextTimestamp(g, moment));
+
+		// Something written at that moment takes it, so the next message
+		// asking for the same moment is put after it
+		blogManager0.addLocalAttachment(g, moment, "image/jpeg",
+				new ByteArrayInputStream(getRandomBytes(123)));
+		long next = blogManager0.getNextTimestamp(g, moment);
+		assertTrue(next > moment);
+
+		// and so on, however many are written in the same millisecond
+		blogManager0.addLocalAttachment(g, moment, "image/jpeg",
+				new ByteArrayInputStream(getRandomBytes(123)));
+		assertTrue(blogManager0.getNextTimestamp(g, moment) > next);
+
+		// A moment later than everything in the blog is left alone
+		assertEquals(moment + 1000,
+				blogManager0.getNextTimestamp(g, moment + 1000));
+
+		// A personal blog is not published as a file, so its messages
+		// keep whatever timestamp they were given
+		GroupId personal = blogManager0.getPersonalBlog(author0).getId();
+		blogManager0.addLocalAttachment(personal, moment, "image/jpeg",
+				new ByteArrayInputStream(getRandomBytes(123)));
+		assertEquals(moment, blogManager0.getNextTimestamp(personal, moment));
+	}
+
+	@Test
+	public void testPublishingAgainOnlyAddsToTheEndOfTheFile()
+			throws Exception {
+		// Posts written in the same millisecond share a timestamp, and
+		// message IDs are hashes, so without an order of its own a new
+		// post could sort before one already published and move the
+		// bytes a reader has already read
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		byte[] previous = exportChannel(g);
+		for (int i = 0; i < 5; i++) {
+			channelManager0.post(g, getRandomString(42));
+			byte[] current = exportChannel(g);
+			assertTrue(current.length > previous.length);
+			byte[] prefix = new byte[previous.length];
+			System.arraycopy(current, 0, prefix, 0, previous.length);
+			assertArrayEquals(previous, prefix);
+			previous = current;
+		}
+	}
+
+	@Test
+	public void testExportIsDeterministicAndOnlyGrowsAtTheEnd()
+			throws Exception {
+		// Fetching only the part of a file we don't have rests on this:
+		// the same channel always exports the same bytes, and publishing
+		// again leaves what was already there untouched
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+
+		byte[] first = exportChannel(g);
+		assertArrayEquals(first, exportChannel(g));
+
+		channelManager0.post(g, getRandomString(42));
+		byte[] second = exportChannel(g);
+		assertTrue(second.length > first.length);
+		byte[] prefix = new byte[first.length];
+		System.arraycopy(second, 0, prefix, 0, first.length);
+		assertArrayEquals(first, prefix);
+	}
+
+	@Test
+	public void testFetchesOnlyThePartOfTheFileItDoesNotHave()
+			throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] first = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] second = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(first)));
+		// The second fetch asks for the rest, so the mirror sends the
+		// bytes from the requested offset on
+		int from = first.length;
+		server.enqueue(new MockResponse().setResponseCode(206)
+				.setHeader("Content-Range", "bytes " + from + "-" +
+						(second.length - 1) + "/" + second.length)
+				.setBody(new Buffer().write(second, from,
+						second.length - from)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(1, blogManager1.getPostHeaders(g).size());
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(2, blogManager1.getPostHeaders(g).size());
+
+			// The first fetch asked for the whole file, the second only
+			// for what came after the part already read
+			server.takeRequest();
+			RecordedRequest resumed = server.takeRequest();
+			assertEquals("bytes=" + from + "-", resumed.getHeader("Range"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testReadsTheWholeFileWhenAMirrorIgnoresRanges()
+			throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] first = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] second = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(first)));
+		// A mirror that doesn't do ranges answers 200 with everything
+		server.enqueue(new MockResponse().setBody(new Buffer().write(second)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(2, blogManager1.getPostHeaders(g).size());
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testStartsAgainWhenTheFileChangedUnderneathIt()
+			throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] first = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] second = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(first)));
+		// The mirror answers the range with bytes that are not the
+		// continuation of what we read: the file is not the same file
+		int from = first.length;
+		server.enqueue(new MockResponse().setResponseCode(206)
+				.setBody(new Buffer().write(getRandomBytes(64))));
+		// So the whole file is read again, and the new post arrives
+		server.enqueue(new MockResponse().setBody(new Buffer().write(second)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(2, blogManager1.getPostHeaders(g).size());
+
+			server.takeRequest();
+			assertEquals("bytes=" + from + "-",
+					server.takeRequest().getHeader("Range"));
+			// The third request asks for the file from the beginning
+			assertNull(server.takeRequest().getHeader("Range"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testNothingNewWhenTheFileIsNoLongerThanWhatWeHave()
+			throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse()
+				.setBody(new Buffer().write(exportChannel(g))));
+		// Asking for bytes past the end of the file
+		server.enqueue(new MockResponse().setResponseCode(416));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(UNCHANGED,
+					channelManager1.fetchChannel(g).getOutcome());
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testContinuesADownloadThatWasCutOff() throws Exception {
+		// The reason for all of this: on a connection that keeps dropping,
+		// what arrived is kept and the next attempt asks for the rest
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] first = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] second = exportChannel(g);
+
+		// The connection dies in the middle of the second post
+		int cut = first.length + (second.length - first.length) / 2;
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse()
+				.setBody(new Buffer().write(second, 0, cut)));
+		server.enqueue(new MockResponse().setResponseCode(206)
+				.setBody(new Buffer().write(second, first.length,
+						second.length - first.length)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			// The truncated file cannot be read to the end
+			assertEquals(UNREACHABLE,
+					channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			// but the post that did arrive whole was kept
+			assertEquals(1, blogManager1.getPostHeaders(g).size());
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(2, blogManager1.getPostHeaders(g).size());
+
+			// The second attempt asked for the file from the end of the
+			// last whole post, not from where the connection died
+			server.takeRequest();
+			assertEquals("bytes=" + first.length + "-",
+					server.takeRequest().getHeader("Range"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
 	private byte[] exportChannel(GroupId g) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		channelManager0.exportChannel(g, out);

@@ -43,6 +43,7 @@ import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
+import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.channel.FetchResult;
@@ -60,6 +61,10 @@ import java.security.GeneralSecurityException;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -97,6 +102,7 @@ import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MES
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_ETAG;
+import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_LAST_MODIFIED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNELS;
@@ -252,7 +258,10 @@ class ChannelManagerImpl
 		return db.transactionWithResult(false, txn -> {
 			Channel channel = getChannel(txn, g);
 			if (channel == null) throw new NoSuchChannelException();
-			long timestamp = clock.currentTimeMillis();
+			// After every message already in the channel, so publishing
+			// again only adds to the end of the published file
+			long timestamp = blogManager.getNextTimestamp(txn, g,
+					clock.currentTimeMillis());
 			BlogPost post;
 			try {
 				if (attachments.isEmpty() && files.isEmpty()) {
@@ -431,10 +440,12 @@ class ChannelManagerImpl
 				throw new DbException(e);
 			}
 		});
-		String etag, lastModified;
+		FetchState state;
 		try {
-			etag = meta.getOptionalString(GROUP_KEY_ETAG);
-			lastModified = meta.getOptionalString(GROUP_KEY_LAST_MODIFIED);
+			state = new FetchState(
+					meta.getOptionalString(GROUP_KEY_ETAG),
+					meta.getOptionalString(GROUP_KEY_LAST_MODIFIED),
+					meta.getLong(GROUP_KEY_FETCH_OFFSET, 0L));
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
@@ -442,7 +453,7 @@ class ChannelManagerImpl
 		// channel but can't change it, so trying another is always safe.
 		for (String mirror : mirrors) {
 			try {
-				return fetchFrom(g, mirror, etag, lastModified);
+				return fetchFrom(g, mirror, state);
 			} catch (IOException e) {
 				logException(LOG, INFO, e);
 			}
@@ -453,41 +464,145 @@ class ChannelManagerImpl
 		return new FetchResult(UNREACHABLE, 0);
 	}
 
-	private FetchResult fetchFrom(GroupId g, String mirror,
-			@Nullable String etag, @Nullable String lastModified)
+	/**
+	 * What we know about the channel's published file from the last
+	 * fetch: the validators the mirror gave us, and how many bytes of it
+	 * we have read and stored.
+	 */
+	private static class FetchState {
+
+		@Nullable
+		private final String etag, lastModified;
+		private final long offset;
+
+		private FetchState(@Nullable String etag,
+				@Nullable String lastModified, long offset) {
+			this.etag = etag;
+			this.lastModified = lastModified;
+			this.offset = offset;
+		}
+	}
+
+	private FetchResult fetchFrom(GroupId g, String mirror, FetchState state)
 			throws DbException, IOException {
+		if (state.offset > 0) {
+			try {
+				return fetchFrom(g, mirror, state, true);
+			} catch (ChangedFileException e) {
+				// The file we were reading is not the file being served
+				// now, so read it from the beginning
+				if (LOG.isLoggable(INFO)) {
+					LOG.info("Channel file changed, fetching in full");
+				}
+			}
+		}
+		try {
+			return fetchFrom(g, mirror, state, false);
+		} catch (ChangedFileException e) {
+			// Only a fetch that is continuing a file can throw this
+			throw new AssertionError(e);
+		}
+	}
+
+	/**
+	 * Thrown when a mirror's answer cannot be read as the continuation of
+	 * the file we already have part of.
+	 */
+	private static class ChangedFileException extends Exception {
+	}
+
+	private FetchResult fetchFrom(GroupId g, String mirror, FetchState state,
+			boolean resume) throws DbException, IOException,
+			ChangedFileException {
 		Request.Builder b = new Request.Builder().url(mirror).get();
 		// Ask the mirror to send the file only if it has changed
-		if (etag != null) b.addHeader("If-None-Match", etag);
-		if (lastModified != null) b.addHeader("If-Modified-Since",
-				lastModified);
+		if (state.etag != null) b.addHeader("If-None-Match", state.etag);
+		if (state.lastModified != null) {
+			b.addHeader("If-Modified-Since", state.lastModified);
+		}
+		if (resume) b.addHeader("Range", "bytes=" + state.offset + "-");
 		Response response =
 				httpClientProvider.get().newCall(b.build()).execute();
 		try (ResponseBody body = response.body()) {
-			if (response.code() == 304) {
+			int code = response.code();
+			if (code == 304) {
 				if (LOG.isLoggable(INFO)) LOG.info("Channel unchanged");
 				return new FetchResult(UNCHANGED, 0);
 			}
+			// The file is no longer than the part we already have
+			if (code == 416) {
+				if (LOG.isLoggable(INFO)) LOG.info("Channel has nothing new");
+				return new FetchResult(UNCHANGED, 0);
+			}
 			if (!response.isSuccessful() || body == null)
-				throw new IOException("Response " + response.code());
-			int count = importChannel(body.byteStream());
-			storeFetchState(g, response.header("ETag"),
+				throw new IOException("Response " + code);
+			// A mirror that doesn't do ranges answers 200 with the whole
+			// file, which is the first fetch all over again
+			boolean ranged = resume && code == 206;
+			return importFrom(g, body.byteStream(),
+					ranged ? state.offset : 0, !ranged,
+					response.header("ETag"),
 					response.header("Last-Modified"));
-			return new FetchResult(FETCHED, count);
 		} catch (FormatException e) {
-			// The mirror served something that isn't this channel
+			// The mirror served something that isn't this channel, or
+			// isn't the rest of the file we were reading
+			if (resume) throw new ChangedFileException();
 			throw new IOException(e);
 		}
 	}
 
-	private void storeFetchState(GroupId g, @Nullable String etag,
+	/**
+	 * Imports a channel's messages from a stream, which is either the
+	 * whole published file or the part of it we don't have yet, and
+	 * records how far we got. A stream that ends early leaves the
+	 * messages it did carry stored and the offset pointing just past
+	 * them, so the next fetch continues from there rather than starting
+	 * again.
+	 *
+	 * @param offset how many bytes of the file the stream starts after
+	 */
+	private FetchResult importFrom(GroupId g, InputStream in, long offset,
+			boolean expectHeader, @Nullable String etag,
+			@Nullable String lastModified)
+			throws DbException, IOException, FormatException {
+		CountingInputStream counted =
+				new CountingInputStream(in, Long.MAX_VALUE);
+		Progress p = new Progress();
+		try {
+			importEntries(g, counted, expectHeader, p);
+		} finally {
+			// The offset is where the last whole message ended, not how
+			// far the stream got, so a fetch that breaks in the middle of
+			// a message is continued from a place the next one can parse.
+			// The validators are only remembered once the whole file has
+			// been read, or the next fetch would be told there is nothing
+			// new while we are still missing the end of it.
+			storeFetchState(g, offset + p.bytes,
+					p.complete ? etag : null,
+					p.complete ? lastModified : null);
+		}
+		return new FetchResult(FETCHED, p.messages);
+	}
+
+	/**
+	 * How far an import got: the messages stored, and the byte count and
+	 * trailing bytes at the end of the last whole message.
+	 */
+	private static class Progress {
+
+		private int messages = 0;
+		private long bytes = 0;
+		private boolean complete = false;
+	}
+
+	private void storeFetchState(GroupId g, long offset, @Nullable String etag,
 			@Nullable String lastModified) throws DbException {
 		BdfDictionary meta = new BdfDictionary();
+		meta.put(GROUP_KEY_FETCH_OFFSET, offset);
 		if (etag != null) meta.put(GROUP_KEY_ETAG, etag);
 		if (lastModified != null) {
 			meta.put(GROUP_KEY_LAST_MODIFIED, lastModified);
 		}
-		if (meta.isEmpty()) return;
 		db.transaction(false, txn -> {
 			try {
 				clientHelper.mergeGroupMetadata(txn, g, meta);
@@ -534,7 +649,7 @@ class ChannelManagerImpl
 						blog.getGroup().getDescriptor()));
 				// Each message as it was signed, so the reader validates
 				// it rather than trusting whoever served the stream
-				for (MessageId m : db.getMessageIds(txn, g)) {
+				for (MessageId m : getStreamOrder(txn, g)) {
 					Message message = db.getMessage(txn, m);
 					w.writeList(BdfList.of(message.getTimestamp(),
 							message.getBody()));
@@ -546,21 +661,91 @@ class ChannelManagerImpl
 		w.flush();
 	}
 
+	/**
+	 * Returns the channel's messages in the order a stream carries them:
+	 * oldest first, ties broken by message ID. The database returns
+	 * messages in no particular order, so the order is imposed here;
+	 * it has to be the same every time, or a reader that has part of a
+	 * stream cannot ask a mirror for the rest.
+	 * <p/>
+	 * Because a channel's messages are timestamped after every message
+	 * already in it, a new message sorts after all the others, so
+	 * publishing again only appends to the stream.
+	 */
+	private List<MessageId> getStreamOrder(Transaction txn, GroupId g)
+			throws DbException {
+		Collection<MessageId> ids = db.getMessageIds(txn, g);
+		List<MessageId> sorted = new ArrayList<>(ids);
+		Map<MessageId, Long> timestamps = new HashMap<>(ids.size());
+		for (MessageId m : ids) {
+			// The message is read again when it is written out; keeping
+			// only the timestamps here bounds what we hold in memory
+			timestamps.put(m, db.getMessage(txn, m).getTimestamp());
+		}
+		Collections.sort(sorted, (a, b) -> {
+			int c = Long.compare(requireNonNull(timestamps.get(a)),
+					requireNonNull(timestamps.get(b)));
+			return c != 0 ? c : compareIds(a, b);
+		});
+		return sorted;
+	}
+
+	private int compareIds(MessageId a, MessageId b) {
+		byte[] x = a.getBytes(), y = b.getBytes();
+		for (int i = 0; i < x.length; i++) {
+			int c = Integer.compare(x[i] & 0xFF, y[i] & 0xFF);
+			if (c != 0) return c;
+		}
+		return 0;
+	}
+
 	@Override
 	public int importChannel(InputStream in)
 			throws DbException, IOException, FormatException {
+		CountingInputStream counted =
+				new CountingInputStream(in, Long.MAX_VALUE);
+		Progress p = new Progress();
+		importEntries(null, counted, true, p);
+		return p.messages;
+	}
+
+	/**
+	 * Reads a channel's messages from a stream and stores them, recording
+	 * how far it got as it goes. Each message is stored on its own, so a
+	 * stream that ends early leaves the messages it did carry behind.
+	 *
+	 * @param expected the channel the stream must carry, or null to take
+	 * the channel from the stream's own header
+	 * @param expectHeader false if the stream starts partway through the
+	 * file, after the header
+	 */
+	private void importEntries(@Nullable GroupId expected,
+			CountingInputStream in, boolean expectHeader, Progress p)
+			throws DbException, IOException, FormatException {
 		BdfReader r = bdfReaderFactory.createReader(in);
-		BdfList header = r.readList();
-		checkSize(header, 2);
-		if (header.getInt(0) != STREAM_FORMAT_VERSION)
-			throw new FormatException();
-		BdfList descriptor = clientHelper.toList(header.getRaw(1));
-		Blog blog = blogFactory.parseBlog(descriptor);
-		if (!blog.isChannel()) throw new FormatException();
-		GroupId g = blog.getId();
-		int count = 0;
+		GroupId g;
+		if (expectHeader) {
+			BdfList header = r.readList();
+			checkSize(header, 2);
+			if (header.getInt(0) != STREAM_FORMAT_VERSION)
+				throw new FormatException();
+			BdfList descriptor = clientHelper.toList(header.getRaw(1));
+			Blog blog = blogFactory.parseBlog(descriptor);
+			if (!blog.isChannel()) throw new FormatException();
+			g = blog.getId();
+			// A mirror can serve any channel's file; this must be ours
+			if (expected != null && !expected.equals(g))
+				throw new FormatException();
+			p.bytes = in.getBytesRead();
+		} else {
+			// Without a header the group comes from our own subscription,
+			// so the stream cannot say which channel it belongs to. Every
+			// message is still checked against that channel's key.
+			g = requireNonNull(expected);
+		}
 		while (!r.eof()) {
-			if (++count > MAX_STREAM_MESSAGES) throw new FormatException();
+			if (++p.messages > MAX_STREAM_MESSAGES)
+				throw new FormatException();
 			BdfList entry = r.readList();
 			checkSize(entry, 2);
 			long timestamp = entry.getLong(0);
@@ -573,8 +758,11 @@ class ChannelManagerImpl
 					throw new NoSuchChannelException();
 				db.importMessage(txn, m);
 			});
+			// The reader has no bytes in hand between messages, so this
+			// is exactly where the message ended
+			p.bytes = in.getBytesRead();
 		}
-		return count;
+		p.complete = true;
 	}
 
 	private void storeChannels(Transaction txn, List<Channel> channels)
