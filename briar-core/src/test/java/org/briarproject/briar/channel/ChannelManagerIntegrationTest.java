@@ -1,5 +1,9 @@
 package org.briarproject.briar.channel;
 
+import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.db.DatabaseComponent;
+import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.sync.Group.Visibility;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.BdfReader;
 import org.briarproject.bramble.api.data.BdfDictionary;
@@ -243,43 +247,49 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
-	public void testSharingWithContactsPassesPostsWithoutAMessage()
+	public void testSharingWithContactsNeedsBothAndDoesNotLoop()
 			throws Exception {
-		// Two contacts who both hold a channel exchange nothing until both
-		// turn sharing on. Turning it on sends no invitation: it makes the
-		// channel visible to every contact, so its posts are offered, and
-		// a contact who has not turned it on drops them unread
+		// Two contacts who both hold a channel. Turning sharing on sends
+		// each contact a private list of tokens, never an invitation, and
+		// the channel becomes visible to a contact only once both have it
+		// on, so nothing is offered to a contact who would drop it
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
 		channelManager0.post(g, getRandomString(42));
 		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
-		assertFalse(channelManager0.isSharingWithContacts(g));
-		assertEquals(INVISIBLE, db0.transactionWithResult(true, txn ->
-				db0.getGroupVisibility(txn, contactId1From0, g)));
 
-		// The owner turns it on: the post is offered, nothing else is sent
+		// The owner turns it on: only the token list goes to the contact
 		channelManager0.setSharingWithContacts(g, true);
 		assertTrue(channelManager0.isSharingWithContacts(g));
-		assertEquals(SHARED, db0.transactionWithResult(true, txn ->
-				db0.getGroupVisibility(txn, contactId1From0, g)));
+		assertEquals(INVISIBLE, visibility(db0, contactId1From0, g));
+		sync0To1(1, true);
 		assertEquals(0, blogSharingManager0.getInvitations().size());
-		// The subscriber has it off, so the post is dropped
-		syncMessage(c0, c1, contactId1From0, 1, 0, 0, 0);
-		Thread.sleep(500);
-		assertEquals(0, blogManager1.getPostHeaders(g).size());
 		assertEquals(0, blogSharingManager1.getInvitations().size());
+		// However often they connect, the post is not offered to a
+		// contact who has it off: this used to loop, re-sending the whole
+		// channel every couple of minutes
+		for (int i = 0; i < 5; i++) {
+			assertNothingToSend(db0, contactId1From0);
+			assertNothingToSend(db1, contactId0From1);
+		}
+		assertEquals(0, blogManager1.getPostHeaders(g).size());
 
-		// The subscriber turns it on and posts flow. The dropped post was
-		// counted as sent and is retransmitted later, when it goes unacked
+		// The subscriber turns it on: their list goes back, and once it
+		// arrives the post flows
 		channelManager1.setSharingWithContacts(g, true);
-		channelManager0.post(g, getRandomString(42));
+		assertEquals(SHARED, visibility(db1, contactId0From1, g));
+		sync1To0(1, true);
+		assertEquals(SHARED, visibility(db0, contactId1From0, g));
 		sync0To1(1, true);
 		assertEquals(1, blogManager1.getPostHeaders(g).size());
 
-		// Turning it off hides the channel again
-		channelManager0.setSharingWithContacts(g, false);
-		assertEquals(INVISIBLE, db0.transactionWithResult(true, txn ->
-				db0.getGroupVisibility(txn, contactId1From0, g)));
+		// The subscriber turns it off again: the owner stops offering
+		channelManager1.setSharingWithContacts(g, false);
+		assertEquals(INVISIBLE, visibility(db1, contactId0From1, g));
+		sync1To0(1, true);
+		assertEquals(INVISIBLE, visibility(db0, contactId1From0, g));
+		channelManager0.post(g, getRandomString(42));
+		assertNothingToSend(db0, contactId1From0);
 	}
 
 	@Test
@@ -295,13 +305,52 @@ public class ChannelManagerIntegrationTest
 		blogSharingManager1.respondToInvitation(blogManager1.getBlog(g),
 				contact0From1, true);
 		sync1To0(1, true);
-		assertEquals(SHARED, db0.transactionWithResult(true, txn ->
-				db0.getGroupVisibility(txn, contactId1From0, g)));
+		assertEquals(SHARED, visibility(db0, contactId1From0, g));
 
 		channelManager0.setSharingWithContacts(g, true);
 		channelManager0.setSharingWithContacts(g, false);
-		assertEquals(SHARED, db0.transactionWithResult(true, txn ->
-				db0.getGroupVisibility(txn, contactId1From0, g)));
+		assertEquals(SHARED, visibility(db0, contactId1From0, g));
+	}
+
+	@Test
+	public void testSharingSwitchSurvivesADeclinedInvitation()
+			throws Exception {
+		// Both have the switch on. The owner also invites by hand and the
+		// contact declines, which makes the sharing protocol hide the
+		// channel; the switch puts it back once the session is over
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		channelManager0.setSharingWithContacts(g, true);
+		channelManager1.setSharingWithContacts(g, true);
+		sync0To1(1, true);
+		sync1To0(1, true);
+		assertEquals(SHARED, visibility(db0, contactId1From0, g));
+
+		blogSharingManager0.sendInvitation(g, contactId1From0, null);
+		sync0To1(1, true);
+		blogSharingManager1.respondToInvitation(blogManager1.getBlog(g),
+				contact0From1, false);
+		sync1To0(1, true);
+		long deadline = System.currentTimeMillis() + 10_000;
+		while (visibility(db0, contactId1From0, g) != SHARED) {
+			if (System.currentTimeMillis() > deadline) {
+				throw new AssertionError("Switch not reapplied");
+			}
+			Thread.sleep(50);
+		}
+	}
+
+	private Visibility visibility(DatabaseComponent db, ContactId c,
+			GroupId g) throws DbException {
+		return db.transactionWithResult(true,
+				txn -> db.getGroupVisibility(txn, c, g));
+	}
+
+	private void assertNothingToSend(DatabaseComponent db, ContactId c)
+			throws DbException {
+		assertFalse(db.transactionWithResult(true, txn ->
+				db.containsMessagesToSend(txn, c, Integer.MAX_VALUE, false)));
 	}
 
 	@Test

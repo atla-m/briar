@@ -159,15 +159,13 @@ public interface ChannelManager {
 	Blog subscribeFromLink(String link) throws DbException, FormatException;
 
 	/**
-	 * Turns sharing with contacts on or off for a channel we hold. On, the
-	 * channel's posts are offered to every contact, now and as contacts are
-	 * added, over any connection, and posts of it from contacts are
-	 * accepted; no invitation or other message is sent. A contact's Briar
-	 * drops the posts unless the contact holds the channel and has turned
-	 * this on too, so posts flow between two contacts who both turned it
-	 * on, and each can tell the other follows the channel. Off, nothing is
-	 * offered or accepted. A channel shared with a contact by invitation
-	 * is left to the sharing protocol either way.
+	 * Turns sharing with contacts on or off for a channel we hold. Each
+	 * contact is told privately, by a token only someone holding the
+	 * channel can match, which channels we pass posts of; no invitation or
+	 * chat message is sent. The channel is made visible to a contact, so
+	 * its posts flow over any connection, only while both of us have this
+	 * on for it. A channel shared with a contact by invitation is left to
+	 * the sharing protocol.
 	 */
 	void setSharingWithContacts(GroupId g, boolean on) throws DbException;
 

@@ -3,9 +3,6 @@ package org.briarproject.briar.channel;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.WeakSingletonProvider;
 import org.briarproject.bramble.api.client.ClientHelper;
-import org.briarproject.bramble.api.contact.Contact;
-import org.briarproject.bramble.api.contact.ContactManager;
-import org.briarproject.bramble.api.contact.ContactManager.ContactHook;
 import org.briarproject.bramble.api.client.ContactGroupFactory;
 import org.briarproject.bramble.api.crypto.PrivateKey;
 import org.briarproject.bramble.api.crypto.PublicKey;
@@ -25,6 +22,10 @@ import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.versioning.event.ClientVersionUpdatedEvent;
+import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
+import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.db.NoSuchContactException;
+import org.briarproject.briar.api.blog.event.BlogInvitationResponseReceivedEvent;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.identity.AuthorFactory;
 import org.briarproject.bramble.api.identity.LocalAuthor;
@@ -148,9 +149,6 @@ import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OF
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_LAST_MODIFIED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_WITH_CONTACTS;
-import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
-import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
-import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNELS;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_AUTHOR;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_CREATED;
@@ -165,8 +163,7 @@ import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_PRIVAT
 @ThreadSafe
 @NotNullByDefault
 class ChannelManagerImpl
-		implements ChannelManager, OpenDatabaseHook, EventListener,
-		ContactHook {
+		implements ChannelManager, OpenDatabaseHook, EventListener {
 
 	/**
 	 * An entity tag as RFC 7232 defines it: an optional weak marker, then
@@ -211,8 +208,7 @@ class ChannelManagerImpl
 	private final Clock clock;
 	private final TaskScheduler scheduler;
 	private final Executor ioExecutor;
-	private final ContactManager contactManager;
-	private final BlogSharingManager blogSharingManager;
+	private final ChannelContactSharing contactSharing;
 	private final WeakSingletonProvider<OkHttpClient> httpClientProvider;
 	private final AtomicBoolean fetcherStarted = new AtomicBoolean(false);
 	// Channels and files being fetched now, so that a scheduled fetch,
@@ -242,10 +238,8 @@ class ChannelManagerImpl
 			BdfWriterFactory bdfWriterFactory, Clock clock,
 			TaskScheduler scheduler, @IoExecutor Executor ioExecutor,
 			WeakSingletonProvider<OkHttpClient> httpClientProvider,
-			ContactManager contactManager,
-			BlogSharingManager blogSharingManager) {
-		this.contactManager = contactManager;
-		this.blogSharingManager = blogSharingManager;
+			ChannelContactSharing contactSharing) {
+		this.contactSharing = contactSharing;
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.contactGroupFactory = contactGroupFactory;
@@ -283,17 +277,27 @@ class ChannelManagerImpl
 				}
 			});
 		} else if (e instanceof ClientVersionUpdatedEvent) {
-			// A contact has just been found to support channels, which
-			// isn't known when the contact is added
+			// A contact has just been found to support blog sharing, which
+			// decides whether a channel's visibility is ours to set
 			ClientVersionUpdatedEvent c = (ClientVersionUpdatedEvent) e;
 			if (!c.getClientVersion().getClientId()
 					.equals(BlogSharingManager.CLIENT_ID)) {
 				return;
 			}
+			reapplySharing(c.getContactId());
+		} else if (e instanceof BlogInvitationResponseReceivedEvent) {
+			// The sharing protocol sets a channel's visibility when a
+			// contact answers an invitation, and a decline hides it, so
+			// put back what the switch says once the session is over
+			reapplySharing(((BlogInvitationResponseReceivedEvent) e)
+					.getContactId());
+		} else if (e instanceof GroupRemovedEvent) {
+			// A channel we passed posts of is gone: tell contacts
+			Group g = ((GroupRemovedEvent) e).getGroup();
+			if (!g.getClientId().equals(BlogManager.CLIENT_ID)) return;
 			ioExecutor.execute(() -> {
 				try {
-					db.transaction(false, txn -> applySharing(txn,
-							contactManager.getContact(txn, c.getContactId())));
+					db.transaction(false, contactSharing::updateAll);
 				} catch (DbException ex) {
 					logException(LOG, WARNING, ex);
 				}
@@ -477,9 +481,7 @@ class ChannelManagerImpl
 			} catch (FormatException e) {
 				throw new DbException(e);
 			}
-			for (Contact c : contactManager.getContacts(txn)) {
-				setVisibility(txn, g, c, on);
-			}
+			contactSharing.updateAll(txn);
 		});
 	}
 
@@ -500,42 +502,16 @@ class ChannelManagerImpl
 		}
 	}
 
-	/**
-	 * Makes the channel visible to the contact, or hides it, without
-	 * telling the contact anything. Nothing is sent but the posts
-	 * themselves, which the contact's Briar drops unless the contact holds
-	 * the channel and has made it visible to us in turn. The sharing
-	 * protocol owns the visibility of any channel it has a session for, so
-	 * a channel shared by invitation is left to it.
-	 */
-	private void setVisibility(Transaction txn, GroupId g, Contact c,
-			boolean on) throws DbException {
-		if (blogSharingManager.getSharingStatus(txn, g, c) != SHAREABLE) {
-			return;
-		}
-		db.setGroupVisibility(txn, c.getId(), g, on ? SHARED : INVISIBLE);
-	}
-
-	/**
-	 * Applies the sharing switch of every channel to the given contact.
-	 */
-	private void applySharing(Transaction txn, Contact c)
-			throws DbException {
-		for (GroupId g : blogManager.getBlogIds(txn)) {
-			if (isSharingWithContacts(txn, g)) setVisibility(txn, g, c, true);
-		}
-	}
-
-	@Override
-	public void addingContact(Transaction txn, Contact c)
-			throws DbException {
-		// The contact's client versions aren't known yet, so this does
-		// nothing until they are; see ClientVersionUpdatedEvent
-		applySharing(txn, c);
-	}
-
-	@Override
-	public void removingContact(Transaction txn, Contact c) {
+	private void reapplySharing(ContactId c) {
+		ioExecutor.execute(() -> {
+			try {
+				db.transaction(false, txn -> contactSharing.reapply(txn, c));
+			} catch (NoSuchContactException ex) {
+				// Removed in the meantime
+			} catch (DbException ex) {
+				logException(LOG, WARNING, ex);
+			}
+		});
 	}
 
 	@Override
