@@ -24,6 +24,7 @@ import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogInvitationResponse;
 import org.briarproject.briar.api.blog.BlogManager;
+import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
 import org.briarproject.briar.api.blog.event.BlogInvitationResponseReceivedEvent;
 import org.briarproject.briar.api.blog.event.BlogAttachmentReceivedEvent;
@@ -74,13 +75,14 @@ class BlogViewModel extends BaseViewModel {
 			IdentityManager identityManager,
 			AndroidNotificationManager notificationManager,
 			BlogManager blogManager,
+			ChannelManager channelManager,
 			AttachmentRetriever attachmentRetriever,
 			@IoExecutor Executor ioExecutor,
 			BlogSharingManager blogSharingManager,
 			SharingController sharingController) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
 				eventBus, identityManager, notificationManager, blogManager,
-				attachmentRetriever, ioExecutor);
+				channelManager, attachmentRetriever, ioExecutor);
 		this.blogSharingManager = blogSharingManager;
 		this.sharingController = sharingController;
 	}

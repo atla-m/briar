@@ -21,6 +21,7 @@ import org.briarproject.briar.api.android.AndroidNotificationManager;
 import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogManager;
+import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.blog.event.BlogAttachmentReceivedEvent;
 import org.briarproject.briar.api.blog.event.BlogPostAddedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -59,11 +60,12 @@ class FeedViewModel extends BaseViewModel {
 			IdentityManager identityManager,
 			AndroidNotificationManager notificationManager,
 			BlogManager blogManager,
+			ChannelManager channelManager,
 			AttachmentRetriever attachmentRetriever,
 			@IoExecutor Executor ioExecutor) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
 				eventBus, identityManager, notificationManager, blogManager,
-				attachmentRetriever, ioExecutor);
+				channelManager, attachmentRetriever, ioExecutor);
 		loadPersonalBlog();
 		loadAllBlogPosts();
 	}

@@ -30,6 +30,7 @@ import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogCommentHeader;
 import org.briarproject.briar.api.blog.BlogManager;
+import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.util.HtmlUtils;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -70,6 +71,7 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	protected final IdentityManager identityManager;
 	protected final AndroidNotificationManager notificationManager;
 	protected final BlogManager blogManager;
+	protected final ChannelManager channelManager;
 	protected final AttachmentRetriever attachmentRetriever;
 	@IoExecutor
 	private final Executor ioExecutor;
@@ -91,6 +93,8 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	// on the database thread and read there too, but a ViewModel can
 	// outlive the thread that made it, so keep it concurrent
 	private final Map<GroupId, Boolean> channels = new ConcurrentHashMap<>();
+	private final Map<GroupId, Boolean> ourChannels =
+			new ConcurrentHashMap<>();
 	// true if there was an error, false if the file was saved
 	private final MutableLiveEvent<Boolean> saveError =
 			new MutableLiveEvent<>();
@@ -104,6 +108,7 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 			IdentityManager identityManager,
 			AndroidNotificationManager notificationManager,
 			BlogManager blogManager,
+			ChannelManager channelManager,
 			AttachmentRetriever attachmentRetriever,
 			@IoExecutor Executor ioExecutor) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
@@ -111,6 +116,7 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 		this.identityManager = identityManager;
 		this.notificationManager = notificationManager;
 		this.blogManager = blogManager;
+		this.channelManager = channelManager;
 		this.attachmentRetriever = attachmentRetriever;
 		this.ioExecutor = ioExecutor;
 		eventBus.addListener(this);
@@ -297,16 +303,19 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	protected BlogPostItem getItem(Transaction txn, BlogPostHeader h)
 			throws DbException {
 		boolean channel = isChannel(txn, h.getGroupId());
+		// A channel's posts are signed by its key, not ours, so whether
+		// they are ours is whether the channel is
+		boolean ours = channel && isOurChannel(txn, h.getGroupId());
 		String text;
 		if (h instanceof BlogCommentHeader) {
 			BlogCommentHeader c = (BlogCommentHeader) h;
-			BlogCommentItem item = new BlogCommentItem(c, channel);
+			BlogCommentItem item = new BlogCommentItem(c, channel, ours);
 			text = getPostText(txn, item.getPostHeader().getId());
 			item.setText(text);
 			return item;
 		} else {
 			text = getPostText(txn, h.getId());
-			return new BlogPostItem(h, text, channel);
+			return new BlogPostItem(h, text, channel, ours);
 		}
 	}
 
@@ -316,6 +325,16 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	 * feed loads every post of every blog and would otherwise look the
 	 * same blog up once per post.
 	 */
+	@DatabaseExecutor
+	private boolean isOurChannel(Transaction txn, GroupId g)
+			throws DbException {
+		Boolean cached = ourChannels.get(g);
+		if (cached != null) return cached;
+		boolean ours = channelManager.getChannel(txn, g) != null;
+		ourChannels.put(g, ours);
+		return ours;
+	}
+
 	@DatabaseExecutor
 	private boolean isChannel(Transaction txn, GroupId g) throws DbException {
 		Boolean cached = channels.get(g);
