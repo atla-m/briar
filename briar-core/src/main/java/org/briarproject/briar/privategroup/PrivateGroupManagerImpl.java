@@ -802,9 +802,10 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				return shareOrphan(txn, m.getGroupId(),
 						fileStore.incomingManifest(txn, m, meta));
 			case FILE_REQUEST:
-				// Shared onwards, so it reaches whoever holds the file
-				fileStore.incomingRequest(txn, m, meta);
-				return ACCEPT_SHARE;
+				// Shared onwards, so it reaches whoever holds the file,
+				// once a post names the file
+				return shareOrphan(txn, m.getGroupId(),
+						fileStore.incomingRequest(txn, m, meta));
 			default:
 				// the validator should only let valid types pass
 				throw new RuntimeException("Unknown MessageType");

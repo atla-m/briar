@@ -190,9 +190,10 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 		}
 
 		if (type == FILE_REQUEST) {
-			// Shared onwards, so it reaches whoever holds the file
-			fileStore.incomingRequest(txn, m, meta);
-			return ACCEPT_SHARE;
+			// Shared onwards, so it reaches whoever holds the file, once a
+			// post names the file
+			return shareOrphan(txn, groupId,
+					fileStore.incomingRequest(txn, m, meta));
 		}
 
 		if (type == POST || type == COMMENT) {

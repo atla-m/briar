@@ -631,11 +631,17 @@ public class ChunkedFileStore {
 	/**
 	 * Handles an incoming request for a file's chunks. Call from the
 	 * client's incoming message hook. If we hold any of the file's chunks
-	 * they are shared, which sends them to everyone who can see the group;
-	 * chunks we received are shared already, so in practice this releases
-	 * a file we sent and held back.
+	 * and a delivered message names the file, they are shared, which sends
+	 * them to everyone who can see the group; chunks we received are
+	 * shared already, so in practice this releases a file we sent and
+	 * held back. A request, like a manifest, is unsigned, so one for a
+	 * file no message names releases nothing: it would spread whatever a
+	 * contact planted, and the request with it.
+	 *
+	 * @return True if a delivered message names the file, so the request
+	 * can be passed on to whoever else holds it.
 	 */
-	public void incomingRequest(Transaction txn, Message m,
+	public boolean incomingRequest(Transaction txn, Message m,
 			BdfDictionary meta) throws DbException, FormatException {
 		MessageId manifestId = new MessageId(meta.getRaw(KEY_FILE_MANIFEST_ID));
 		// Every request for a file takes the same timestamp, so a group
@@ -650,10 +656,12 @@ public class ChunkedFileStore {
 		} catch (NoSuchMessageException e) {
 			// Not our manifest, not here yet, or deleted
 		}
+		if (!isReferenced(txn, manifestId)) return false;
 		for (MessageId chunkId : getChunkIds(txn, m.getGroupId(),
 				manifestId)) {
 			db.setMessageShared(txn, chunkId);
 		}
+		return true;
 	}
 
 	/**
@@ -757,8 +765,16 @@ public class ChunkedFileStore {
 			throw new DbException(e);
 		}
 		db.setMessageShared(txn, manifestId);
-		for (MessageId chunkId : getChunkIds(txn, g, manifestId)) {
-			db.setMessageShared(txn, chunkId);
+		// Its chunks, and any requests for them that were kept back with
+		// the file, so they reach whoever holds the rest of it
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(KEY_FILE_MANIFEST_ID, manifestId));
+		try {
+			for (MessageId id : clientHelper.getMessageIds(txn, g, query)) {
+				db.setMessageShared(txn, id);
+			}
+		} catch (FormatException e) {
+			throw new DbException(e);
 		}
 	}
 

@@ -95,6 +95,7 @@ import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
@@ -1633,6 +1634,50 @@ public class ChannelManagerIntegrationTest
 		} finally {
 			server.shutdown();
 		}
+	}
+
+	@Test
+	public void testARequestForAFileNoPostNamesIsNotPassedOn()
+			throws Exception {
+		// A request is unsigned like a manifest, so a contact passing the
+		// channel on can send one with a file no post names. Until a post
+		// names the file, neither the request nor the file's chunks go
+		// on to the others we share the channel with.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		shareBothWays(g);
+		db0.transaction(false, txn ->
+				db0.setGroupVisibility(txn, contactId2From0, g, SHARED));
+		FileHeader planted = blogManager1.addLocalFile(g,
+				c1.getClock().currentTimeMillis(), "planted.bin",
+				"application/octet-stream",
+				() -> new ByteArrayInputStream(
+						new byte[FILE_CHUNK_PAYLOAD_LENGTH]));
+		db1.transaction(false, txn -> {
+			db1.setMessageShared(txn, planted.getManifestId());
+			BdfDictionary query = BdfDictionary.of(new BdfEntry(
+					KEY_FILE_MANIFEST_ID, planted.getManifestId()));
+			for (MessageId id : c1.getClientHelper().getMessageIds(txn, g,
+					query)) {
+				db1.setMessageShared(txn, id);
+			}
+		});
+		blogManager1.requestFile(planted);
+		// Manifest, chunk and request
+		sync1To0(3, true);
+		assertTrue(blogManager0.getFileStatus(planted).isComplete());
+		assertNothingToSend(db0, contactId2From0);
+
+		// Once the owner's post names the file, all three go on
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				c0.getClock().currentTimeMillis(), null,
+				channel.getLocalAuthor(), "Now it is mine", emptyList(),
+				singletonList(planted));
+		blogManager0.addLocalPost(post);
+		assertTrue(db0.transactionWithResult(true, txn ->
+				db0.containsMessagesToSend(txn, contactId2From0,
+						Integer.MAX_VALUE, false)));
 	}
 
 	@Test
