@@ -6,6 +6,7 @@ import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.MessageDeletedException;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
@@ -36,6 +37,7 @@ import java.util.Set;
 
 import javax.annotation.Nullable;
 
+import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptySet;
 import static java.util.Collections.singleton;
@@ -571,6 +573,54 @@ public class MessagingManagerIntegrationTest
 		for (MessageId id : chunkIds) assertDeleted(db1, id);
 		assertDeleted(db1, file.getManifestId());
 		assertEquals(0, getMessages(c1).size());
+	}
+
+	@Test
+	public void testDeletingAMessageOnlyDeletesItsOwnAttachments()
+			throws Exception {
+		// Messages of ours that a contact's headers could name: one in
+		// another conversation, a file in another conversation, and a
+		// message in this conversation that isn't an attachment
+		GroupId g01 = messagingManager0.getConversationId(contactId1From0);
+		GroupId g02 = messagingManager0.getConversationId(contactId2From0);
+		long time = c0.getClock().currentTimeMillis();
+		PrivateMessage other = messageFactory.createPrivateMessage(g02,
+				time, "Elsewhere", emptyList());
+		messagingManager0.addLocalMessage(other);
+		byte[] fileBytes = getRandomBytes(42);
+		FileHeader file = messagingManager0.addLocalFile(g02, time,
+				"image.jpg", "image/jpeg",
+				() -> new ByteArrayInputStream(fileBytes));
+		PrivateMessage own = messageFactory.createPrivateMessage(g01,
+				time, "Here", emptyList());
+		messagingManager0.addLocalMessage(own);
+
+		// The contact sends a message whose headers name all three
+		List<AttachmentHeader> headers = asList(
+				new AttachmentHeader(g01, other.getMessage().getId(),
+						"image/jpeg"),
+				new AttachmentHeader(g01, file.getManifestId(),
+						"image/jpeg"),
+				new AttachmentHeader(g01, own.getMessage().getId(),
+						"image/jpeg"));
+		PrivateMessage m = messageFactory.createPrivateMessage(g01,
+				c1.getClock().currentTimeMillis(), null, headers,
+				MIN_AUTO_DELETE_TIMER_MS);
+		// Stored directly, as a modified client would send it: the
+		// messaging manager would look for the attachments
+		db1.transaction(false, txn -> db1.addLocalMessage(txn,
+				m.getMessage(), new Metadata(), true, false));
+		syncMessage(c1, c0, contactId0From1, 1, true);
+
+		// Deleting it leaves all three alone
+		Set<MessageId> toDelete = singleton(m.getMessage().getId());
+		db0.transaction(false, txn ->
+				messagingManager0.deleteMessages(txn, contactId1From0,
+						toDelete));
+		for (MessageId id : asList(other.getMessage().getId(),
+				file.getManifestId(), own.getMessage().getId())) {
+			db0.transaction(true, txn -> db0.getMessage(txn, id));
+		}
 	}
 
 	private void assertDeleted(DatabaseComponent db, MessageId id)

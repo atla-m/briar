@@ -698,7 +698,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 				for (MessageId id : referenced) {
 					if (fileStore.isManifest(txn, id)) {
 						fileStore.deleteFile(txn, g, id);
-					} else {
+					} else if (isAttachment(txn, g, id)) {
 						try {
 							db.deleteMessage(txn, id);
 							db.deleteMessageMetadata(txn, id);
@@ -714,6 +714,21 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
+	}
+
+	/**
+	 * Returns true if the given message is an attachment in the given
+	 * conversation. The contact chooses the IDs a message's headers name,
+	 * so only these may be deleted along with it: anything else would let
+	 * a contact delete any message on our device, in any group.
+	 */
+	private boolean isAttachment(Transaction txn, GroupId g, MessageId m)
+			throws DbException, FormatException {
+		if (!fileStore.isInGroup(txn, g, m)) return false;
+		BdfDictionary meta =
+				clientHelper.getMessageMetadataAsDictionary(txn, m);
+		Integer messageType = meta.getOptionalInt(MSG_KEY_MSG_TYPE);
+		return messageType != null && messageType == ATTACHMENT;
 	}
 
 	private void recalculateGroupCount(Transaction txn, GroupId g)

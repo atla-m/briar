@@ -485,6 +485,9 @@ public class ChunkedFileStore {
 	 */
 	public void deleteFile(Transaction txn, GroupId g, MessageId manifestId)
 			throws DbException {
+		// A header can name any manifest, so a contact could otherwise
+		// delete a file in another group by naming its manifest
+		if (!isInGroup(txn, g, manifestId)) return;
 		try {
 			if (client.isManifestReferenced(txn, g, manifestId)) return;
 		} catch (FormatException e) {
@@ -494,6 +497,19 @@ public class ChunkedFileStore {
 			deleteIfPresent(txn, id);
 		}
 		deleteIfPresent(txn, manifestId);
+	}
+
+	/**
+	 * Returns true if the given message is stored and belongs to the given
+	 * group. A message that is missing or already deleted belongs to none.
+	 */
+	public boolean isInGroup(Transaction txn, GroupId g, MessageId m)
+			throws DbException {
+		try {
+			return getManifest(txn, m).getGroupId().equals(g);
+		} catch (NoSuchMessageException e) {
+			return false;
+		}
 	}
 
 	/**
@@ -582,6 +598,8 @@ public class ChunkedFileStore {
 			throws DbException {
 		GroupId g = header.getGroupId();
 		MessageId manifestId = header.getManifestId();
+		// Ask only for a file shared in the group the request goes to
+		if (!isInGroup(txn, g, manifestId)) throw new NoSuchMessageException();
 		try {
 			long manifestTimestamp =
 					getManifest(txn, manifestId).getTimestamp();
