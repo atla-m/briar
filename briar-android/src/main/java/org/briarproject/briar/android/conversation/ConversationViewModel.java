@@ -1,7 +1,10 @@
 package org.briarproject.briar.android.conversation;
 
 import android.app.Application;
+import android.content.ContentResolver;
+import android.database.Cursor;
 import android.net.Uri;
+import android.provider.OpenableColumns;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.contact.Contact;
@@ -15,6 +18,7 @@ import org.briarproject.bramble.api.db.TransactionManager;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.event.EventListener;
+import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.settings.Settings;
 import org.briarproject.bramble.api.settings.SettingsManager;
@@ -22,6 +26,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.AndroidExecutor;
+import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.briar.android.attachment.AttachmentCreator;
 import org.briarproject.briar.android.attachment.AttachmentManager;
 import org.briarproject.briar.android.attachment.AttachmentResult;
@@ -32,7 +37,11 @@ import org.briarproject.briar.android.view.TextSendController.SendState;
 import org.briarproject.briar.android.viewmodel.DbViewModel;
 import org.briarproject.briar.android.viewmodel.LiveEvent;
 import org.briarproject.briar.android.viewmodel.MutableLiveEvent;
+import org.briarproject.briar.R;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
+import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
 import org.briarproject.briar.api.autodelete.UnexpectedTimerException;
 import org.briarproject.briar.api.autodelete.event.AutoDeleteTimerMirroredEvent;
@@ -49,6 +58,9 @@ import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.messaging.event.AttachmentReceivedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -63,9 +75,12 @@ import androidx.lifecycle.MutableLiveData;
 
 import static androidx.lifecycle.Transformations.map;
 import static java.util.Objects.requireNonNull;
+import static java.util.Collections.emptyList;
+import static java.util.Collections.singletonList;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
+import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.bramble.util.LogUtils.logDuration;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.LogUtils.now;
@@ -74,6 +89,9 @@ import static org.briarproject.briar.android.util.UiUtils.observeForeverOnce;
 import static org.briarproject.briar.android.view.TextSendController.SendState.ERROR;
 import static org.briarproject.briar.android.view.TextSendController.SendState.SENT;
 import static org.briarproject.briar.android.view.TextSendController.SendState.UNEXPECTED_TIMER;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.api.autodelete.AutoDeleteManager.DEFAULT_TIMER_DURATION;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES;
@@ -124,6 +142,16 @@ public class ConversationViewModel extends DbViewModel
 			new MutableLiveData<>(false);
 	private final MutableLiveEvent<PrivateMessageHeader> addedHeader =
 			new MutableLiveEvent<>();
+	// The latest known status of a shared file, for redrawing its message
+	private final MutableLiveData<FileStatus> fileStatusUpdated =
+			new MutableLiveData<>();
+	// A string resource explaining why a file could not be sent
+	private final MutableLiveEvent<Integer> fileError = new MutableLiveEvent<>();
+	// true if there was an error, false if the file was saved
+	private final MutableLiveEvent<Boolean> saveError = new MutableLiveEvent<>();
+	private final Clock clock;
+	@IoExecutor
+	private final Executor ioExecutor;
 
 	@Inject
 	ConversationViewModel(Application application,
@@ -140,7 +168,8 @@ public class ConversationViewModel extends DbViewModel
 			AttachmentRetriever attachmentRetriever,
 			AttachmentCreator attachmentCreator,
 			AutoDeleteManager autoDeleteManager,
-			ConversationManager conversationManager) {
+			ConversationManager conversationManager,
+			Clock clock, @IoExecutor Executor ioExecutor) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
 		this.db = db;
 		this.eventBus = eventBus;
@@ -153,6 +182,8 @@ public class ConversationViewModel extends DbViewModel
 		this.attachmentCreator = attachmentCreator;
 		this.autoDeleteManager = autoDeleteManager;
 		this.conversationManager = conversationManager;
+		this.clock = clock;
+		this.ioExecutor = ioExecutor;
 		messagingGroupId = map(contactItem, c ->
 				messagingManager.getContactGroup(c.getContact()).getId());
 		eventBus.addListener(this);
@@ -176,24 +207,25 @@ public class ConversationViewModel extends DbViewModel
 			}
 		} else if (e instanceof FileProgressEvent) {
 			FileProgressEvent p = (FileProgressEvent) e;
-			if (p.isComplete()) {
-				// A chunked image is referenced by its manifest ID and can be
-				// shown once all of its chunks have arrived, if the file
-				// belongs to this conversation
-				runOnDbThread(() -> {
-					try {
-						ContactId c = messagingManager
-								.getContactId(p.getGroupId());
-						if (c.equals(contactId)) {
-							LOG.info("Chunked file complete");
-							attachmentRetriever
-									.loadAttachmentItem(p.getManifestId());
-						}
-					} catch (DbException ex) {
-						// Not a private conversation, or contact removed
+			runOnDbThread(() -> {
+				try {
+					ContactId c = messagingManager.getContactId(p.getGroupId());
+					if (!c.equals(contactId)) return;
+					if (p.isComplete()) {
+						// A chunked image is referenced by its manifest ID
+						// and can be shown once all its chunks have arrived
+						LOG.info("Chunked file complete");
+						attachmentRetriever.loadAttachmentItem(p.getManifestId());
 					}
-				});
-			}
+					// If the file is shown as a row, update its progress
+					FileHeader h = messagingManager.getFileHeader(p.getGroupId(),
+							p.getManifestId());
+					postFileStatus(messagingManager.getFileStatus(h));
+				} catch (DbException ex) {
+					// Not a private conversation, contact removed, or the
+					// manifest hasn't arrived yet
+				}
+			});
 		} else if (e instanceof AutoDeleteTimerMirroredEvent) {
 			AutoDeleteTimerMirroredEvent a = (AutoDeleteTimerMirroredEvent) e;
 			if (a.getContactId().equals(contactId)) {
@@ -343,6 +375,153 @@ public class ConversationViewModel extends DbViewModel
 		Settings settings = new Settings();
 		settings.putBoolean(key, false);
 		settingsManager.mergeSettings(settings, SETTINGS_NAMESPACE);
+	}
+
+	// Files of any type, sent as chunks
+
+	/**
+	 * Loads how much of each of the given files has arrived.
+	 */
+	void loadFileStatuses(List<FileHeader> headers) {
+		runOnDbThread(() -> {
+			try {
+				for (FileHeader h : headers) {
+					postFileStatus(messagingManager.getFileStatus(h));
+				}
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
+	private void postFileStatus(FileStatus status) {
+		// setValue on the UI thread so that no update is coalesced away
+		androidExecutor.runOnUiThread(() -> fileStatusUpdated.setValue(status));
+	}
+
+	LiveData<FileStatus> getFileStatusUpdated() {
+		return fileStatusUpdated;
+	}
+
+	LiveEvent<Integer> getFileError() {
+		return fileError;
+	}
+
+	LiveEvent<Boolean> getSaveError() {
+		return saveError;
+	}
+
+	/**
+	 * Shares the file at the given URI with the contact: the file is stored
+	 * in chunks and a private message referencing it is sent. The contact
+	 * must support {@link PrivateMessageFormat#supportsFiles() files}.
+	 */
+	@UiThread
+	void sendFile(Uri uri) {
+		Contact contact = requireNonNull(contactItem.getValue()).getContact();
+		GroupId groupId = messagingManager.getContactGroup(contact).getId();
+		ContactId c = requireNonNull(contactId);
+		ioExecutor.execute(() -> {
+			ContentResolver resolver = getApplication().getContentResolver();
+			String name = null;
+			long size = -1;
+			try (Cursor cursor = resolver.query(uri, null, null, null, null)) {
+				if (cursor != null && cursor.moveToFirst()) {
+					int nameCol =
+							cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+					if (nameCol != -1) name = cursor.getString(nameCol);
+					int sizeCol = cursor.getColumnIndex(OpenableColumns.SIZE);
+					if (sizeCol != -1 && !cursor.isNull(sizeCol))
+						size = cursor.getLong(sizeCol);
+				}
+			} catch (Exception e) {
+				logException(LOG, WARNING, e);
+			}
+			if (size > MAX_FILE_SIZE) {
+				fileError.postEvent(R.string.file_too_big);
+				return;
+			}
+			String contentType = resolver.getType(uri);
+			if (contentType == null ||
+					contentType.length() > MAX_CONTENT_TYPE_BYTES) {
+				contentType = "application/octet-stream";
+			}
+			if (name == null || name.isEmpty()) {
+				name = "file";
+			} else if (name.length() > MAX_FILE_NAME_LENGTH / 4) {
+				// Keep well within the byte limit, whatever the characters
+				name = name.substring(0, MAX_FILE_NAME_LENGTH / 4);
+			}
+			FileHeader header;
+			try (InputStream in = resolver.openInputStream(uri)) {
+				if (in == null) throw new IOException("Cannot open " + uri);
+				// The manifest and chunks are stored outside the message's
+				// transaction, as they're written in transactions of their
+				// own. They aren't sent until the message references them.
+				header = messagingManager.addLocalFile(groupId,
+						clock.currentTimeMillis(), name, contentType, in);
+			} catch (FileTooBigException e) {
+				fileError.postEvent(R.string.file_too_big);
+				return;
+			} catch (IOException | DbException e) {
+				logException(LOG, WARNING, e);
+				fileError.postEvent(R.string.file_send_failed);
+				return;
+			}
+			runOnDbThread(() -> {
+				try {
+					db.transaction(false, txn -> {
+						long timestamp = conversationManager
+								.getTimestampForOutgoingMessage(txn, c);
+						long timer = autoDeleteManager
+								.getAutoDeleteTimer(txn, c, timestamp);
+						PrivateMessage m;
+						try {
+							m = privateMessageFactory.createPrivateMessage(
+									groupId, timestamp, null, emptyList(),
+									singletonList(header), timer);
+						} catch (FormatException e) {
+							throw new AssertionError(e);
+						}
+						messagingManager.addLocalMessage(txn, m);
+						Message message = m.getMessage();
+						PrivateMessageHeader h = new PrivateMessageHeader(
+								message.getId(), message.getGroupId(),
+								message.getTimestamp(), true, true, false,
+								false, false, emptyList(),
+								singletonList(header), timer);
+						txn.attach(() -> addedHeader.setEvent(h));
+					});
+				} catch (DbException e) {
+					handleException(e);
+					try {
+						messagingManager.removeFile(header);
+					} catch (DbException ignored) {
+					}
+					fileError.postEvent(R.string.file_send_failed);
+				}
+			});
+		});
+	}
+
+	/**
+	 * Copies a fully received file to the given location chosen by the
+	 * user.
+	 */
+	void saveFile(FileHeader header, Uri uri) {
+		ioExecutor.execute(() -> {
+			try {
+				InputStream is = messagingManager.getFile(header);
+				OutputStream os = getApplication().getContentResolver()
+						.openOutputStream(uri);
+				if (os == null) throw new IOException("Cannot open " + uri);
+				copyAndClose(is, os);
+				saveError.postEvent(false);
+			} catch (IOException | DbException e) {
+				logException(LOG, WARNING, e);
+				saveError.postEvent(true);
+			}
+		});
 	}
 
 	@UiThread

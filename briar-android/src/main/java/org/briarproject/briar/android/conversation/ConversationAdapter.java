@@ -181,6 +181,19 @@ class ConversationAdapter
 	}
 
 	@Nullable
+	Pair<Integer, ConversationMessageItem> getMessageItemWithFile(
+			MessageId manifestId) {
+		for (int i = 0; i < items.size(); i++) {
+			ConversationItem item = items.get(i);
+			if (item instanceof ConversationMessageItem &&
+					((ConversationMessageItem) item).hasFile(manifestId)) {
+				return new Pair<>(i, (ConversationMessageItem) item);
+			}
+		}
+		return null;
+	}
+
+	@Nullable
 	Pair<Integer, ConversationMessageItem> getMessageItem(MessageId messageId) {
 		for (int i = 0; i < items.size(); i++) {
 			ConversationItem item = items.get(i);

@@ -33,6 +33,7 @@ import org.briarproject.briar.android.conversation.AliasDialogFragment;
 import org.briarproject.briar.android.conversation.ConversationActivity;
 import org.briarproject.briar.android.conversation.ConversationSettingsDialog;
 import org.briarproject.briar.android.conversation.ImageActivity;
+import org.briarproject.briar.android.media.MediaActivity;
 import org.briarproject.briar.android.conversation.ImageFragment;
 import org.briarproject.briar.android.forum.CreateForumActivity;
 import org.briarproject.briar.android.forum.ForumActivity;
@@ -116,6 +117,8 @@ public interface ActivityComponent {
 	void inject(ConversationActivity activity);
 
 	void inject(ImageActivity activity);
+
+	void inject(MediaActivity activity);
 
 	void inject(ForumInvitationActivity activity);
 

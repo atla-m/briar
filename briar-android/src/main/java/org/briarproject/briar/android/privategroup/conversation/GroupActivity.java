@@ -1,5 +1,6 @@
 package org.briarproject.briar.android.privategroup.conversation;
 
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -16,13 +17,17 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.attachment.FileRowBinder;
 import org.briarproject.briar.android.conversation.ImageActivity;
+import org.briarproject.briar.android.media.MediaActivity;
 import org.briarproject.briar.android.privategroup.creation.GroupInviteActivity;
 import org.briarproject.briar.android.privategroup.memberlist.GroupMemberListActivity;
 import org.briarproject.briar.android.privategroup.reveal.RevealContactsActivity;
 import org.briarproject.briar.android.threaded.ThreadListActivity;
 import org.briarproject.briar.android.threaded.ThreadListViewModel;
+import org.briarproject.briar.android.util.ActivityLaunchers.CreateDocumentAdvanced;
 import org.briarproject.briar.android.util.ActivityLaunchers.GetMultipleImagesAdvanced;
+import org.briarproject.briar.android.util.ActivityLaunchers.OpenAnyDocumentAdvanced;
 import org.briarproject.briar.android.util.ActivityLaunchers.OpenMultipleImageDocumentsAdvanced;
 import org.briarproject.briar.android.view.ImagePreview;
 import org.briarproject.briar.android.view.TextAttachmentController;
@@ -30,6 +35,8 @@ import org.briarproject.briar.android.view.TextAttachmentController.AttachmentLi
 import org.briarproject.briar.android.view.TextSendController;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
@@ -47,6 +54,7 @@ import androidx.lifecycle.ViewModelProvider;
 
 import static android.view.View.GONE;
 import static android.view.View.VISIBLE;
+import static android.widget.Toast.LENGTH_LONG;
 import static android.widget.Toast.LENGTH_SHORT;
 import static androidx.core.app.ActivityOptionsCompat.makeSceneTransitionAnimation;
 import static androidx.recyclerview.widget.RecyclerView.NO_POSITION;
@@ -58,6 +66,7 @@ import static org.briarproject.briar.android.conversation.ImageActivity.ITEM_ID;
 import static org.briarproject.briar.android.conversation.ImageActivity.NAME;
 import static org.briarproject.briar.android.util.UiUtils.launchActivityToOpenFile;
 import static org.briarproject.briar.android.util.UiUtils.observeOnce;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.nullsafety.NullSafety.requireNonNull;
@@ -67,7 +76,7 @@ import static org.briarproject.nullsafety.NullSafety.requireNonNull;
 public class GroupActivity extends
 		ThreadListActivity<GroupMessageItem, GroupMessageAdapter>
 		implements AttachmentListener, GroupImageAdapter.Listener,
-		GroupMessageAdapter.QuoteListener {
+		GroupMessageAdapter.QuoteListener, GroupMessageAdapter.FileListener {
 
 	@Inject
 	ViewModelProvider.Factory viewModelFactory;
@@ -80,8 +89,18 @@ public class GroupActivity extends
 	private final ActivityResultLauncher<String> contentLauncher =
 			registerForActivityResult(new GetMultipleImagesAdvanced(),
 					this::onImagesChosen);
+	private final ActivityResultLauncher<String[]> fileLauncher =
+			registerForActivityResult(new OpenAnyDocumentAdvanced(),
+					this::onFileChosen);
+	private final ActivityResultLauncher<String> saveLauncher =
+			registerForActivityResult(new CreateDocumentAdvanced(),
+					this::onSaveUriChosen);
+	// The file the user is choosing a location for
+	@Nullable
+	private FileHeader fileToSave = null;
 
 	private GroupViewModel viewModel;
+	private boolean groupEnabled = false;
 
 	@Override
 	public void injectActivity(ActivityComponent component) {
@@ -97,7 +116,7 @@ public class GroupActivity extends
 
 	@Override
 	protected GroupMessageAdapter createAdapter() {
-		return new GroupMessageAdapter(this, this, this);
+		return new GroupMessageAdapter(this, this, this, this);
 	}
 
 	@Override
@@ -148,11 +167,60 @@ public class GroupActivity extends
 			if (dissolved && state == null) onGroupDissolved();
 		});
 
-		// redraw a post when one of its attachments has loaded
+		// redraw a post when one of its attachments or files has changed
 		viewModel.getAttachmentUpdated().observe(this, id -> {
 			int position = adapter.findItemPosition(id);
 			if (position != NO_POSITION) adapter.notifyItemChanged(position);
 		});
+		viewModel.getFileError().observeEvent(this, res -> {
+			String msg = res == R.string.file_too_big
+					? getString(res, MAX_FILE_SIZE / 1024 / 1024)
+					: getString(res);
+			Toast.makeText(this, msg, LENGTH_LONG).show();
+		});
+		viewModel.getSaveError().observeEvent(this, error -> Toast.makeText(
+				this, error ? R.string.save_file_error
+						: R.string.save_file_success, LENGTH_SHORT).show());
+	}
+
+	// Files of any type, sent as chunks
+
+	private void onFileChosen(@Nullable Uri uri) {
+		if (uri != null) viewModel.sendFile(uri);
+	}
+
+	@Override
+	public void onFileClick(GroupMessageItem item, FileHeader header) {
+		FileStatus status = item.getFileStatus(header);
+		if (status == null || !status.isComplete()) {
+			Toast.makeText(this, R.string.file_still_receiving, LENGTH_SHORT)
+					.show();
+		} else if (FileRowBinder.isPlayable(header.getContentType())) {
+			Intent i = new Intent(this, MediaActivity.class);
+			i.putExtra(MediaActivity.GROUP_ID, header.getGroupId().getBytes());
+			i.putExtra(MediaActivity.MANIFEST_ID,
+					header.getManifestId().getBytes());
+			i.putExtra(MediaActivity.NAME, header.getName());
+			i.putExtra(MediaActivity.CONTENT_TYPE, header.getContentType());
+			i.putExtra(MediaActivity.SIZE, header.getSize());
+			i.putExtra(MediaActivity.IS_GROUP, true);
+			startActivity(i);
+		} else {
+			// Nothing to show for other files; let the user save it
+			fileToSave = header;
+			try {
+				saveLauncher.launch(header.getName());
+			} catch (ActivityNotFoundException e) {
+				Toast.makeText(this, R.string.error_start_activity,
+						LENGTH_LONG).show();
+			}
+		}
+	}
+
+	private void onSaveUriChosen(@Nullable Uri uri) {
+		FileHeader header = fileToSave;
+		fileToSave = null;
+		if (uri != null && header != null) viewModel.saveFile(header, uri);
 	}
 
 	@Override
@@ -215,9 +283,25 @@ public class GroupActivity extends
 	}
 
 	@Override
+	public boolean onPrepareOptionsMenu(Menu menu) {
+		// Files can't be sent once the group has been dissolved
+		menu.findItem(R.id.action_group_send_file)
+				.setVisible(groupEnabled);
+		return super.onPrepareOptionsMenu(menu);
+	}
+
+	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
 		int itemId = item.getItemId();
-		if (itemId == R.id.action_group_member_list) {
+		if (itemId == R.id.action_group_send_file) {
+			try {
+				fileLauncher.launch(new String[] {"*/*"});
+			} catch (ActivityNotFoundException e) {
+				Toast.makeText(this, R.string.error_start_activity,
+						LENGTH_LONG).show();
+			}
+			return true;
+		} else if (itemId == R.id.action_group_member_list) {
 			Intent i = new Intent(this, GroupMemberListActivity.class);
 			i.putExtra(GROUP_ID, groupId.getBytes());
 			startActivity(i);
@@ -276,6 +360,8 @@ public class GroupActivity extends
 	}
 
 	private void setGroupEnabled(boolean enabled) {
+		groupEnabled = enabled;
+		invalidateOptionsMenu();
 		sendController.setReady(enabled);
 		list.getRecyclerView().setAlpha(enabled ? 1f : 0.5f);
 

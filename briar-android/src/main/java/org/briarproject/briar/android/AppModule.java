@@ -47,6 +47,7 @@ import org.briarproject.briar.android.logging.LoggingModule;
 import org.briarproject.briar.android.login.LoginModule;
 import org.briarproject.briar.android.mailbox.MailboxModule;
 import org.briarproject.briar.android.navdrawer.NavDrawerModule;
+import org.briarproject.briar.android.media.MediaModule;
 import org.briarproject.briar.android.privategroup.conversation.GroupConversationModule;
 import org.briarproject.briar.android.privategroup.list.GroupListModule;
 import org.briarproject.briar.android.removabledrive.TransferDataModule;
@@ -105,6 +106,7 @@ import static org.briarproject.briar.android.TestingConstants.IS_DEBUG_BUILD;
 		ForumModule.class,
 		GroupListModule.class,
 		GroupConversationModule.class,
+		MediaModule.class,
 		SharingModule.class,
 		HotspotModule.class,
 		TransferDataModule.class,

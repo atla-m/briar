@@ -2,6 +2,7 @@ package org.briarproject.briar.android.conversation;
 
 import android.annotation.SuppressLint;
 import android.content.DialogInterface;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
@@ -46,6 +47,8 @@ import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.activity.BriarActivity;
 import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.android.attachment.AttachmentRetriever;
 import org.briarproject.briar.android.blog.BlogActivity;
 import org.briarproject.briar.android.contact.connect.ConnectViaBluetoothActivity;
@@ -56,7 +59,11 @@ import org.briarproject.briar.android.fragment.BaseFragment.BaseFragmentListener
 import org.briarproject.briar.android.introduction.IntroductionActivity;
 import org.briarproject.briar.android.privategroup.conversation.GroupActivity;
 import org.briarproject.briar.android.removabledrive.RemovableDriveActivity;
+import org.briarproject.briar.android.attachment.FileRowBinder;
+import org.briarproject.briar.android.media.MediaActivity;
+import org.briarproject.briar.android.util.ActivityLaunchers.CreateDocumentAdvanced;
 import org.briarproject.briar.android.util.ActivityLaunchers.GetMultipleImagesAdvanced;
+import org.briarproject.briar.android.util.ActivityLaunchers.OpenAnyDocumentAdvanced;
 import org.briarproject.briar.android.util.ActivityLaunchers.OpenMultipleImageDocumentsAdvanced;
 import org.briarproject.briar.android.util.BriarSnackbarBuilder;
 import org.briarproject.briar.android.view.BriarRecyclerView;
@@ -122,6 +129,7 @@ import de.hdodenhof.circleimageview.CircleImageView;
 import uk.co.samuelwall.materialtaptargetprompt.MaterialTapTargetPrompt;
 
 import static android.view.Gravity.RIGHT;
+import static android.widget.Toast.LENGTH_LONG;
 import static android.widget.Toast.LENGTH_SHORT;
 import static androidx.core.app.ActivityOptionsCompat.makeSceneTransitionAnimation;
 import static androidx.lifecycle.Lifecycle.State.STARTED;
@@ -146,6 +154,7 @@ import static org.briarproject.briar.android.conversation.ImageActivity.NAME;
 import static org.briarproject.briar.android.util.UiUtils.launchActivityToOpenFile;
 import static org.briarproject.briar.android.util.UiUtils.observeOnce;
 import static org.briarproject.briar.android.view.AuthorView.setAvatar;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_ONLY;
@@ -200,6 +209,15 @@ public class ConversationActivity extends BriarActivity
 	private final ActivityResultLauncher<String[]> docLauncher =
 			registerForActivityResult(new OpenMultipleImageDocumentsAdvanced(),
 					this::onImagesChosen);
+	private final ActivityResultLauncher<String[]> fileLauncher =
+			registerForActivityResult(new OpenAnyDocumentAdvanced(),
+					this::onFileChosen);
+	private final ActivityResultLauncher<String> saveLauncher =
+			registerForActivityResult(new CreateDocumentAdvanced(),
+					this::onSaveUriChosen);
+	// The file the user is choosing a location for
+	@Nullable
+	private FileHeader fileToSave = null;
 	private final ActivityResultLauncher<String> contentLauncher =
 			registerForActivityResult(new GetMultipleImagesAdvanced(),
 					this::onImagesChosen);
@@ -270,6 +288,16 @@ public class ConversationActivity extends BriarActivity
 		});
 		viewModel.getAddedPrivateMessage().observeEvent(this,
 				this::onAddedPrivateMessage);
+		viewModel.getFileStatusUpdated().observe(this, this::updateFileStatus);
+		viewModel.getFileError().observeEvent(this, res -> {
+			String msg = res == R.string.file_too_big
+					? getString(res, MAX_FILE_SIZE / 1024 / 1024)
+					: getString(res);
+			Toast.makeText(this, msg, LENGTH_LONG).show();
+		});
+		viewModel.getSaveError().observeEvent(this, error -> Toast.makeText(
+				this, error ? R.string.save_file_error
+						: R.string.save_file_success, LENGTH_SHORT).show());
 
 		visitor = new ConversationVisitor(this, this, this,
 				viewModel.getContactDisplayName());
@@ -383,6 +411,10 @@ public class ConversationActivity extends BriarActivity
 			menu.findItem(R.id.action_set_alias).setEnabled(true);
 			menu.findItem(R.id.action_connect_via_bluetooth).setEnabled(true);
 		});
+		// Files can be sent once we know the contact's client supports them
+		MenuItem sendFile = menu.findItem(R.id.action_send_file);
+		viewModel.getPrivateMessageFormat().observe(this, format ->
+				sendFile.setVisible(format.supportsFiles()));
 		// Show auto-delete menu item if feature is enabled
 		if (featureFlags.shouldEnableDisappearingMessages()) {
 			MenuItem item = menu.findItem(R.id.action_conversation_settings);
@@ -400,6 +432,14 @@ public class ConversationActivity extends BriarActivity
 		int itemId = item.getItemId();
 		if (itemId == android.R.id.home) {
 			onBackPressed();
+			return true;
+		} else if (itemId == R.id.action_send_file) {
+			try {
+				fileLauncher.launch(new String[] {"*/*"});
+			} catch (ActivityNotFoundException e) {
+				Toast.makeText(this, R.string.error_start_activity,
+						LENGTH_LONG).show();
+			}
 			return true;
 		} else if (itemId == R.id.action_introduction) {
 			Intent intent = new Intent(this, IntroductionActivity.class);
@@ -1117,6 +1157,61 @@ public class ConversationActivity extends BriarActivity
 		String text = textCache.get(m);
 		if (text == null) loadMessageText(m);
 		return text;
+	}
+
+	// Files of any type, sent as chunks
+
+	private void onFileChosen(@Nullable Uri uri) {
+		if (uri != null) viewModel.sendFile(uri);
+	}
+
+	@Override
+	public void onFileClick(ConversationMessageItem messageItem,
+			FileHeader header) {
+		FileStatus status = messageItem.getFileStatus(header);
+		if (status == null || !status.isComplete()) {
+			Toast.makeText(this, R.string.file_still_receiving, LENGTH_SHORT)
+					.show();
+		} else if (FileRowBinder.isPlayable(header.getContentType())) {
+			Intent i = new Intent(this, MediaActivity.class);
+			i.putExtra(MediaActivity.GROUP_ID, header.getGroupId().getBytes());
+			i.putExtra(MediaActivity.MANIFEST_ID,
+					header.getManifestId().getBytes());
+			i.putExtra(MediaActivity.NAME, header.getName());
+			i.putExtra(MediaActivity.CONTENT_TYPE, header.getContentType());
+			i.putExtra(MediaActivity.SIZE, header.getSize());
+			i.putExtra(MediaActivity.IS_GROUP, false);
+			startActivity(i);
+		} else {
+			// Nothing to show for other files; let the user save it
+			fileToSave = header;
+			try {
+				saveLauncher.launch(header.getName());
+			} catch (ActivityNotFoundException e) {
+				Toast.makeText(this, R.string.error_start_activity,
+						LENGTH_LONG).show();
+			}
+		}
+	}
+
+	private void onSaveUriChosen(@Nullable Uri uri) {
+		FileHeader header = fileToSave;
+		fileToSave = null;
+		if (uri != null && header != null) viewModel.saveFile(header, uri);
+	}
+
+	@Override
+	public void onFilesShown(List<FileHeader> headers) {
+		viewModel.loadFileStatuses(headers);
+	}
+
+	@UiThread
+	private void updateFileStatus(FileStatus status) {
+		Pair<Integer, ConversationMessageItem> pair = adapter
+				.getMessageItemWithFile(status.getHeader().getManifestId());
+		if (pair != null && pair.getSecond().updateFileStatus(status)) {
+			adapter.notifyItemChanged(pair.getFirst());
+		}
 	}
 
 	/**

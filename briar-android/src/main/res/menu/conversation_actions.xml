@@ -11,6 +11,13 @@
 		app:showAsAction="never" />
 
 	<item
+		android:id="@+id/action_send_file"
+		android:title="@string/send_file"
+		android:visible="false"
+		app:showAsAction="never"
+		tools:visible="true" />
+
+	<item
 		android:id="@+id/action_conversation_settings"
 		android:title="@string/menu_item_disappearing_messages"
 		android:visible="false"

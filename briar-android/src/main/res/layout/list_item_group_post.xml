@@ -105,6 +105,16 @@
 			tools:ignore="ContentDescription"
 			tools:listitem="@layout/list_item_image" />
 
+		<!-- One row per shared audio or video file, added by the holder -->
+		<LinearLayout
+			android:id="@+id/fileList"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:layout_marginBottom="@dimen/margin_small"
+			android:orientation="vertical"
+			android:visibility="gone"
+			tools:visibility="visible" />
+
 		<com.vanniktech.emoji.EmojiTextView
 			android:id="@+id/text"
 			style="@style/TextMessage"

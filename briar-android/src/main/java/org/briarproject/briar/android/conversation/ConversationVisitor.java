@@ -5,6 +5,7 @@ import android.content.Context;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.blog.BlogInvitationRequest;
 import org.briarproject.briar.api.blog.BlogInvitationResponse;
 import org.briarproject.briar.api.conversation.ConversationMessageVisitor;
@@ -70,6 +71,9 @@ class ConversationVisitor implements
 		if (h.hasText()) {
 			String text = textCache.getText(h.getId());
 			if (text != null) item.setText(text);
+		}
+		if (!h.getFileHeaders().isEmpty()) {
+			attachmentCache.onFilesShown(h.getFileHeaders());
 		}
 		return item;
 	}
@@ -332,5 +336,11 @@ class ConversationVisitor implements
 
 	interface AttachmentCache {
 		List<AttachmentItem> getAttachmentItems(PrivateMessageHeader h);
+
+		/**
+		 * Called when a message sharing the given files is shown, so their
+		 * arrival status can be loaded.
+		 */
+		void onFilesShown(List<FileHeader> headers);
 	}
 }
