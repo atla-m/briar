@@ -58,6 +58,7 @@ import okhttp3.ResponseBody;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.GeneralSecurityException;
+import java.util.Date;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.ArrayList;
@@ -81,6 +82,7 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
 import static java.util.Collections.emptyList;
@@ -542,13 +544,37 @@ class ChannelManagerImpl
 			return importFrom(g, body.byteStream(),
 					ranged ? state.offset : 0, !ranged,
 					response.header("ETag"),
-					response.header("Last-Modified"));
+					lastModifiedIfSettled(response));
 		} catch (FormatException e) {
 			// The mirror served something that isn't this channel, or
 			// isn't the rest of the file we were reading
 			if (resume) throw new ChangedFileException();
 			throw new IOException(e);
 		}
+	}
+
+	/**
+	 * Returns the date the mirror gave for the file, or null if that date
+	 * is too recent to rely on. A date is only given to the second, so a
+	 * file changed again within the second it was last changed keeps the
+	 * date it already had. A subscriber that remembered such a date would
+	 * send it back and be told there was nothing new, and would go on
+	 * being told that until the file changed in some later second, so the
+	 * posts published in between would not arrive at all if the channel
+	 * then fell quiet. Mirrors that give a tag as well are unaffected,
+	 * because a tag changes whenever the file does.
+	 */
+	@Nullable
+	private String lastModifiedIfSettled(Response response) {
+		String lastModified = response.header("Last-Modified");
+		if (lastModified == null) return null;
+		Date modified = response.headers().getDate("Last-Modified");
+		if (modified == null) return null;
+		Date served = response.headers().getDate("Date");
+		long now = served == null
+				? clock.currentTimeMillis() : served.getTime();
+		if (now - modified.getTime() < SECONDS.toMillis(1)) return null;
+		return lastModified;
 	}
 
 	/**

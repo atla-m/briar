@@ -922,6 +922,85 @@ public class ChannelManagerIntegrationTest
 		}
 	}
 
+	@Test
+	public void testDoesNotTrustADateTheFileCouldStillChangeIn()
+			throws Exception {
+		// A mirror that gives no tag dates the file only to the second,
+		// so a file changed again within that second keeps the date it
+		// already had. Remembering such a date would mean being told
+		// there is nothing new when there is, so it is not remembered
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] first = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] second = exportChannel(g);
+
+		String date = "Wed, 16 Sep 2026 12:00:00 GMT";
+		MockWebServer server = new MockWebServer();
+		// The file was last changed in the second it was served in
+		server.enqueue(new MockResponse()
+				.setHeader("Date", date)
+				.setHeader("Last-Modified", date)
+				.setBody(new Buffer().write(first)));
+		int from = first.length;
+		server.enqueue(new MockResponse().setResponseCode(206)
+				.setHeader("Content-Range", "bytes " + from + "-" +
+						(second.length - 1) + "/" + second.length)
+				.setBody(new Buffer().write(second, from,
+						second.length - from)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(1, blogManager1.getPostHeaders(g).size());
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(2, blogManager1.getPostHeaders(g).size());
+
+			// The second fetch did not send the date back, so the mirror
+			// could not wrongly answer that nothing had changed
+			server.takeRequest();
+			RecordedRequest second1 = server.takeRequest();
+			assertNull(second1.getHeader("If-Modified-Since"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testTrustsADateThatIsSafelyInThePast() throws Exception {
+		// A date from before the second the file was served in cannot
+		// hide a later change, so it is remembered and sent back
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse()
+				.setHeader("Date", "Wed, 16 Sep 2026 12:00:30 GMT")
+				.setHeader("Last-Modified", "Wed, 16 Sep 2026 12:00:00 GMT")
+				.setBody(new Buffer().write(exportChannel(g))));
+		server.enqueue(new MockResponse().setResponseCode(304));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(UNCHANGED,
+					channelManager1.fetchChannel(g).getOutcome());
+
+			server.takeRequest();
+			RecordedRequest conditional = server.takeRequest();
+			assertEquals("Wed, 16 Sep 2026 12:00:00 GMT",
+					conditional.getHeader("If-Modified-Since"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
 	private byte[] exportChannel(GroupId g) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		channelManager0.exportChannel(g, out);
