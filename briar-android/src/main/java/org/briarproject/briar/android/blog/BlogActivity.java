@@ -11,12 +11,14 @@ import org.briarproject.briar.android.activity.BriarActivity;
 import org.briarproject.briar.android.fragment.BaseFragment;
 import org.briarproject.briar.android.fragment.BaseFragment.BaseFragmentListener;
 import org.briarproject.briar.android.sharing.BlogSharingStatusActivity;
+import org.briarproject.briar.android.sharing.SharingController.SharingInfo;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 
+import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.widget.Toolbar;
 import androidx.lifecycle.ViewModelProvider;
 
@@ -39,6 +41,12 @@ public class BlogActivity extends BriarActivity
 		viewModel = new ViewModelProvider(this, viewModelFactory)
 				.get(BlogViewModel.class);
 	}
+
+	// UI thread. The blog and the sharing counts load separately, so the
+	// subtitle is worked out again whenever either of them arrives
+	private boolean channel = false;
+	@Nullable
+	private SharingInfo sharingInfo = null;
 
 	@Override
 	public void onCreate(@Nullable Bundle state) {
@@ -64,12 +72,15 @@ public class BlogActivity extends BriarActivity
 			startActivity(i1);
 		});
 
-		viewModel.getBlog().observe(this, blog ->
-				setTitle(blog.getBlog().getAuthor().getName())
-		);
-		viewModel.getSharingInfo().observe(this, info ->
-				setToolbarSubTitle(info.total, info.online)
-		);
+		viewModel.getBlog().observe(this, blog -> {
+			setTitle(blog.getBlog().getAuthor().getName());
+			channel = blog.getBlog().isChannel();
+			updateToolbarSubTitle();
+		});
+		viewModel.getSharingInfo().observe(this, info -> {
+			sharingInfo = info;
+			updateToolbarSubTitle();
+		});
 
 		if (state == null) {
 			if (postId == null) {
@@ -83,9 +94,24 @@ public class BlogActivity extends BriarActivity
 		}
 	}
 
-	private void setToolbarSubTitle(int total, int online) {
-		requireNonNull(getSupportActionBar())
-				.setSubtitle(getString(R.string.shared_with, total, online));
+	/**
+	 * Shows how many contacts we're sharing a blog with, but not for a
+	 * channel. The count is of contacts we shared with and how many of
+	 * them are connected; anyone who subscribed to a channel by fetching
+	 * it from a mirror is invisible to it. On a channel it would read as
+	 * an audience, which it isn't, and a channel exists precisely so that
+	 * nobody, ourselves included, can see who subscribes. The sharing
+	 * status screen is still a tap away, where the list is plainly about
+	 * contacts.
+	 */
+	private void updateToolbarSubTitle() {
+		ActionBar actionBar = requireNonNull(getSupportActionBar());
+		if (channel || sharingInfo == null) {
+			actionBar.setSubtitle(null);
+		} else {
+			actionBar.setSubtitle(getString(R.string.shared_with,
+					sharingInfo.total, sharingInfo.online));
+		}
 	}
 
 }
