@@ -61,6 +61,7 @@ import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static java.util.Locale.US;
+import static java.util.concurrent.TimeUnit.DAYS;
 import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
@@ -2682,6 +2683,55 @@ public class ChannelManagerIntegrationTest
 			// Expected
 		}
 		assertTrue(channelManager1.getSubscriptions().isEmpty());
+	}
+
+	@Test
+	public void testAPostFromTheFutureIsHeldBackNotRejected()
+			throws Exception {
+		// A reader whose clock is behind sees the owner's posts as from
+		// the future. Stored, they would be marked invalid for good, so
+		// they are skipped, and the next fetch starts from the first of
+		// them, to take them once the clock is right.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		long now = c1.getClock().currentTimeMillis();
+		LocalAuthor a = channel.getLocalAuthor();
+		Message before = blogPostFactory.createBlogPost(g, now, null, a,
+				"Before").getMessage();
+		Message future = blogPostFactory.createBlogPost(g,
+				now + DAYS.toMillis(2), null, a, "Future").getMessage();
+		Message after = blogPostFactory.createBlogPost(g, now + 1, null, a,
+				"After").getMessage();
+		byte[] file = buildStream(channel.getBlog(), before, future, after);
+		long heldBackAt = buildStream(channel.getBlog(), before).length;
+		List<String> ranges = new ArrayList<>();
+		MockWebServer server = new MockWebServer();
+		server.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				String range = request.getHeader("Range");
+				if (range == null) {
+					return new MockResponse()
+							.setBody(new Buffer().write(file));
+				}
+				synchronized (ranges) {
+					ranges.add(range);
+				}
+				return new MockResponse().setResponseCode(416)
+						.setHeader("Content-Range", "bytes */" + file.length);
+			}
+		});
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(2);
+			assertFalse(isStored(future.getId()));
+			channelManager1.fetchChannel(g);
+			assertEquals(singletonList("bytes=" + heldBackAt + "-"), ranges);
+		} finally {
+			server.shutdown();
+		}
 	}
 
 	private boolean isStored(MessageId m) throws Exception {

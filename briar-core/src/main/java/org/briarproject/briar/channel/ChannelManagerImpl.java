@@ -114,6 +114,7 @@ import static org.briarproject.bramble.api.sync.SyncConstants.MAX_GROUP_DESCRIPT
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.StringUtils.toHexString;
+import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
 import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
 import static org.briarproject.briar.api.attachment.FileHeader.hasDirectionOverride;
 import static org.briarproject.briar.api.attachment.FileHeader.withoutDirectionOverrides;
@@ -1219,6 +1220,15 @@ class ChannelManagerImpl
 		// file we had read to the end, which we no longer have.
 		boolean complete = p.complete &&
 				(total < 0 || offset + p.bytes == total);
+		long end = p.bytes;
+		int messages = p.messages;
+		if (p.heldBackAt != -1) {
+			// Read again from the first message held back, so it arrives
+			// once our clock allows. The file hasn't been taken whole.
+			complete = false;
+			end = p.heldBackAt;
+			messages = p.heldBackMessages;
+		}
 		BdfDictionary kept = new BdfDictionary();
 		if (complete) {
 			kept.putAll(validators);
@@ -1226,8 +1236,7 @@ class ChannelManagerImpl
 					etag == null ? NULL_VALUE : etag,
 					lastModified == null ? NULL_VALUE : lastModified));
 		}
-		storeFetchState(g, offset + p.bytes, p.messagesBefore + p.messages,
-				kept);
+		storeFetchState(g, offset + end, p.messagesBefore + messages, kept);
 	}
 
 	/**
@@ -1256,6 +1265,10 @@ class ChannelManagerImpl
 		private long bytes = 0;
 		private boolean started = false;
 		private boolean complete = false;
+		// Where the first message held back for being from the future
+		// starts, and how many messages came before it, or -1
+		private long heldBackAt = -1;
+		private int heldBackMessages = 0;
 
 		private Progress(long budget, int messagesBefore, int maxMessages) {
 			this.budget = budget;
@@ -2078,6 +2091,21 @@ class ChannelManagerImpl
 			// is not the channel's and is skipped. So is a request, which
 			// the owner's file never carries. Skipped entries still count
 			// against the budget.
+			// A message more than a day ahead of our clock would be
+			// marked invalid by the validator, and kept so for good.
+			// Usually it is our clock that is behind, so the message is
+			// held back instead: not stored, and the next fetch starts
+			// from it, to take it once the clock is right.
+			if (timestamp - clock.currentTimeMillis() > MAX_CLOCK_DIFFERENCE) {
+				if (p.heldBackAt == -1) {
+					p.heldBackAt = p.bytes;
+					p.heldBackMessages = p.messages;
+				}
+				p.messages++;
+				p.bytes = in.getBytesRead();
+				limited.allow(MAX_ENTRY_BYTES + 1);
+				continue;
+			}
 			if (wanted == null) {
 				wanted = getWantedIds(g);
 				channelKey = blogManager.getBlog(g).getAuthor()
