@@ -45,7 +45,14 @@ public interface ChannelConstants {
 	int FETCH_DELAY_INITIAL = 1;
 
 	/**
-	 * How often to fetch channels from their mirrors, in minutes.
+	 * Up to how many minutes are added at random to the first delay, so
+	 * the first fetch doesn't mark when Tor became active.
+	 */
+	int FETCH_DELAY_JITTER = 10;
+
+	/**
+	 * How often to fetch channels from their mirrors, in minutes. Each
+	 * channel is fetched once in each interval, at a random moment.
 	 */
 	int FETCH_INTERVAL = 30;
 

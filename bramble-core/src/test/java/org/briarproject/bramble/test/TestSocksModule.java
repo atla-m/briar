@@ -1,5 +1,7 @@
 package org.briarproject.bramble.test;
 
+import org.briarproject.bramble.api.plugin.IsolatedSocketFactory;
+
 import javax.net.SocketFactory;
 
 import dagger.Module;
@@ -11,6 +13,11 @@ public class TestSocksModule {
 	@Provides
 	SocketFactory provideSocketFactory() {
 		return SocketFactory.getDefault();
+	}
+
+	@Provides
+	IsolatedSocketFactory provideIsolatedSocketFactory() {
+		return isolationKey -> SocketFactory.getDefault();
 	}
 
 }

@@ -1,5 +1,6 @@
 package org.briarproject.bramble.socks;
 
+import org.briarproject.bramble.api.plugin.IsolatedSocketFactory;
 import org.briarproject.bramble.api.plugin.TorSocksPort;
 import org.briarproject.socks.SocksSocketFactory;
 
@@ -23,5 +24,17 @@ public class SocksModule {
 				torSocksPort);
 		return new SocksSocketFactory(proxy, CONNECT_TO_PROXY_TIMEOUT,
 				EXTRA_CONNECT_TIMEOUT, EXTRA_SOCKET_TIMEOUT);
+	}
+
+	@Provides
+	IsolatedSocketFactory provideIsolatedSocketFactory(
+			@TorSocksPort int torSocksPort) {
+		InetSocketAddress proxy = new InetSocketAddress("127.0.0.1",
+				torSocksPort);
+		// Tor puts streams with different SOCKS credentials on different
+		// circuits. The credentials go no further than Tor itself.
+		return isolationKey -> new SocksSocketFactory(proxy,
+				CONNECT_TO_PROXY_TIMEOUT, EXTRA_CONNECT_TIMEOUT,
+				EXTRA_SOCKET_TIMEOUT, isolationKey, "x");
 	}
 }

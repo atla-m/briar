@@ -2593,6 +2593,57 @@ public class ChannelManagerIntegrationTest
 				channelManager1.fetchChannel(g).getOutcome());
 	}
 
+	@Test
+	public void testATagIsOnlySentBackToTheMirrorThatGaveIt()
+			throws Exception {
+		// A mirror could give each subscriber a tag of its own. Sent to
+		// other mirrors, it would let them recognise the subscriber too.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] file = exportChannel(g);
+		List<String> wrongTags = new ArrayList<>();
+		MockWebServer[] servers = new MockWebServer[2];
+		for (int i = 0; i < 2; i++) {
+			String tag = "\"mirror" + i + "\"";
+			servers[i] = new MockWebServer();
+			servers[i].setDispatcher(new Dispatcher() {
+				@Override
+				public MockResponse dispatch(RecordedRequest request) {
+					String sent = request.getHeader("If-None-Match");
+					if (sent != null && !sent.equals(tag)) {
+						synchronized (wrongTags) {
+							wrongTags.add(sent);
+						}
+					}
+					if (tag.equals(sent))
+						return new MockResponse().setResponseCode(304);
+					if (request.getHeader("Range") != null) {
+						return new MockResponse().setResponseCode(416)
+								.setHeader("Content-Range",
+										"bytes */" + file.length);
+					}
+					return new MockResponse().setHeader("ETag", tag)
+							.setBody(new Buffer().write(file));
+				}
+			});
+			servers[i].start();
+		}
+		try {
+			channelManager0.setMirrors(g, asList(
+					servers[0].url("/c.briar").toString(),
+					servers[1].url("/c.briar").toString()));
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			for (int i = 0; i < 6; i++) channelManager1.fetchChannel(g);
+			awaitPendingMessageDelivery(1);
+			assertTrue(wrongTags.toString(), wrongTags.isEmpty());
+		} finally {
+			servers[0].shutdown();
+			servers[1].shutdown();
+		}
+	}
+
 	private boolean isStored(MessageId m) throws Exception {
 		try {
 			db1.transactionWithResult(true,

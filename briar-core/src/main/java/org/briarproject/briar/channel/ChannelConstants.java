@@ -24,8 +24,18 @@ interface ChannelConstants {
 	String GROUP_KEY_SHARE_WITH_CONTACTS = "channelShareWithContacts";
 	// The contacts chosen to get the posts; absent means every contact
 	String GROUP_KEY_SHARE_CONTACT_IDS = "channelShareContactIds";
+	// Validators for the whole channel, from before they were kept per
+	// mirror. No longer read, and cleared when the fetch state is stored.
 	String GROUP_KEY_ETAG = "channelEtag";
 	String GROUP_KEY_LAST_MODIFIED = "channelLastModified";
+
+	/**
+	 * Group metadata key for the validators each mirror gave for the
+	 * channel's file: a dictionary from the mirror's URL to a list of its
+	 * tag and its date, either of which may be null. Each is only ever
+	 * sent back to the mirror that gave it.
+	 */
+	String GROUP_KEY_VALIDATORS = "channelValidators";
 
 	/**
 	 * Group metadata key for how many bytes of the channel's published

@@ -31,6 +31,7 @@ import org.briarproject.bramble.api.identity.AuthorFactory;
 import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager.OpenDatabaseHook;
+import org.briarproject.bramble.api.plugin.IsolatedSocketFactory;
 import org.briarproject.bramble.api.plugin.TorConstants;
 import org.briarproject.bramble.api.plugin.TransportId;
 import org.briarproject.bramble.api.plugin.event.TransportActiveEvent;
@@ -89,8 +90,10 @@ import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
+import javax.net.SocketFactory;
 
 import okhttp3.HttpUrl;
+import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -125,6 +128,7 @@ import static org.briarproject.briar.api.blog.MessageType.WRAPPED_COMMENT;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_POST;
 import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_INITIAL;
+import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_JITTER;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_INTERVAL;
 import static org.briarproject.briar.api.channel.ChannelConstants.FILES_DIRECTORY;
 import static org.briarproject.briar.api.channel.ChannelConstants.FILE_EXTENSION;
@@ -150,6 +154,7 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.TOO_LARGE;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_ETAG;
+import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_VALIDATORS;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_MESSAGES;
 import static org.briarproject.briar.channel.ChannelConstants.MSG_KEY_FILE_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
@@ -219,6 +224,7 @@ class ChannelManagerImpl
 	private final ChannelContactSharing contactSharing;
 	private final WeakSingletonProvider<OkHttpClient> httpClientProvider;
 	private final SecureRandom secureRandom;
+	private final IsolatedSocketFactory isolatedSocketFactory;
 	private final AtomicBoolean fetcherStarted = new AtomicBoolean(false);
 	// Channels and files being fetched now, so that a scheduled fetch,
 	// "Fetch now" and the file triggers don't read the same bytes twice
@@ -248,8 +254,10 @@ class ChannelManagerImpl
 			TaskScheduler scheduler, @IoExecutor Executor ioExecutor,
 			WeakSingletonProvider<OkHttpClient> httpClientProvider,
 			ChannelContactSharing contactSharing,
-			SecureRandom secureRandom) {
+			SecureRandom secureRandom,
+			IsolatedSocketFactory isolatedSocketFactory) {
 		this.contactSharing = contactSharing;
+		this.isolatedSocketFactory = isolatedSocketFactory;
 		this.secureRandom = secureRandom;
 		this.db = db;
 		this.clientHelper = clientHelper;
@@ -331,8 +339,40 @@ class ChannelManagerImpl
 	private void startFetcher() {
 		if (fetcherStarted.getAndSet(true)) return;
 		LOG.info("Tor started, scheduling channel fetcher");
-		scheduler.scheduleWithFixedDelay(this::fetchAllChannels, ioExecutor,
-				FETCH_DELAY_INITIAL, FETCH_INTERVAL, MINUTES);
+		// The first round starts a random few minutes after Tor does, so
+		// the fetches don't mark the moment the phone came online
+		scheduleRound(MINUTES.toMillis(FETCH_DELAY_INITIAL) +
+				randomMillis(MINUTES.toMillis(FETCH_DELAY_JITTER)));
+	}
+
+	/**
+	 * Schedules a round of fetches. Each channel is fetched once in each
+	 * round, at a random moment of its own, so a site hosting several
+	 * channels can't link them by when they are fetched, and nobody can
+	 * tell when the next fetch is due.
+	 */
+	private void scheduleRound(long delayMs) {
+		scheduler.schedule(() -> {
+			long interval = MINUTES.toMillis(FETCH_INTERVAL);
+			try {
+				for (GroupId g : getChannelsToFetch()) {
+					scheduler.schedule(() -> {
+						try {
+							fetchChannel(g);
+						} catch (DbException e) {
+							logException(LOG, WARNING, e);
+						}
+					}, ioExecutor, randomMillis(interval), MILLISECONDS);
+				}
+			} catch (DbException e) {
+				logException(LOG, WARNING, e);
+			}
+			scheduleRound(interval);
+		}, ioExecutor, delayMs, MILLISECONDS);
+	}
+
+	private long randomMillis(long max) {
+		return (long) (secureRandom.nextDouble() * max);
 	}
 
 	@Override
@@ -751,9 +791,18 @@ class ChannelManagerImpl
 		});
 		FetchState state;
 		try {
-			state = new FetchState(
-					meta.getOptionalString(GROUP_KEY_ETAG),
-					meta.getOptionalString(GROUP_KEY_LAST_MODIFIED),
+			// Validators from mirrors the channel no longer has are
+			// dropped, so the stored list stays as short as the mirrors
+			BdfDictionary stored =
+					meta.getOptionalDictionary(GROUP_KEY_VALIDATORS);
+			BdfDictionary validators = new BdfDictionary();
+			if (stored != null) {
+				for (String mirror : mirrors) {
+					BdfList v = stored.getOptionalList(mirror);
+					if (v != null) validators.put(mirror, v);
+				}
+			}
+			state = new FetchState(validators,
 					meta.getLong(GROUP_KEY_FETCH_OFFSET, 0L),
 					meta.getLong(GROUP_KEY_FETCH_MESSAGES, 0L).intValue());
 		} catch (FormatException e) {
@@ -784,7 +833,7 @@ class ChannelManagerImpl
 			if (LOG.isLoggable(INFO)) {
 				LOG.info("Channel file changed, fetching in full");
 			}
-			FetchState fresh = new FetchState(null, null, 0, 0);
+			FetchState fresh = new FetchState(new BdfDictionary(), 0, 0);
 			Answers again = askMirrors(g, safe, fresh, false);
 			if (again.fetched != null) return fetched(g, again.fetched);
 			if (again.count() > 0) return again.combined();
@@ -821,7 +870,7 @@ class ChannelManagerImpl
 				// channel's real file, so the state is put back.
 				logException(LOG, INFO, e);
 				storeFetchState(g, state.offset, state.messages,
-						state.etag, state.lastModified);
+						state.validators);
 				answers.tooLarge++;
 			} catch (IOException e) {
 				logException(LOG, INFO, e);
@@ -892,17 +941,27 @@ class ChannelManagerImpl
 	 */
 	private static class FetchState {
 
-		@Nullable
-		private final String etag, lastModified;
+		private final BdfDictionary validators;
 		private final long offset;
 		private final int messages;
 
-		private FetchState(@Nullable String etag,
-				@Nullable String lastModified, long offset, int messages) {
-			this.etag = etag;
-			this.lastModified = lastModified;
+		private FetchState(BdfDictionary validators, long offset,
+				int messages) {
+			this.validators = validators;
 			this.offset = offset;
 			this.messages = messages;
+		}
+
+		@Nullable
+		private String etag(String mirror) throws FormatException {
+			BdfList v = validators.getOptionalList(mirror);
+			return v == null ? null : v.getOptionalString(0);
+		}
+
+		@Nullable
+		private String lastModified(String mirror) throws FormatException {
+			BdfList v = validators.getOptionalList(mirror);
+			return v == null ? null : v.getOptionalString(1);
 		}
 	}
 
@@ -935,19 +994,24 @@ class ChannelManagerImpl
 		if (url == null) throw new IOException("Not an HTTP URL");
 		Request.Builder b = new Request.Builder().url(url).get();
 		// Ask the mirror to send the file only if it has changed
-		if (state.etag != null) b.addHeader("If-None-Match", state.etag);
-		if (state.lastModified != null) {
-			b.addHeader("If-Modified-Since", state.lastModified);
+		// Only the tag and date this mirror gave are sent back to it. A
+		// mirror can give each subscriber a tag of its own, and another
+		// mirror sent it could recognise the subscriber by it.
+		String etag = state.etag(mirror);
+		String lastModified = state.lastModified(mirror);
+		if (etag != null) b.addHeader("If-None-Match", etag);
+		if (lastModified != null) {
+			b.addHeader("If-Modified-Since", lastModified);
 		}
 		if (resume) b.addHeader("Range", "bytes=" + state.offset + "-");
 		Response response =
-				httpClient().newCall(b.build()).execute();
+				httpClient(g).newCall(b.build()).execute();
 		try (ResponseBody body = response.body()) {
 			int code = response.code();
 			if (code == 304) {
 				// Without a tag or date to compare, the mirror can't know
 				// what we have, so this is withholding, not an answer
-				if (state.etag == null && state.lastModified == null)
+				if (etag == null && lastModified == null)
 					throw new IOException("Unchanged, but we didn't ask");
 				if (LOG.isLoggable(INFO)) LOG.info("Channel unchanged");
 				return new FetchResult(UNCHANGED, 0);
@@ -979,7 +1043,8 @@ class ChannelManagerImpl
 			} else {
 				total = body.contentLength();
 			}
-			return importFrom(g, body.byteStream(),
+			return importFrom(g, mirror, state.validators,
+					body.byteStream(),
 					ranged ? state.offset : 0,
 					ranged ? state.messages : 0, !ranged,
 					etagIfSendable(response),
@@ -992,9 +1057,18 @@ class ChannelManagerImpl
 		}
 	}
 
-	private OkHttpClient httpClient() {
-		// Shares the connection pool with the client it is built from
+	/**
+	 * Returns a client for fetching the given channel. Each channel is
+	 * fetched over Tor circuits of its own, and no connection is kept
+	 * open for the next fetch, so a site hosting several channels can't
+	 * tell from the connection that one subscriber reads them all.
+	 */
+	private OkHttpClient httpClient(GroupId g) {
+		SocketFactory sockets = isolatedSocketFactory.create(
+				"channel-" + toHexString(g.getBytes()));
 		return httpClientProvider.get().newBuilder()
+				.socketFactory(sockets)
+				.connectionPool(new ConnectionPool(0, 1, SECONDS))
 				.callTimeout(FETCH_TIMEOUT_MS, MILLISECONDS).build();
 	}
 
@@ -1083,7 +1157,8 @@ class ChannelManagerImpl
 	 * @param offset how many bytes of the file the stream starts after
 	 * @param messages how many of the file's messages we already stored
 	 */
-	private FetchResult importFrom(GroupId g, InputStream in, long offset,
+	private FetchResult importFrom(GroupId g, String mirror,
+			BdfDictionary validators, InputStream in, long offset,
 			int messages, boolean expectHeader, @Nullable String etag,
 			@Nullable String lastModified, long total)
 			throws DbException, IOException, FormatException {
@@ -1104,29 +1179,37 @@ class ChannelManagerImpl
 			// A mirror that served something else entirely, such as a
 			// "not found" page with status 200, has told us nothing about
 			// the channel's file, so what we knew of it is kept
-			if (p.started) storeState(g, offset, p, etag, lastModified, total);
+			if (p.started) {
+				storeState(g, offset, p, mirror, validators, etag,
+						lastModified, total);
+			}
 		}
 		return new FetchResult(FETCHED, p.messages);
 	}
 
 	private void storeState(GroupId g, long offset, Progress p,
-			@Nullable String etag, @Nullable String lastModified,
-			long total) throws DbException {
-		{
-			// The offset is where the last whole message ended, not how
-			// far the stream got, so a fetch that breaks in the middle of
-			// a message is continued from a place the next one can parse.
-			// The validators are only remembered once the whole file has
-			// been read, or the next fetch would be told there is nothing
-			// new while we are still missing the end of it. A mirror that
-			// said how long the file is, and served less, hasn't served
-			// the whole file either.
-			boolean complete = p.complete &&
-					(total < 0 || offset + p.bytes == total);
-			storeFetchState(g, offset + p.bytes, p.messagesBefore + p.messages,
-					complete ? etag : null,
-					complete ? lastModified : null);
+			String mirror, BdfDictionary validators, @Nullable String etag,
+			@Nullable String lastModified, long total) throws DbException {
+		// The offset is where the last whole message ended, not how far
+		// the stream got, so a fetch that breaks in the middle of a
+		// message is continued from a place the next one can parse.
+		// Validators are only remembered once the whole file has been
+		// read, or the next fetch would be told there is nothing new
+		// while we are still missing the end of it. A mirror that said
+		// how long the file is, and served less, hasn't served the whole
+		// file either. Until then no mirror's are kept: each describes a
+		// file we had read to the end, which we no longer have.
+		boolean complete = p.complete &&
+				(total < 0 || offset + p.bytes == total);
+		BdfDictionary kept = new BdfDictionary();
+		if (complete) {
+			kept.putAll(validators);
+			kept.put(mirror, BdfList.of(
+					etag == null ? NULL_VALUE : etag,
+					lastModified == null ? NULL_VALUE : lastModified));
 		}
+		storeFetchState(g, offset + p.bytes, p.messagesBefore + p.messages,
+				kept);
 	}
 
 	/**
@@ -1164,18 +1247,17 @@ class ChannelManagerImpl
 	}
 
 	private void storeFetchState(GroupId g, long offset, int messages,
-			@Nullable String etag, @Nullable String lastModified)
-			throws DbException {
+			BdfDictionary validators) throws DbException {
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(GROUP_KEY_FETCH_OFFSET, offset);
 		meta.put(GROUP_KEY_FETCH_MESSAGES, (long) messages);
-		// Both validators are always written, never left as they were.
-		// A tag or date we did not just receive describes some earlier
-		// file, and sending it back would have a mirror tell us there
-		// was nothing new about a file we have not finished reading.
-		meta.put(GROUP_KEY_ETAG, etag == null ? NULL_VALUE : etag);
-		meta.put(GROUP_KEY_LAST_MODIFIED,
-				lastModified == null ? NULL_VALUE : lastModified);
+		// The validators are always written whole, never merged with
+		// what was there: a tag or date we did not keep describes some
+		// earlier file, and sending it back would have a mirror tell us
+		// there was nothing new about a file we have not finished reading
+		meta.put(GROUP_KEY_VALIDATORS, validators);
+		meta.put(GROUP_KEY_ETAG, NULL_VALUE);
+		meta.put(GROUP_KEY_LAST_MODIFIED, NULL_VALUE);
 		db.transaction(false, txn -> {
 			try {
 				clientHelper.mergeGroupMetadata(txn, g, meta);
@@ -1188,19 +1270,7 @@ class ChannelManagerImpl
 	@Override
 	public void fetchAllChannels() {
 		try {
-			List<GroupId> toFetch = db.transactionWithResult(true, txn -> {
-				// An owner sets mirrors so the link carries them, but
-				// has nothing to fetch from them
-				Set<GroupId> owned = new HashSet<>();
-				for (Channel c : getChannels(txn)) owned.add(c.getBlogId());
-				List<GroupId> ids = new ArrayList<>();
-				for (GroupId g : blogManager.getBlogIds(txn)) {
-					if (owned.contains(g)) continue;
-					if (!getMirrors(txn, g).isEmpty()) ids.add(g);
-				}
-				return ids;
-			});
-			for (GroupId g : toFetch) {
+			for (GroupId g : getChannelsToFetch()) {
 				try {
 					fetchChannel(g);
 				} catch (DbException e) {
@@ -1210,6 +1280,21 @@ class ChannelManagerImpl
 		} catch (DbException e) {
 			logException(LOG, WARNING, e);
 		}
+	}
+
+	private List<GroupId> getChannelsToFetch() throws DbException {
+		return db.transactionWithResult(true, txn -> {
+			// An owner sets mirrors so the link carries them, but has
+			// nothing to fetch from them
+			Set<GroupId> owned = new HashSet<>();
+			for (Channel c : getChannels(txn)) owned.add(c.getBlogId());
+			List<GroupId> ids = new ArrayList<>();
+			for (GroupId g : blogManager.getBlogIds(txn)) {
+				if (owned.contains(g)) continue;
+				if (!getMirrors(txn, g).isEmpty()) ids.add(g);
+			}
+			return ids;
+		});
 	}
 
 	@Override
@@ -1463,7 +1548,7 @@ class ChannelManagerImpl
 		long offset = getFileFetchOffset(manifestId);
 		Request.Builder b = new Request.Builder().url(url).get();
 		if (offset > 0) b.addHeader("Range", "bytes=" + offset + "-");
-		Response response = httpClient().newCall(b.build()).execute();
+		Response response = httpClient(g).newCall(b.build()).execute();
 		try (ResponseBody body = response.body()) {
 			int code = response.code();
 			if (code == 416 && offset > 0) {
