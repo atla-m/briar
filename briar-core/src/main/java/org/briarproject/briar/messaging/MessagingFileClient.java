@@ -20,6 +20,7 @@ import javax.annotation.concurrent.Immutable;
 
 import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_REQUEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
@@ -49,6 +50,11 @@ class MessagingFileClient implements ChunkedFileStore.Client {
 	@Override
 	public int getChunkType() {
 		return FILE_CHUNK;
+	}
+
+	@Override
+	public int getRequestType() {
+		return FILE_REQUEST;
 	}
 
 	@Override

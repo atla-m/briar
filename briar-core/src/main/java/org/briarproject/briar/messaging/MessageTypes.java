@@ -17,4 +17,11 @@ interface MessageTypes {
 	 * transports such as Bluetooth, resuming where a lost connection left off.
 	 */
 	int FILE_CHUNK = 3;
+	/**
+	 * Asks for the chunks of a file its sender held back because it is
+	 * larger than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE}.
+	 * Unsigned; names only the manifest. Not shown as a message.
+	 */
+	int FILE_REQUEST = 4;
 }

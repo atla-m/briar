@@ -51,6 +51,7 @@ import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNIN
 import static org.briarproject.briar.api.privategroup.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.privategroup.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.privategroup.MessageType.FILE_MANIFEST;
+import static org.briarproject.briar.api.privategroup.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
@@ -111,6 +112,9 @@ class GroupMessageValidator extends BdfMessageValidator {
 				context = validateAttachment(m, list, bytesRead);
 			} else if (isType(list, FILE_CHUNK)) {
 				context = validateFileChunk(m, list, bytesRead);
+			} else if (isType(list, FILE_REQUEST)) {
+				if (!reader.eof()) throw new FormatException();
+				context = validateFileRequest(m, list);
 			} else {
 				// All other message types consist of a single list
 				if (!reader.eof()) throw new FormatException();
@@ -335,6 +339,17 @@ class GroupMessageValidator extends BdfMessageValidator {
 		// that references them by message ID. Return the metadata and no
 		// dependencies: chunks depend on the manifest, not the other way.
 		meta.put(KEY_TYPE, FILE_MANIFEST.getInt());
+		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		return new BdfMessageContext(meta);
+	}
+
+	private BdfMessageContext validateFileRequest(Message m, BdfList body)
+			throws FormatException {
+		// Unsigned, like manifests and chunks. It has no dependencies, so a
+		// member who doesn't hold the file still passes it on towards one
+		// who does
+		BdfDictionary meta = ChunkedFileStore.validateRequest(body);
+		meta.put(KEY_TYPE, FILE_REQUEST.getInt());
 		meta.put(KEY_TIMESTAMP, m.getTimestamp());
 		return new BdfMessageContext(meta);
 	}

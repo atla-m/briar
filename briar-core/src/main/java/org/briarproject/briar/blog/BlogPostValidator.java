@@ -72,6 +72,7 @@ import static org.briarproject.briar.api.blog.MessageType.COMMENT;
 import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
+import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 
 @Immutable
@@ -119,6 +120,9 @@ class BlogPostValidator extends BdfMessageValidator {
 				context = validateAttachment(m, list, bytesRead);
 			} else if (isType(list, FILE_CHUNK)) {
 				context = validateFileChunk(m, list, bytesRead);
+			} else if (isType(list, FILE_REQUEST)) {
+				if (!reader.eof()) throw new FormatException();
+				context = validateFileRequest(m, list);
 			} else {
 				// Every other type is a single list
 				if (!reader.eof()) throw new FormatException();
@@ -162,6 +166,16 @@ class BlogPostValidator extends BdfMessageValidator {
 		// shared file store, which the other clients use too
 		BdfDictionary meta = ChunkedFileStore.validateManifest(body);
 		meta.put(KEY_TYPE, FILE_MANIFEST.getInt());
+		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		return new BdfMessageContext(meta);
+	}
+
+	private BdfMessageContext validateFileRequest(Message m, BdfList body)
+			throws FormatException {
+		// Unsigned, like images, manifests and chunks, and without
+		// dependencies, so whoever doesn't hold the file passes it on
+		BdfDictionary meta = ChunkedFileStore.validateRequest(body);
+		meta.put(KEY_TYPE, FILE_REQUEST.getInt());
 		meta.put(KEY_TIMESTAMP, m.getTimestamp());
 		return new BdfMessageContext(meta);
 	}

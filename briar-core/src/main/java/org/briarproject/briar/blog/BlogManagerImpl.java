@@ -89,6 +89,7 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCR
 import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
+import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_COMMENT;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_POST;
@@ -173,6 +174,12 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 
 		if (type == FILE_MANIFEST) {
 			fileStore.incomingManifest(txn, m, meta);
+			return ACCEPT_SHARE;
+		}
+
+		if (type == FILE_REQUEST) {
+			// Shared onwards, so it reaches whoever holds the file
+			fileStore.incomingRequest(txn, m, meta);
 			return ACCEPT_SHARE;
 		}
 
@@ -357,6 +364,11 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	@Override
 	public FileStatus getFileStatus(FileHeader header) throws DbException {
 		return fileStore.getFileStatus(header);
+	}
+
+	@Override
+	public void requestFile(FileHeader header) throws DbException {
+		db.transaction(false, txn -> fileStore.requestFile(txn, header));
 	}
 
 	@Override

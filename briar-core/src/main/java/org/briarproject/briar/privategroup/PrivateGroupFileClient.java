@@ -20,6 +20,7 @@ import javax.annotation.concurrent.Immutable;
 
 import static org.briarproject.briar.api.privategroup.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.privategroup.MessageType.FILE_MANIFEST;
+import static org.briarproject.briar.api.privategroup.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_TIMESTAMP;
@@ -48,6 +49,11 @@ class PrivateGroupFileClient implements ChunkedFileStore.Client {
 	@Override
 	public int getChunkType() {
 		return FILE_CHUNK.getInt();
+	}
+
+	@Override
+	public int getRequestType() {
+		return FILE_REQUEST.getInt();
 	}
 
 	@Override

@@ -1,6 +1,7 @@
 package org.briarproject.briar.privategroup;
 
 import org.briarproject.bramble.api.FormatException;
+import org.briarproject.bramble.api.UniqueId;
 import org.briarproject.bramble.api.client.BdfMessageContext;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
@@ -42,6 +43,7 @@ import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNIN
 import static org.briarproject.briar.api.privategroup.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.privategroup.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.privategroup.MessageType.FILE_MANIFEST;
+import static org.briarproject.briar.api.privategroup.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
 import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
@@ -937,6 +939,35 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 		);
 		expectEncodeMetadata(meta);
 		validator.validateMessage(chunk, group);
+	}
+
+	@Test
+	public void testAcceptsFileRequest() throws Exception {
+		// Unsigned and without dependencies: a member who doesn't hold the
+		// file passes the request on towards one who does
+		Message request = getMessage(groupId, 100);
+		byte[] requested = getRandomId();
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_REQUEST.getInt(), requested));
+		expectReadEof(true);
+		BdfDictionary meta = BdfDictionary.of(
+				new BdfEntry(KEY_FILE_MANIFEST_ID, requested),
+				new BdfEntry(KEY_TYPE, FILE_REQUEST.getInt()),
+				new BdfEntry(KEY_TIMESTAMP, request.getTimestamp())
+		);
+		expectEncodeMetadata(meta);
+		assertEquals(0, validator.validateMessage(request, group)
+				.getDependencies().size());
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileRequestWithShortManifestId() throws Exception {
+		Message request = getMessage(groupId, 100);
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_REQUEST.getInt(),
+				getRandomBytes(UniqueId.LENGTH - 1)));
+		expectReadEof(true);
+		validator.validateMessage(request, group);
 	}
 
 	@Test(expected = InvalidMessageException.class)

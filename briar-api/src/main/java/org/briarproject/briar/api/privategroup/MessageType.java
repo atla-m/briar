@@ -28,7 +28,15 @@ public enum MessageType {
 	 * that files can be transferred and forwarded piece by piece over slow
 	 * or intermittent transports such as Bluetooth.
 	 */
-	FILE_CHUNK(4);
+	FILE_CHUNK(4),
+	/**
+	 * Asks for the chunks of a file its sender held back because it is
+	 * larger than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE}.
+	 * Unsigned and names only the manifest, so it doesn't say who asked.
+	 * Not shown as a message.
+	 */
+	FILE_REQUEST(5);
 
 	private final int value;
 

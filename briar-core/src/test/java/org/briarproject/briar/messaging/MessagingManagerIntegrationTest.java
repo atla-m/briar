@@ -57,6 +57,14 @@ import static org.briarproject.briar.test.BriarTestUtils.assertGroupCount;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_CHUNKS;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
+import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.fail;
@@ -389,6 +397,65 @@ public class MessagingManagerIntegrationTest
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		copyAndClose(messagingManager1.getFile(received), out);
 		assertArrayEquals(fileBytes, out.toByteArray());
+	}
+
+	@Test
+	public void testHoldsBackALargeFileUntilAsked() throws Exception {
+		// A file too large to send without being asked for arrives as its
+		// manifest alone, so the recipient sees its name and size, and its
+		// chunks follow only once the recipient asks
+		byte[] fileBytes = getRandomBytes((int) MAX_PUSHED_FILE_SIZE + 1);
+		int chunks = (int) ((fileBytes.length + FILE_CHUNK_PAYLOAD_LENGTH - 1)
+				/ FILE_CHUNK_PAYLOAD_LENGTH);
+		GroupId g = messagingManager0.getConversationId(contactId);
+		FileHeader file = messagingManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "clip.mp4", "video/mp4",
+				() -> new ByteArrayInputStream(fileBytes));
+		PrivateMessage m = messageFactory.createPrivateMessage(g,
+				c0.getClock().currentTimeMillis(), null, emptyList(),
+				singletonList(file), NO_AUTO_DELETE_TIMER);
+		messagingManager0.addLocalMessage(m);
+		// The message and the manifest, and no chunks
+		syncMessage(c0, c1, contactId, 2, true);
+
+		PrivateMessageHeader h =
+				(PrivateMessageHeader) getMessages(c1).iterator().next();
+		FileHeader received = h.getFileHeaders().get(0);
+		assertEquals(fileBytes.length, received.getSize());
+		FileStatus before = messagingManager1.getFileStatus(received);
+		assertTrue(before.isManifestReceived());
+		assertEquals(0, before.getChunksReceived());
+		assertTrue(before.isAwaitingRequest());
+
+		messagingManager1.requestFile(received);
+		FileStatus asked = messagingManager1.getFileStatus(received);
+		assertTrue(asked.isRequested());
+		assertFalse(asked.isAwaitingRequest());
+		// Asking twice sends nothing new
+		messagingManager1.requestFile(received);
+		syncMessage(c1, c0, contactId, 1, true);
+		// The request releases the chunks
+		syncMessage(c0, c1, contactId, chunks, true);
+
+		assertTrue(messagingManager1.getFileStatus(received).isComplete());
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		copyAndClose(messagingManager1.getFile(received), out);
+		assertArrayEquals(fileBytes, out.toByteArray());
+	}
+
+	@Test
+	public void testTheLargestFilesManifestFitsInAMessage() throws Exception {
+		// The file size limit is chosen so that a manifest can list every
+		// chunk of the largest file with the longest name and type allowed
+		BdfList hashes = new BdfList();
+		for (int i = 0; i < MAX_FILE_CHUNKS; i++) {
+			hashes.add(getRandomId());
+		}
+		byte[] body = c0.getClientHelper().toByteArray(BdfList.of(
+				FILE_MANIFEST, getRandomString(MAX_FILE_NAME_LENGTH),
+				getRandomString(MAX_CONTENT_TYPE_BYTES), MAX_FILE_SIZE,
+				hashes));
+		assertTrue(body.length <= MAX_MESSAGE_BODY_LENGTH);
 	}
 
 	@Test

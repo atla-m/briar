@@ -55,6 +55,7 @@ import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYT
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MIN_HONEST_MESSAGE_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -689,6 +690,44 @@ public class ChannelManagerIntegrationTest
 						tampered.getTimestamp(), tampered.getBody()))));
 		awaitPendingMessageValidation(1);
 		assertTrue(blogManager1.getPostHeaders(g).isEmpty());
+	}
+
+	@Test
+	public void testHoldsBackALargeFileUntilASubscriberAsks()
+			throws Exception {
+		// Between contacts, a channel's large file arrives as its manifest
+		// alone, and follows when a subscriber asks for it
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		Blog subscribed = blogFactory
+				.createChannelBlog(channel.getLocalAuthor());
+		db1.transaction(false, txn -> blogManager1.addBlog(txn, subscribed));
+		shareBothWays(g);
+
+		byte[] fileBytes = getRandomBytes((int) MAX_PUSHED_FILE_SIZE + 1);
+		int chunks = (int) ((fileBytes.length + FILE_CHUNK_PAYLOAD_LENGTH - 1)
+				/ FILE_CHUNK_PAYLOAD_LENGTH);
+		FileHeader file = blogManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "clip.mp4", "video/mp4",
+				() -> new ByteArrayInputStream(fileBytes));
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				c0.getClock().currentTimeMillis() + 1, null,
+				channel.getLocalAuthor(), "Watch this", emptyList(),
+				singletonList(file));
+		blogManager0.addLocalPost(post);
+
+		// The post and the manifest, and no chunks
+		sync0To1(2, true);
+		assertTrue(blogManager1.getFileStatus(file).isAwaitingRequest());
+
+		blogManager1.requestFile(file);
+		sync1To0(1, true);
+		sync0To1(chunks, true);
+
+		assertTrue(blogManager1.getFileStatus(file).isComplete());
+		ByteArrayOutputStream read = new ByteArrayOutputStream();
+		copyAndClose(blogManager1.getFile(file), read);
+		assertArrayEquals(fileBytes, read.toByteArray());
 	}
 
 	@Test

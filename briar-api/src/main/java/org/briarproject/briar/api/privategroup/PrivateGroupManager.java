@@ -148,6 +148,15 @@ public interface PrivateGroupManager {
 	FileStatus getFileStatus(FileHeader header) throws DbException;
 
 	/**
+	 * Asks for the chunks of a file its sender held back because it is
+	 * larger than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE}.
+	 * Once whoever holds it receives the request, the file goes to every
+	 * member it reaches, not only to us.
+	 */
+	void requestFile(FileHeader header) throws DbException;
+
+	/**
 	 * Returns how much of the given file has been received.
 	 */
 	FileStatus getFileStatus(Transaction txn, FileHeader header)

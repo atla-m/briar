@@ -24,6 +24,7 @@ import static org.briarproject.briar.api.blog.BlogConstants.KEY_TYPE;
 import static org.briarproject.briar.api.blog.BlogConstants.MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
 import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
+import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 
 /**
@@ -48,6 +49,11 @@ class BlogFileClient implements ChunkedFileStore.Client {
 	@Override
 	public int getChunkType() {
 		return FILE_CHUNK.getInt();
+	}
+
+	@Override
+	public int getRequestType() {
+		return FILE_REQUEST.getInt();
 	}
 
 	@Override

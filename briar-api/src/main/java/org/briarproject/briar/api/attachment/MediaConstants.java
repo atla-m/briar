@@ -33,12 +33,31 @@ public interface MediaConstants {
 	int FILE_CHUNK_PAYLOAD_LENGTH = MAX_MESSAGE_BODY_LENGTH - 48;
 
 	/**
-	 * The maximum size of a file shared in a private group or a private
-	 * conversation. Files are stored by every member of a group and are
-	 * often transferred over Bluetooth or other slow transports, so this is
-	 * deliberately modest.
+	 * The maximum size of a file shared in a private group, a private
+	 * conversation or a blog. This is the largest file one manifest can
+	 * describe: a manifest lists every chunk's hash in a single message, so
+	 * it can list about 950 chunks, and this leaves a margin below that.
+	 * Every device applies the same limit, so a file that is valid for one
+	 * member is valid for all and anyone who holds it can pass it on.
 	 */
-	long MAX_FILE_SIZE = 10L * 1024 * 1024;
+	long MAX_FILE_SIZE = 29L * 1024 * 1024;
+
+	/**
+	 * Files up to this size are sent to everyone who can see them, as soon
+	 * as the message that shares them is sent. Larger files are held back:
+	 * only their manifest is sent, so recipients see the name and size, and
+	 * the chunks follow when someone asks for them. This is the size files
+	 * were limited to before, so every file that could be sent before
+	 * still spreads exactly as it did.
+	 */
+	long MAX_PUSHED_FILE_SIZE = 10L * 1024 * 1024;
+
+	/**
+	 * The largest a chunked image may be after compression. Images are
+	 * decoded and compressed whole in memory, so this stays independent of
+	 * {@link #MAX_FILE_SIZE}.
+	 */
+	long MAX_CHUNKED_IMAGE_SIZE = 10L * 1024 * 1024;
 
 	/**
 	 * The free space, in bytes, that storing a file of our own must leave

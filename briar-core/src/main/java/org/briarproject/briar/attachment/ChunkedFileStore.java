@@ -6,6 +6,7 @@ import org.briarproject.bramble.api.UniqueId;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseConfig;
@@ -44,6 +45,7 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_T
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_CHUNKS;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MIN_FREE_SPACE_AFTER_FILE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
@@ -112,6 +114,12 @@ public class ChunkedFileStore {
 	public static final String KEY_FILE_CHUNK_INDEX = "fileChunkIndex";
 
 	/**
+	 * Manifest metadata key: true once we have asked for the file's chunks.
+	 * Only set on a manifest that arrived from someone else.
+	 */
+	public static final String KEY_FILE_REQUESTED = "fileRequested";
+
+	/**
 	 * Label for hashing a chunk's index and bytes.
 	 */
 	private static final String LABEL_CHUNK_HASH =
@@ -133,6 +141,12 @@ public class ChunkedFileStore {
 		 * element of a chunk's descriptor.
 		 */
 		int getChunkType();
+
+		/**
+		 * Returns the client's message type for a request for a file's
+		 * chunks, which is the first element of a request's body.
+		 */
+		int getRequestType();
 
 		/**
 		 * Returns the metadata identifying a locally created manifest or
@@ -244,6 +258,37 @@ public class ChunkedFileStore {
 		meta.put(KEY_FILE_MANIFEST_ID, manifestId);
 		meta.put(KEY_FILE_CHUNK_INDEX, index);
 		return meta;
+	}
+
+	/**
+	 * Checks the body of a request for a file's chunks and returns the
+	 * metadata naming the file. Call from the client's validator, which adds
+	 * its own metadata.
+	 * <p>
+	 * A request is unsigned and names nothing but the manifest. Its
+	 * timestamp is fixed by the manifest's, so everyone who asks for the
+	 * same file creates the same message: a request can't say who made it,
+	 * and a group asking many times carries one message, not many.
+	 */
+	public static BdfDictionary validateRequest(BdfList body)
+			throws FormatException {
+		// Message type, manifest ID
+		checkSize(body, 2);
+		byte[] manifestId = body.getRaw(1);
+		checkLength(manifestId, UniqueId.LENGTH);
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(KEY_FILE_MANIFEST_ID, manifestId);
+		return meta;
+	}
+
+	/**
+	 * Returns the timestamp of a request for the file with the given
+	 * manifest timestamp. The manifest takes its own timestamp and the
+	 * chunks the next; the request takes the one after, so it is the same
+	 * for everyone.
+	 */
+	static long getRequestTimestamp(long manifestTimestamp) {
+		return manifestTimestamp + 2;
 	}
 
 	/**
@@ -452,17 +497,77 @@ public class ChunkedFileStore {
 	}
 
 	/**
-	 * Marks a locally created file's manifest and chunks as shared and
-	 * permanent, so they are sent to contacts and not cleaned up. Called
-	 * when the message that references the file is added.
+	 * Marks a locally created file's manifest and chunks as permanent, so
+	 * they are not cleaned up, and shares them so they are sent. Called when
+	 * the message that references the file is added.
+	 * <p>
+	 * A file larger than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE}
+	 * is held back: only its manifest is shared, so recipients learn its
+	 * name and size, and its chunks are shared when a request for them
+	 * arrives. Once shared they go to everyone who can see the group, as
+	 * any shared message does.
 	 */
 	public void shareFile(Transaction txn, GroupId g, MessageId manifestId)
 			throws DbException {
+		boolean push;
+		try {
+			BdfDictionary meta =
+					clientHelper.getMessageMetadataAsDictionary(txn,
+							manifestId);
+			push = meta.getLong(KEY_FILE_SIZE) <= MAX_PUSHED_FILE_SIZE;
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
 		db.setMessageShared(txn, manifestId);
 		db.setMessagePermanent(txn, manifestId);
 		for (MessageId chunkId : getChunkIds(txn, g, manifestId)) {
-			db.setMessageShared(txn, chunkId);
+			if (push) db.setMessageShared(txn, chunkId);
 			db.setMessagePermanent(txn, chunkId);
+		}
+	}
+
+	/**
+	 * Asks for a held-back file's chunks. The request goes to everyone who
+	 * can see the group, and whoever holds the file shares its chunks when
+	 * it arrives. Asking again, or after someone else has asked, sends
+	 * nothing new: the request is the same message whoever makes it.
+	 */
+	public void requestFile(Transaction txn, FileHeader header)
+			throws DbException {
+		GroupId g = header.getGroupId();
+		MessageId manifestId = header.getManifestId();
+		try {
+			long manifestTimestamp =
+					db.getMessage(txn, manifestId).getTimestamp();
+			long timestamp = getRequestTimestamp(manifestTimestamp);
+			int type = client.getRequestType();
+			BdfList body = BdfList.of(type, manifestId);
+			Message request = clientHelper.createMessage(g, timestamp, body);
+			BdfDictionary meta = client.getLocalFileMetadata(type, timestamp);
+			meta.put(KEY_FILE_MANIFEST_ID, manifestId);
+			// Does nothing if someone else's identical request is here
+			clientHelper.addLocalMessage(txn, request, meta, true, false);
+			clientHelper.mergeMessageMetadata(txn, manifestId,
+					BdfDictionary.of(new BdfEntry(KEY_FILE_REQUESTED, true)));
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+	}
+
+	/**
+	 * Handles an incoming request for a file's chunks. Call from the
+	 * client's incoming message hook. If we hold any of the file's chunks
+	 * they are shared, which sends them to everyone who can see the group;
+	 * chunks we received are shared already, so in practice this releases
+	 * a file we sent and held back.
+	 */
+	public void incomingRequest(Transaction txn, Message m,
+			BdfDictionary meta) throws DbException, FormatException {
+		MessageId manifestId = new MessageId(meta.getRaw(KEY_FILE_MANIFEST_ID));
+		for (MessageId chunkId : getChunkIds(txn, m.getGroupId(),
+				manifestId)) {
+			db.setMessageShared(txn, chunkId);
 		}
 	}
 
@@ -583,19 +688,22 @@ public class ChunkedFileStore {
 	 */
 	public FileStatus getFileStatus(Transaction txn, FileHeader header)
 			throws DbException {
+		BdfDictionary manifestMeta;
 		try {
-			clientHelper.getMessageMetadataAsDictionary(txn,
+			manifestMeta = clientHelper.getMessageMetadataAsDictionary(txn,
 					header.getManifestId());
 		} catch (NoSuchMessageException e) {
 			// Without the manifest no chunk can have been delivered
-			return new FileStatus(header, false, 0);
+			return new FileStatus(header, false, 0, false);
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
 		try {
 			int received = countChunks(txn, header.getGroupId(),
 					header.getManifestId());
-			return new FileStatus(header, true, received);
+			boolean requested =
+					manifestMeta.getBoolean(KEY_FILE_REQUESTED, false);
+			return new FileStatus(header, true, received, requested);
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}

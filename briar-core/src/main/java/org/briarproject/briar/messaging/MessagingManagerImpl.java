@@ -81,11 +81,13 @@ import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMA
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_ONLY;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_REQUEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
@@ -217,6 +219,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 				fileStore.incomingManifest(txn, m, metaDict);
 			} else if (messageType == FILE_CHUNK) {
 				fileStore.incomingChunk(txn, m, metaDict);
+			} else if (messageType == FILE_REQUEST) {
+				fileStore.incomingRequest(txn, m, metaDict);
 			} else {
 				throw new InvalidMessageException();
 			}
@@ -473,6 +477,11 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 	}
 
 	@Override
+	public void requestFile(FileHeader header) throws DbException {
+		db.transaction(false, txn -> fileStore.requestFile(txn, header));
+	}
+
+	@Override
 	public FileStatus getFileStatus(Transaction txn, FileHeader header)
 			throws DbException {
 		return fileStore.getFileStatus(txn, header);
@@ -630,7 +639,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			ContactId c) throws DbException {
 		int minorVersion = clientVersioningManager
 				.getClientMinorVersion(txn, c, CLIENT_ID, 0);
-		if (minorVersion >= 5) return TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+		if (minorVersion >= 6) return TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
+		else if (minorVersion >= 5) return TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
 		else if (minorVersion >= 4) return TEXT_IMAGES_AUTO_DELETE_FILES;
 		else if (minorVersion >= 3) return TEXT_IMAGES_AUTO_DELETE;
 		else if (minorVersion >= 1) return TEXT_IMAGES;

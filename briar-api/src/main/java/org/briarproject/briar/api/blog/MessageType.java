@@ -8,7 +8,8 @@ public enum MessageType {
 	WRAPPED_COMMENT(3),
 	ATTACHMENT(4),
 	FILE_MANIFEST(5),
-	FILE_CHUNK(6);
+	FILE_CHUNK(6),
+	FILE_REQUEST(7);
 
 	int value;
 
@@ -32,6 +33,8 @@ public enum MessageType {
 				return FILE_MANIFEST;
 			case 6:
 				return FILE_CHUNK;
+			case 7:
+				return FILE_REQUEST;
 			default:
 				throw new IllegalArgumentException();
 		}
