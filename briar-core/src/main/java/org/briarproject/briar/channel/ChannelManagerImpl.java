@@ -128,9 +128,11 @@ import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
+import static org.briarproject.briar.api.blog.MessageType.COMMENT;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_COMMENT;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_POST;
+import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_COMMENT;
 import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_INITIAL;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_JITTER;
@@ -146,6 +148,7 @@ import static org.briarproject.briar.api.channel.ChannelConstants.MAX_IMPORT_MES
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_LINK_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRRORS;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRROR_LENGTH;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_FETCH_BYTES_WITHOUT_NEWS;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
@@ -1058,9 +1061,12 @@ class ChannelManagerImpl
 			if (!response.isSuccessful() || body == null)
 				throw new IOException("Response " + code);
 			// A mirror that doesn't do ranges answers 200 with the whole
-			// file, which is the first fetch all over again
+			// file. The part we have is read past rather than stored or
+			// counted again, and must end where the rest begins, or it
+			// isn't the file we were reading. The file's limits still
+			// apply to the whole file, so a 200 isn't a fresh budget.
 			boolean ranged = resume && code == 206;
-			long total;
+			long total, prefix = 0;
 			if (ranged) {
 				long start = rangeStart(response);
 				if (start != -1 && start != state.offset)
@@ -1068,13 +1074,19 @@ class ChannelManagerImpl
 				total = totalLength(response);
 			} else {
 				total = body.contentLength();
+				if (resume) {
+					// A file shorter than our part isn't the one we read
+					if (total != -1 && total < state.offset)
+						throw new ChangedFileException();
+					prefix = state.offset;
+				}
 			}
 			return importFrom(g, mirror, state.validators,
 					body.byteStream(),
 					ranged ? state.offset : 0,
-					ranged ? state.messages : 0, !ranged,
+					resume ? state.messages : 0, !ranged,
 					etagIfSendable(response),
-					lastModifiedIfSettled(response), total);
+					lastModifiedIfSettled(response), total, prefix);
 		} catch (FormatException e) {
 			// The mirror served something that isn't this channel, or
 			// isn't the rest of the file we were reading
@@ -1189,13 +1201,23 @@ class ChannelManagerImpl
 	 * @param offset how many bytes of the file the stream starts after
 	 * @param messages how many of the file's messages we already stored
 	 */
+	/**
+	 * Reads a mirror's answer and stores what it carries.
+	 *
+	 * @param offset where in the file the stream starts
+	 * @param prefix how many bytes at the start of the stream we already
+	 * have, which are read past, when a mirror that doesn't do ranges
+	 * serves the whole file
+	 */
 	private FetchResult importFrom(GroupId g, String mirror,
 			BdfDictionary validators, InputStream in, long offset,
 			int messages, boolean expectHeader, @Nullable String etag,
-			@Nullable String lastModified, long total)
+			@Nullable String lastModified, long total, long prefix)
 			throws DbException, IOException, FormatException {
 		Progress p = new Progress(MAX_STREAM_BYTES - offset, messages,
 				MAX_STREAM_MESSAGES);
+		p.skip = prefix;
+		p.prefix = prefix > 0;
 		CountingInputStream counted = countUpTo(in, p);
 		try {
 			importEntries(g, counted, expectHeader, false, p);
@@ -1215,6 +1237,12 @@ class ChannelManagerImpl
 				storeState(g, offset, p, mirror, validators, etag,
 						lastModified, total);
 			}
+		}
+		// A mirror that served the file we have, and nothing after it
+		// we didn't have, has told us there is nothing new, not served
+		// us the channel
+		if (p.stored == 0 && (p.prefix || p.stopped)) {
+			return new FetchResult(UNCHANGED, 0);
 		}
 		return new FetchResult(FETCHED, p.messages);
 	}
@@ -1278,9 +1306,21 @@ class ChannelManagerImpl
 		private long bytes = 0;
 		private boolean started = false;
 		private boolean complete = false;
-		// Bytes at the start of a file too large to read whole, which are
-		// read past rather than stored
+		// Bytes at the start of the stream which are read past rather
+		// than stored: the start of a file too large to read whole, or
+		// the part of the file we already have
 		private long skip = 0;
+		// Whether the skipped bytes are the part we have, which must end
+		// where an entry does, and whether that has been checked
+		private boolean prefix = false, prefixChecked = false;
+		// Messages stored that we didn't have; bytes of the channel's
+		// messages we already had; bytes of entries that aren't the
+		// channel's. Past a limit on either of the last two the stream
+		// is left unread, so a mirror can't keep us reading what gets us
+		// nothing.
+		private int stored = 0;
+		private long known = 0, junk = 0;
+		private boolean stopped = false;
 		// Where the first message held back for being from the future
 		// starts, and how many messages came before it, or -1
 		private long heldBackAt = -1;
@@ -1790,7 +1830,7 @@ class ChannelManagerImpl
 			BdfReader r = bdfReaderFactory.createReader(
 					new ByteArrayInputStream(m.getBody()));
 			BdfList list = r.readList();
-			if (list.isEmpty()) return true;
+			if (list.isEmpty()) return false;
 			long type = list.getLong(0);
 			if (type == FILE_REQUEST.getInt()) return false;
 			// A wrapped post is checked against a key it carries itself,
@@ -1807,14 +1847,16 @@ class ChannelManagerImpl
 				return manifestId.length == MessageId.LENGTH &&
 						wanted.contains(new MessageId(manifestId));
 			}
-			if (type == POST.getInt() && list.size() == 4) {
-				// [type, text, headers, signature]: each header is
-				// [id, contentType] or [manifestId, contentType, name, size]
+			if (type == POST.getInt()) {
+				// [type, text, signature] or [type, text, headers,
+				// signature]: each header is [id, contentType] or
+				// [manifestId, contentType, name, size]
+				if (list.size() != 3 && list.size() != 4) return false;
 				String text = list.getOptionalString(1);
-				BdfList headers = list.getList(2);
-				byte[] sig = list.getRaw(3);
-				List<MessageId> ids = new ArrayList<>(headers.size());
-				for (int i = 0; i < headers.size(); i++) {
+				BdfList headers = list.size() == 4 ? list.getList(2) : null;
+				byte[] sig = list.getRaw(list.size() - 1);
+				List<MessageId> ids = new ArrayList<>();
+				for (int i = 0; headers != null && i < headers.size(); i++) {
 					BdfList h = headers.getList(i);
 					if (h.isEmpty()) return false;
 					byte[] id = h.getRaw(0);
@@ -1823,7 +1865,8 @@ class ChannelManagerImpl
 				}
 				// Only the channel's own posts can make an unsigned image
 				// or file wanted. A forged post is skipped now, so it is
-				// never stored.
+				// never stored, and a mirror can't pad a file with posts
+				// the validator would only refuse later.
 				BdfList signed = BlogPostValidator.getSignedPost(
 						m.getGroupId(), m.getTimestamp(), text, headers);
 				try {
@@ -1833,11 +1876,35 @@ class ChannelManagerImpl
 					return false;
 				}
 				wanted.addAll(ids);
+				return true;
 			}
-			return true;
+			if (type == COMMENT.getInt()) {
+				// [type, comment, parent original ID, parent ID, signature]
+				if (list.size() != 5) return false;
+				String comment = list.getOptionalString(1);
+				byte[] parentOriginalId = list.getRaw(2);
+				byte[] parentId = list.getRaw(3);
+				byte[] sig = list.getRaw(4);
+				if (parentOriginalId.length != MessageId.LENGTH ||
+						parentId.length != MessageId.LENGTH) {
+					return false;
+				}
+				BdfList signed = BdfList.of(m.getGroupId(), m.getTimestamp(),
+						comment, new MessageId(parentOriginalId),
+						new MessageId(parentId));
+				try {
+					clientHelper.verifySignature(sig, SIGNING_LABEL_COMMENT,
+							signed, channelKey);
+				} catch (GeneralSecurityException e) {
+					return false;
+				}
+				return true;
+			}
+			// A type we don't know is one the validator doesn't either
+			return false;
 		} catch (IOException e) {
-			// Leave it to the validator
-			return true;
+			// Not a message of this client: junk
+			return false;
 		}
 	}
 
@@ -2125,6 +2192,8 @@ class ChannelManagerImpl
 		p.started = true;
 		Set<MessageId> wanted = null;
 		PublicKey channelKey = null;
+		// Where the last entry ended, whether or not it was the channel's
+		long last = p.bytes;
 		// Each entry may use one byte more than the largest entry, since
 		// the reader looks one byte ahead to find where the stream ends
 		limited.allow(MAX_ENTRY_BYTES + 1);
@@ -2139,6 +2208,12 @@ class ChannelManagerImpl
 			// Entries before the part of a file we can take are read
 			// past, without being stored or counted
 			boolean skipped = in.getBytesRead() < p.skip;
+			// The part we have must end exactly where the first entry
+			// we take begins, or this isn't the file we were reading
+			if (!skipped && p.prefix && !p.prefixChecked) {
+				if (p.bytes != p.skip) throw new FormatException();
+				p.prefixChecked = true;
+			}
 			BdfList entry = r.readList();
 			checkSize(entry, 2);
 			long timestamp = entry.getLong(0);
@@ -2158,22 +2233,7 @@ class ChannelManagerImpl
 			// the owner's file never carries. Skipped entries still count
 			// against the budget.
 			if (skipped) {
-				p.bytes = in.getBytesRead();
-				limited.allow(MAX_ENTRY_BYTES + 1);
-				continue;
-			}
-			// A message more than a day ahead of our clock would be
-			// marked invalid by the validator, and kept so for good.
-			// Usually it is our clock that is behind, so the message is
-			// held back instead: not stored, and the next fetch starts
-			// from it, to take it once the clock is right.
-			if (timestamp - clock.currentTimeMillis() > MAX_CLOCK_DIFFERENCE) {
-				if (p.heldBackAt == -1) {
-					p.heldBackAt = p.bytes;
-					p.heldBackMessages = p.messages;
-				}
-				p.messages++;
-				p.bytes = in.getBytesRead();
+				p.bytes = last = in.getBytesRead();
 				limited.allow(MAX_ENTRY_BYTES + 1);
 				continue;
 			}
@@ -2182,27 +2242,83 @@ class ChannelManagerImpl
 				channelKey = blogManager.getBlog(g).getAuthor()
 						.getPublicKey();
 			}
-			if (isWanted(m, requireNonNull(channelKey), wanted)) {
-				db.transaction(false, txn -> {
-					if (!db.containsGroup(txn, g))
-						throw new NoSuchChannelException();
-					db.importMessage(txn, m);
-				});
+			boolean take = isWanted(m, requireNonNull(channelKey), wanted);
+			// A message more than a day ahead of our clock would be
+			// marked invalid by the validator, and kept so for good.
+			// Usually it is our clock that is behind, so the message is
+			// held back instead: not stored, and the next fetch starts
+			// from it, to take it once the clock is right. Only one the
+			// channel signed, or a post of its carries, is waited for.
+			if (take && timestamp - clock.currentTimeMillis() >
+					MAX_CLOCK_DIFFERENCE) {
+				if (p.heldBackAt == -1) {
+					p.heldBackAt = p.bytes;
+					p.heldBackMessages = p.messages;
+				}
+				p.messages++;
+				p.bytes = last = in.getBytesRead();
+				limited.allow(MAX_ENTRY_BYTES + 1);
+				continue;
 			}
-			// Counted once it has been stored, so a fetch that fails
-			// part way through an entry doesn't spend the file's budget
-			// on a message it never imported
-			p.messages++;
+			boolean isNew = take && db.transactionWithResult(false, txn -> {
+				if (!db.containsGroup(txn, g))
+					throw new NoSuchChannelException();
+				boolean held = isHeld(txn, m.getId());
+				db.importMessage(txn, m);
+				return !held;
+			});
 			// The reader has no bytes in hand between messages, so this
 			// is exactly where the message ended
-			p.bytes = in.getBytesRead();
+			long end = in.getBytesRead();
+			if (take) {
+				// Counted once it has been stored, so a fetch that fails
+				// part way through an entry doesn't spend the file's
+				// budget on a message it never imported
+				p.messages++;
+				if (isNew) p.stored++;
+				else p.known += end - last;
+				p.bytes = end;
+			} else {
+				// An entry that isn't the channel's is read past, and the
+				// next fetch starts before it, so junk is never counted
+				// as part of the file
+				p.junk += end - last;
+			}
+			last = end;
 			limited.allow(MAX_ENTRY_BYTES + 1);
+			// A stream that goes on with junk, or with messages we have,
+			// is left here. What it brought is kept, so an honest file we
+			// mostly have is read a part at a time; a padded one is a
+			// mirror that failed, since the rest can't be read past
+			if (p.junk > MAX_FETCH_BYTES_WITHOUT_NEWS) {
+				throw new IOException("Stream padded with junk");
+			}
+			if (p.known > MAX_FETCH_BYTES_WITHOUT_NEWS) {
+				if (LOG.isLoggable(INFO)) {
+					LOG.info("Stream brings nothing new, leaving the rest");
+				}
+				p.stopped = true;
+				break;
+			}
 		}
 		// The stream was allowed one byte beyond the budget, so having
 		// read that byte means the file is larger than we will store
 		if (in.getBytesRead() > p.budget)
 			throw new ChannelTooLargeException("Channel is too large");
-		p.complete = true;
+		// A stream that ended within the part we have, or whose entries
+		// straddle its end, isn't the file we were reading
+		if (p.prefix && !p.prefixChecked && p.bytes != p.skip)
+			throw new FormatException();
+		p.complete = !p.stopped;
+	}
+
+	private boolean isHeld(Transaction txn, MessageId m) throws DbException {
+		try {
+			db.getMessageState(txn, m);
+			return true;
+		} catch (NoSuchMessageException e) {
+			return false;
+		}
 	}
 
 	private void storeChannels(Transaction txn, List<Channel> channels)

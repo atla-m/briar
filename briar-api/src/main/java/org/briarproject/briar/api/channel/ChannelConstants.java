@@ -113,6 +113,18 @@ public interface ChannelConstants {
 			(int) (MAX_STREAM_BYTES / MIN_HONEST_MESSAGE_BYTES);
 
 	/**
+	 * The most bytes one fetch will read from a mirror, past the part of
+	 * the file we already have, without storing a new message. An honest
+	 * file is appended to, so every entry past our part is new, except
+	 * messages we already got from contacts or a file; those are read
+	 * this much at a time, over several fetches. A mirror padding the
+	 * file with junk, or serving the same file again as if it were new,
+	 * gets no further than this per fetch, and {@link #MAX_STREAM_BYTES}
+	 * no longer bounds only what the file may cost over its life.
+	 */
+	long MAX_FETCH_BYTES_WITHOUT_NEWS = 2L * 1024 * 1024;
+
+	/**
 	 * The largest channel file we will read when the user opens one by
 	 * hand. Each file is counted on its own, because the user chose it,
 	 * and reading the same file again stores nothing new; so this can be

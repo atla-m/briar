@@ -71,8 +71,10 @@ import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.bramble.api.sync.validation.MessageState.DELIVERED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
+import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_PREFIX;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_FETCH_BYTES_WITHOUT_NEWS;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.ChannelConstants.FILE_STREAM_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
@@ -495,14 +497,15 @@ public class ChannelManagerIntegrationTest
 				c1.getClock().currentTimeMillis(), null, author1,
 				"I am not the owner");
 
-		assertEquals(1, channelManager1.importChannel(
+		assertEquals(0, channelManager1.importChannel(
 				new ByteArrayInputStream(buildStream(subscribed,
 						forged.getMessage().getTimestamp(),
 						forged.getMessage().getBody()))));
-		awaitPendingMessageValidation(1);
 
-		// It was read from the stream but not accepted
+		// It was read past, and never stored
 		assertTrue(blogManager1.getPostHeaders(g).isEmpty());
+		assertTrue(db1.transactionWithResult(true,
+				txn -> db1.getMessageIds(txn, g)).isEmpty());
 	}
 
 	@Test(expected = NoSuchChannelException.class)
@@ -577,11 +580,10 @@ public class ChannelManagerIntegrationTest
 				c1.getClock().currentTimeMillis(), null, author1,
 				"I am not the owner");
 
-		assertEquals(1, channelManager1.subscribeFromFile(
+		assertEquals(0, channelManager1.subscribeFromFile(
 				new ByteArrayInputStream(buildStream(blog,
 						forged.getMessage().getTimestamp(),
 						forged.getMessage().getBody())), blog.getId()));
-		awaitPendingMessageValidation(1);
 
 		assertEquals(1, channelManager1.getSubscriptions().size());
 		assertTrue(blogManager1.getPostHeaders(blog.getId()).isEmpty());
@@ -987,8 +989,9 @@ public class ChannelManagerIntegrationTest
 			channelManager1.setMirrors(g,
 					singletonList(server.url("/c.briar").toString()));
 			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
-			awaitPendingMessageValidation(1);
 			assertTrue(blogManager1.getPostHeaders(g).isEmpty());
+			assertTrue(db1.transactionWithResult(true,
+					txn -> db1.getMessageIds(txn, g)).isEmpty());
 		} finally {
 			server.shutdown();
 		}
@@ -1143,7 +1146,7 @@ public class ChannelManagerIntegrationTest
 		Blog subscribed = channelManager1.subscribe("Announcements",
 				channel.getLocalAuthor().getPublicKey());
 		assertEquals(g, subscribed.getId());
-		assertEquals(1, channelManager1.importChannel(
+		assertEquals(0, channelManager1.importChannel(
 				new ByteArrayInputStream(buildStream(subscribed,
 						tampered.getTimestamp(), tampered.getBody()))));
 		// Its signature is checked as it is read, so it is never stored
@@ -1848,6 +1851,164 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testAMirrorThatIgnoresRangesAndHasNothingNewIsUnchanged()
+			throws Exception {
+		// A mirror that answers 200 with the file we already have, and
+		// nothing after it, has told us there is nothing new. It doesn't
+		// count as serving the channel, so another mirror is asked.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] first = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(first)));
+		server.enqueue(new MockResponse().setBody(new Buffer().write(first)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+
+			assertEquals(UNCHANGED,
+					channelManager1.fetchChannel(g).getOutcome());
+			server.takeRequest();
+			assertEquals("bytes=" + first.length + "-",
+					server.takeRequest().getHeader("Range"));
+			assertEquals(first.length, fetchOffset(g));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testAMirrorCannotPadTheFileWithoutLimit() throws Exception {
+		// A mirror ignores the range and serves the file we have with
+		// megabytes of posts the channel didn't sign after it. Before,
+		// the whole answer was read and counted as a fresh fetch, so a
+		// mirror could make a phone download that much whenever it
+		// liked. Now reading stops soon after the junk starts.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] first = exportChannel(g);
+		ByteArrayOutputStream padded = new ByteArrayOutputStream();
+		padded.write(first);
+		ClientHelper h = c1.getClientHelper();
+		long time = c0.getClock().currentTimeMillis();
+		while (padded.size() < first.length + 3 * 1024 * 1024) {
+			byte[] forged = h.toByteArray(BdfList.of(POST.getInt(),
+					getRandomString(30_000), getRandomBytes(64)));
+			padded.write(h.toByteArray(BdfList.of(time++, forged)));
+		}
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(first)));
+		server.enqueue(new MockResponse().setBody(
+				new Buffer().write(padded.toByteArray())));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+
+			// A padded answer is a mirror that failed, and the junk is
+			// never counted as part of the file
+			assertEquals(UNREACHABLE,
+					channelManager1.fetchChannel(g).getOutcome());
+			assertEquals(first.length, fetchOffset(g));
+			assertEquals(1, blogManager1.getPostHeaders(g).size());
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testStartsAgainWhenAMirrorIgnoringRangesServesAnotherFile()
+			throws Exception {
+		// A mirror ignores the range and serves a file in which no entry
+		// ends where our part did: not the file we were reading, so it
+		// is read from the beginning like any other changed file
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] first = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] second = exportChannel(g);
+		// The second file with an entry slipped in after its header
+		CountingInputStream counting = new CountingInputStream(
+				new ByteArrayInputStream(second), second.length);
+		c1.getBdfReaderFactory().createReader(counting).readList();
+		int headerEnd = (int) counting.getBytesRead();
+		ClientHelper h = c1.getClientHelper();
+		ByteArrayOutputStream other = new ByteArrayOutputStream();
+		other.write(second, 0, headerEnd);
+		other.write(h.toByteArray(BdfList.of(1L, getRandomBytes(10))));
+		other.write(second, headerEnd, second.length - headerEnd);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(first)));
+		server.enqueue(new MockResponse().setBody(
+				new Buffer().write(other.toByteArray())));
+		server.enqueue(new MockResponse().setBody(new Buffer().write(second)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			assertEquals(2, blogManager1.getPostHeaders(g).size());
+			server.takeRequest();
+			assertEquals("bytes=" + first.length + "-",
+					server.takeRequest().getHeader("Range"));
+			assertNull(server.takeRequest().getHeader("Range"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testStartsAgainWhenAMirrorIgnoringRangesServesAShorterFile()
+			throws Exception {
+		// The mirror says how long the file is, and it is shorter than
+		// the part we have: not the file we were reading
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] shorter = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] longer = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(longer)));
+		server.enqueue(new MockResponse().setBody(new Buffer().write(shorter)));
+		server.enqueue(new MockResponse().setBody(new Buffer().write(shorter)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(2);
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			server.takeRequest();
+			assertEquals("bytes=" + longer.length + "-",
+					server.takeRequest().getHeader("Range"));
+			assertNull(server.takeRequest().getHeader("Range"));
+			assertEquals(shorter.length, fetchOffset(g));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	private long fetchOffset(GroupId g) throws Exception {
+		return db1.transactionWithResult(true, txn -> c1.getClientHelper()
+				.getGroupMetadataAsDictionary(txn, g)
+				.getLong(GROUP_KEY_FETCH_OFFSET, 0L));
+	}
+
+	@Test
 	public void testStartsAgainWhenTheFileChangedUnderneathIt()
 			throws Exception {
 		Channel channel = channelManager0.createChannel("Announcements");
@@ -2036,27 +2197,37 @@ public class ChannelManagerIntegrationTest
 		// message counts are stored and carried forward together, so this
 		// exercises both; the message limit itself is too large to reach
 		// in a test in reasonable time.
+		// Only the channel's own messages count: junk is read past and
+		// never counted, so the file is filled with real posts
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
-		Blog subscribed = channelManager1.subscribe("Announcements",
+		channelManager1.subscribe("Announcements",
 				channel.getLocalAuthor().getPublicKey());
-		ByteArrayOutputStream head = new ByteArrayOutputStream();
-		head.write(c1.getClientHelper().toByteArray(BdfList.of(
-				STREAM_FORMAT_VERSION, subscribed.getGroup().getDescriptor())));
-		byte[] entry = c1.getClientHelper().toByteArray(BdfList.of(1L,
-				getRandomBytes(MAX_MESSAGE_BODY_LENGTH)));
-		long timestamp = 1;
-		while (head.size() + entry.length <= MAX_STREAM_BYTES) {
-			head.write(c1.getClientHelper().toByteArray(BdfList.of(
-					timestamp++, getRandomBytes(MAX_MESSAGE_BODY_LENGTH))));
+		// Posts of one size, to get near the limit without exporting
+		// the file after each; then exactly up to it, exporting each time
+		String text = new String(new char[30_000]).replace('\0', 'a');
+		channelManager0.post(g, text);
+		int one = exportChannel(g).length;
+		channelManager0.post(g, text);
+		int entry = exportChannel(g).length - one;
+		for (long size = one + entry; size + 3L * entry <= MAX_STREAM_BYTES;
+				size += entry) {
+			channelManager0.post(g, text);
 		}
-		byte[] tail = c1.getClientHelper().toByteArray(BdfList.of(timestamp,
-				getRandomBytes(MAX_MESSAGE_BODY_LENGTH)));
+		byte[] head = exportChannel(g), whole;
+		while (true) {
+			channelManager0.post(g, text);
+			whole = exportChannel(g);
+			if (whole.length > MAX_STREAM_BYTES) break;
+			head = whole;
+		}
+		assertTrue(head.length <= MAX_STREAM_BYTES);
+		byte[] tail = new byte[whole.length - head.length];
+		System.arraycopy(whole, head.length, tail, 0, tail.length);
 
 		MockWebServer server = new MockWebServer();
 		// As much as a file may carry, which is allowed
-		server.enqueue(new MockResponse()
-				.setBody(new Buffer().write(head.toByteArray())));
+		server.enqueue(new MockResponse().setBody(new Buffer().write(head)));
 		// One more message, which is not, however it is spread over
 		// fetches
 		server.enqueue(new MockResponse().setResponseCode(206)
@@ -2076,7 +2247,7 @@ public class ChannelManagerIntegrationTest
 
 			assertEquals(2, server.getRequestCount());
 			server.takeRequest();
-			assertEquals("bytes=" + head.size() + "-",
+			assertEquals("bytes=" + head.length + "-",
 					server.takeRequest().getHeader("Range"));
 		} finally {
 			server.shutdown();
@@ -2412,8 +2583,10 @@ public class ChannelManagerIntegrationTest
 					channelManager0.getChannelLink(g));
 			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
 			server.takeRequest();
-			// The bad tag was not kept, so the next fetch sends none
-			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			// The bad tag was not kept, so the next fetch sends none. The
+			// mirror serves the same file again, which is nothing new
+			assertEquals(UNCHANGED,
+					channelManager1.fetchChannel(g).getOutcome());
 			assertNull(server.takeRequest().getHeader("If-None-Match"));
 			// A good tag is kept and sent
 			assertEquals(UNCHANGED,
@@ -2457,7 +2630,8 @@ public class ChannelManagerIntegrationTest
 		Message m1 = messageFactory.createMessage(g, 1234,
 				chunk.toByteArray());
 		Message m2 = messageFactory.createMessage(g, 1235, post);
-		assertEquals(2, channelManager1.importChannel(
+		// Neither is the channel's, so neither is read as a message
+		assertEquals(0, channelManager1.importChannel(
 				new ByteArrayInputStream(
 						buildStream(channel.getBlog(), m1, m2))));
 		assertFalse(isStored(m1.getId()));
