@@ -51,6 +51,7 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 	private final TextView text;
 	private final RecyclerView imageList;
 	private final LinearLayout fileList;
+	private final TextView attachmentsNotCarried;
 	private final ImageGridAdapter<BlogPostItem> imageAdapter;
 	private final ViewGroup commentContainer;
 	private final boolean fullText, authorClickable;
@@ -73,6 +74,7 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 		text = v.findViewById(R.id.textView);
 		imageList = v.findViewById(R.id.imageList);
 		fileList = v.findViewById(R.id.fileList);
+		attachmentsNotCarried = v.findViewById(R.id.attachmentsNotCarried);
 		imageAdapter = new ImageGridAdapter<>(ctx, listener);
 		imageList.setAdapter(imageAdapter);
 		commentContainer = v.findViewById(R.id.commentContainer);
@@ -135,6 +137,18 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 		bindAttachments(item);
 		FileRowBinder.bind(fileList, item.getFileHeaders(),
 				item::getFileStatus, h -> listener.onFileClick(item, h));
+		// A reblogged post is a signed copy of the original, so it names
+		// the images and files the original carried, but they live in the
+		// blog it came from and can't be shown here
+		int notCarried = item.getPostHeader().getAttachmentsNotCarried();
+		if (notCarried > 0) {
+			attachmentsNotCarried.setText(ctx.getResources().getQuantityString(
+					R.plurals.blogs_reblog_attachments_not_carried, notCarried,
+					notCarried));
+			attachmentsNotCarried.setVisibility(VISIBLE);
+		} else {
+			attachmentsNotCarried.setVisibility(GONE);
+		}
 
 		// reblog button
 		reblogButton.setOnClickListener(v -> {

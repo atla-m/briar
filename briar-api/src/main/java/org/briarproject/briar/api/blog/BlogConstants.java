@@ -41,6 +41,12 @@ public interface BlogConstants {
 	String KEY_AUTHOR = "author";
 	String KEY_RSS_FEED = "rssFeed";
 	String KEY_ATTACHMENT_HEADERS = "attachmentHeaders";
+	/**
+	 * For a wrapped post, how many images and files the original post
+	 * carried. They live in the original blog's group and do not travel
+	 * with the copy, so this is what a reader can be told about them.
+	 */
+	String KEY_WRAPPED_ATTACHMENTS = "wrappedAttachments";
 	String KEY_READ = "read";
 	String KEY_COMMENT = "comment";
 	String KEY_ORIGINAL_MSG_ID = "originalMessageId";

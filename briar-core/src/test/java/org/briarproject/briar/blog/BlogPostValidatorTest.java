@@ -8,6 +8,7 @@ import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.sync.Group;
+import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.GroupFactory;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageFactory;
@@ -29,6 +30,7 @@ import static org.briarproject.bramble.test.TestUtils.getMessage;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
+import static org.briarproject.briar.api.blog.BlogConstants.KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_AUTHOR;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_COMMENT;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_ORIGINAL_MSG_ID;
@@ -36,6 +38,7 @@ import static org.briarproject.briar.api.blog.BlogConstants.KEY_ORIGINAL_PARENT_
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_PARENT_MSG_ID;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_READ;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_RSS_FEED;
+import static org.briarproject.briar.api.blog.BlogConstants.KEY_WRAPPED_ATTACHMENTS;
 import static org.briarproject.briar.api.blog.BlogManager.CLIENT_ID;
 import static org.briarproject.briar.api.blog.BlogManager.MAJOR_VERSION;
 import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_COMMENT;
@@ -221,6 +224,89 @@ public class BlogPostValidatorTest extends BrambleMockTestCase {
 		assertEquals(authorList, result.getList(KEY_AUTHOR));
 		assertEquals(rssFeed, result.getBoolean(KEY_RSS_FEED));
 		context.assertIsSatisfied();
+	}
+
+	@Test
+	public void testValidateWrappedPostWithAttachments()
+			throws IOException, GeneralSecurityException {
+		// A reblog of a post with attachments copies their headers, and
+		// the copied signature covers them, so a reader can check the
+		// copy against the original author's key
+		byte[] sigBytes = getRandomBytes(42);
+		BdfList headers = BdfList.of(
+				BdfList.of(getRandomId(), "image/jpeg"),
+				BdfList.of(getRandomId(), "application/pdf", "notice.pdf",
+						1234L));
+		BdfList m = BdfList.of(WRAPPED_POST.getInt(), descriptor,
+				message.getTimestamp(), text, headers, sigBytes);
+
+		BdfList signed = BdfList.of(blog.getId(), message.getTimestamp(),
+				text, headers);
+		expectCrypto(blog, SIGNING_LABEL_POST, signed, sigBytes);
+
+		BdfList originalList = BdfList.of(POST.getInt(), text, headers,
+				sigBytes);
+		byte[] originalBody = getRandomBytes(42);
+		context.checking(new Expectations() {{
+			oneOf(groupFactory).createGroup(CLIENT_ID, MAJOR_VERSION,
+					descriptor);
+			will(returnValue(blog.getGroup()));
+			oneOf(blogFactory).parseBlog(blog.getGroup());
+			will(returnValue(blog));
+			oneOf(clientHelper).toByteArray(originalList);
+			will(returnValue(originalBody));
+			oneOf(messageFactory)
+					.createMessage(group.getId(), message.getTimestamp(),
+							originalBody);
+			will(returnValue(message));
+		}});
+
+		BdfDictionary result =
+				validator.validateMessage(message, group, m).getDictionary();
+
+		// The copy records how many attachments the original carried,
+		// not the headers themselves, since they live in another group
+		assertEquals(authorList, result.getList(KEY_AUTHOR));
+		assertEquals(2, (int) result.getInt(KEY_WRAPPED_ATTACHMENTS));
+		assertFalse(result.containsKey(KEY_ATTACHMENT_HEADERS));
+		context.assertIsSatisfied();
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsWrappedPostWhoseAttachmentsWereChanged()
+			throws IOException, GeneralSecurityException {
+		// Whoever forwards a reblog can't swap the attachments the copy
+		// names, because the signature would no longer verify
+		byte[] sigBytes = getRandomBytes(42);
+		BdfList headers = BdfList.of(BdfList.of(getRandomId(), "image/jpeg"));
+		BdfList m = BdfList.of(WRAPPED_POST.getInt(), descriptor,
+				message.getTimestamp(), text, headers, sigBytes);
+
+		BdfList signed = BdfList.of(blog.getId(), message.getTimestamp(),
+				text, headers);
+		BdfList originalList = BdfList.of(POST.getInt(), text, headers,
+				sigBytes);
+		byte[] originalBody = getRandomBytes(42);
+		context.checking(new Expectations() {{
+			oneOf(groupFactory).createGroup(CLIENT_ID, MAJOR_VERSION,
+					descriptor);
+			will(returnValue(blog.getGroup()));
+			oneOf(blogFactory).parseBlog(blog.getGroup());
+			will(returnValue(blog));
+			oneOf(clientHelper).toByteArray(originalList);
+			will(returnValue(originalBody));
+			oneOf(messageFactory)
+					.createMessage(group.getId(), message.getTimestamp(),
+							originalBody);
+			will(returnValue(message));
+			oneOf(blogFactory).parseBlog(group);
+			will(returnValue(blog));
+			oneOf(clientHelper).verifySignature(sigBytes, SIGNING_LABEL_POST,
+					signed, author.getPublicKey());
+			will(throwException(new GeneralSecurityException()));
+		}});
+
+		validator.validateMessage(message, group, m);
 	}
 
 	@Test
