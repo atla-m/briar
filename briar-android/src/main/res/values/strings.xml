@@ -651,7 +651,7 @@
 	<string name="channels_manage_empty_state">No channels yet. Tap + to create one, or use the menu to subscribe to one with a link.</string>
 	<string name="channels_manage_error">Your channels could not be loaded</string>
 	<string name="channels_delete_title">Delete channel?</string>
-	<string name="channels_delete_message">The channel\'s key will be deleted, so you will never be able to post to it again. This deletes the channel from this phone only. Files you saved or published stay, and so do copies on sites and readers\' phones.</string>
+	<string name="channels_delete_message">The channel\'s key will be deleted, so you will never be able to post to it again. This deletes the channel and its publish folder from this phone. Files you saved stay, and so do copies on sites and readers\' phones.</string>
 	<string name="blogs_rss_feeds">RSS Feeds</string>
 	<string name="blogs_rss_feeds_manage_imported">Imported:</string>
 	<string name="blogs_rss_feeds_manage_author">Author:</string>

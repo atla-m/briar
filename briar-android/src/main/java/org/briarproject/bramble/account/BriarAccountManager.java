@@ -8,6 +8,7 @@ import org.briarproject.bramble.api.db.DatabaseConfig;
 import org.briarproject.bramble.api.identity.IdentityManager;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.Localizer;
+import org.briarproject.briar.android.blog.ChannelFolderPublisher;
 import org.briarproject.briar.android.util.UiUtils;
 
 import javax.inject.Inject;
@@ -24,6 +25,10 @@ class BriarAccountManager extends AndroidAccountManager {
 	@Override
 	public void deleteAccount() {
 		synchronized (stateChangeLock) {
+			// Channels published to a folder, often on a memory card,
+			// would otherwise outlive the account
+			ChannelFolderPublisher.wipeAllFolders(
+					appContext.getContentResolver());
 			super.deleteAccount();
 			Localizer.reinitialize();
 			UiUtils.setTheme(appContext,

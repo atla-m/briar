@@ -3,6 +3,7 @@ package org.briarproject.briar.android.blog;
 import android.app.Application;
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.content.UriPermission;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.DocumentsContract;
@@ -18,11 +19,13 @@ import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.settings.Settings;
 import org.briarproject.bramble.api.settings.SettingsManager;
+import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
 import org.briarproject.bramble.api.system.TaskScheduler;
 import org.briarproject.briar.api.blog.event.BlogPostAddedEvent;
+import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -35,6 +38,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
@@ -77,12 +81,17 @@ public class ChannelFolderPublisher implements EventListener {
 	private static final String OCTET_STREAM = "application/octet-stream";
 	private static final String TEXT_PLAIN = "text/plain";
 	private static final long EXPORT_DELAY_SECONDS = 30;
+	// The name of an image or file in the files directory
+	private static final Pattern FILE_NAME =
+			Pattern.compile("[0-9a-f]{64}" + Pattern.quote(FILE_EXTENSION) +
+					"(\\.tmp|\\.old)?");
 
 	private static final Logger LOG =
 			getLogger(ChannelFolderPublisher.class.getName());
 
 	private final Application app;
 	private final ChannelManager channelManager;
+	private final BlogFactory blogFactory;
 	private final SettingsManager settingsManager;
 	private final TaskScheduler scheduler;
 	private final Executor ioExecutor;
@@ -93,8 +102,10 @@ public class ChannelFolderPublisher implements EventListener {
 	@Inject
 	ChannelFolderPublisher(Application app, ChannelManager channelManager,
 			SettingsManager settingsManager, TaskScheduler scheduler,
-			@IoExecutor Executor ioExecutor, EventBus eventBus) {
+			@IoExecutor Executor ioExecutor, EventBus eventBus,
+			BlogFactory blogFactory) {
 		this.app = app;
+		this.blogFactory = blogFactory;
 		this.channelManager = channelManager;
 		this.settingsManager = settingsManager;
 		this.scheduler = scheduler;
@@ -118,9 +129,12 @@ public class ChannelFolderPublisher implements EventListener {
 					Cancellable c = pending.remove(id);
 					if (c != null) c.cancel();
 				}
+				// What was published goes too: the folder is often on a
+				// memory card, where it would outlive the channel
+				Group group = g.getGroup();
 				ioExecutor.execute(() -> {
 					try {
-						clearFolder(id);
+						wipeAndClear(group);
 					} catch (DbException ex) {
 						logException(LOG, WARNING, ex);
 					}
@@ -145,6 +159,142 @@ public class ChannelFolderPublisher implements EventListener {
 	}
 
 	/**
+	 * Deletes what a deleted channel published to its folder, and stops
+	 * publishing it there. If another channel publishes to the same
+	 * folder, only the deleted channel's own file goes, since the files
+	 * beside it may be the other channel's too.
+	 */
+	private void wipeAndClear(Group group) throws DbException {
+		GroupId g = group.getId();
+		Uri tree = getFolder(g);
+		if (tree == null) return;
+		boolean shared = sharesFolder(g, tree);
+		String only = null;
+		if (shared) {
+			try {
+				only = fileName(blogFactory.parseBlog(group).getAuthor()
+						.getName());
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+		}
+		try {
+			wipeFolder(app.getContentResolver(), tree, only);
+		} catch (IOException | RuntimeException e) {
+			// The folder may be gone, or no longer ours to write
+			logException(LOG, WARNING, e);
+		}
+		clearFolder(g);
+	}
+
+	private boolean sharesFolder(GroupId g, Uri tree) throws DbException {
+		for (GroupId other : getPublished()) {
+			if (!other.equals(g) && tree.equals(getFolder(other))) return true;
+		}
+		return false;
+	}
+
+	private Collection<GroupId> getPublished() throws DbException {
+		Settings s = settingsManager.getSettings(SETTINGS_NAMESPACE);
+		Collection<GroupId> published = new ArrayList<>();
+		for (Map.Entry<String, String> e : s.entrySet()) {
+			if (e.getValue().isEmpty()) continue;
+			try {
+				published.add(new GroupId(fromHexString(e.getKey())));
+			} catch (FormatException ex) {
+				throw new DbException(ex);
+			}
+		}
+		return published;
+	}
+
+	/**
+	 * Deletes what Briar wrote into folders it publishes channels to:
+	 * every channel file, the copies left while writing, and the files
+	 * directory's contents. Called when the account is deleted, including
+	 * by the panic button. The folders are found from the app's
+	 * permissions, which Android keeps outside the account, so this works
+	 * while the account is locked. Only names Briar writes are touched.
+	 */
+	public static void wipeAllFolders(ContentResolver resolver) {
+		for (UriPermission p : resolver.getPersistedUriPermissions()) {
+			if (!p.isWritePermission()) continue;
+			Uri tree = p.getUri();
+			try {
+				wipeFolder(resolver, tree, null);
+			} catch (IOException | RuntimeException e) {
+				logException(LOG, WARNING, e);
+			}
+			try {
+				resolver.releasePersistableUriPermission(tree,
+						Intent.FLAG_GRANT_READ_URI_PERMISSION |
+								Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+			} catch (SecurityException e) {
+				// Already gone
+			}
+		}
+	}
+
+	/**
+	 * Deletes the channel files Briar wrote at the top of the folder, or
+	 * only the named one and its copies, and with all of them the
+	 * channel's images and files and their index.
+	 */
+	private static void wipeFolder(ContentResolver resolver, Uri tree,
+			@Nullable String only) throws IOException {
+		String rootId = DocumentsContract.getTreeDocumentId(tree);
+		for (Map.Entry<String, Uri> e :
+				listChildren(resolver, tree, rootId).entrySet()) {
+			String name = e.getKey();
+			boolean ours = only == null ? isChannelFileName(name) :
+					name.equals(only) || name.equals(only + ".tmp") ||
+							name.equals(only + ".old");
+			if (ours) DocumentsContract.deleteDocument(resolver, e.getValue());
+		}
+		if (only != null) return;
+		String dirName =
+				FILES_DIRECTORY.substring(0, FILES_DIRECTORY.length() - 1);
+		Uri dir = findChild(resolver, tree, rootId, dirName);
+		if (dir == null) return;
+		String dirId = DocumentsContract.getDocumentId(dir);
+		Map<String, Uri> files = listChildren(resolver, tree, dirId);
+		int left = files.size();
+		for (Map.Entry<String, Uri> e : files.entrySet()) {
+			String name = e.getKey();
+			if (FILE_NAME.matcher(name).matches() ||
+					name.startsWith(INDEX_NAME)) {
+				DocumentsContract.deleteDocument(resolver, e.getValue());
+				left--;
+			}
+		}
+		if (left == 0) DocumentsContract.deleteDocument(resolver, dir);
+	}
+
+	private static boolean isChannelFileName(String name) {
+		return name.endsWith(FILE_EXTENSION) ||
+				name.endsWith(FILE_EXTENSION + ".tmp") ||
+				name.endsWith(FILE_EXTENSION + ".old");
+	}
+
+	private static Map<String, Uri> listChildren(ContentResolver resolver,
+			Uri tree, String parentId) {
+		Map<String, Uri> children = new HashMap<>();
+		Uri uri = DocumentsContract.buildChildDocumentsUriUsingTree(tree,
+				parentId);
+		String[] columns = {Document.COLUMN_DOCUMENT_ID,
+				Document.COLUMN_DISPLAY_NAME};
+		try (Cursor c = resolver.query(uri, columns, null, null, null)) {
+			if (c == null) return children;
+			while (c.moveToNext()) {
+				children.put(c.getString(1),
+						DocumentsContract.buildDocumentUriUsingTree(tree,
+								c.getString(0)));
+			}
+		}
+		return children;
+	}
+
+	/**
 	 * Stops publishing the channel to its folder. What was written stays.
 	 */
 	public void clearFolder(GroupId g) throws DbException {
@@ -154,6 +304,8 @@ public class ChannelFolderPublisher implements EventListener {
 		Settings s = new Settings();
 		s.put(key(g), "");
 		settingsManager.mergeSettings(s, SETTINGS_NAMESPACE);
+		// Another channel may still publish to the same folder
+		if (sharesFolder(g, tree)) return;
 		try {
 			app.getContentResolver().releasePersistableUriPermission(tree,
 					Intent.FLAG_GRANT_READ_URI_PERMISSION |
