@@ -16,4 +16,10 @@ interface OnBlogPostClickListener
 	 * Called when one of the files a post shares is tapped.
 	 */
 	void onFileClick(BlogPostItem post, FileHeader header);
+
+	/**
+	 * Called when the share button on a channel post is tapped. Channel
+	 * posts are shared by sharing the channel, not by reblogging.
+	 */
+	void onShareChannelClick(BlogPostItem post);
 }

@@ -19,8 +19,8 @@ class BlogCommentItem extends BlogPostItem {
 	private final BlogPostHeader postHeader;
 	private final List<BlogCommentHeader> comments = new ArrayList<>();
 
-	BlogCommentItem(BlogCommentHeader header) {
-		super(header, null);
+	BlogCommentItem(BlogCommentHeader header, boolean channel) {
+		super(header, null, channel);
 		postHeader = collectComments(header);
 		Collections.sort(comments, COMPARATOR);
 	}

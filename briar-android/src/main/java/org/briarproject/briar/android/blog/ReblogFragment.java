@@ -180,6 +180,13 @@ public class ReblogFragment extends BaseFragment implements SendListener {
 		public void onFileClick(BlogPostItem post, FileHeader header) {
 			// As above: the preview does not open the post's files
 		}
+
+		@Override
+		public void onShareChannelClick(BlogPostItem post) {
+			// Unreachable: the preview hides the button, and a channel
+			// post can't be reblogged, so this screen never shows one
+			throw new AssertionError();
+		}
 	}
 
 }

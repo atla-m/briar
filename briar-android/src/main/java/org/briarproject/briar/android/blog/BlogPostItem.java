@@ -29,15 +29,18 @@ public class BlogPostItem
 	@Nullable
 	protected String text;
 	private final boolean read;
+	private final boolean channel;
 	private final List<AttachmentItem> attachments = new ArrayList<>();
 	// The status of each of the post's files, keyed by manifest ID, filled
 	// in as the file arrives
 	private final Map<MessageId, FileStatus> fileStatuses = new HashMap<>();
 
-	BlogPostItem(BlogPostHeader header, @Nullable String text) {
+	BlogPostItem(BlogPostHeader header, @Nullable String text,
+			boolean channel) {
 		this.header = header;
 		this.text = text;
 		this.read = header.isRead();
+		this.channel = channel;
 	}
 
 	@Override
@@ -68,6 +71,17 @@ public class BlogPostItem
 
 	boolean isRssFeed() {
 		return header.isRssFeed();
+	}
+
+	/**
+	 * Returns true if the post belongs to a channel rather than to
+	 * someone's personal blog. A channel post can't be reblogged: a
+	 * reblog is a signed comment in the reblogger's own blog, which
+	 * would attach their identity to the post and carry it to everyone
+	 * downstream. The channel itself is shared instead.
+	 */
+	public boolean isChannel() {
+		return channel;
 	}
 
 	public boolean isRead() {
