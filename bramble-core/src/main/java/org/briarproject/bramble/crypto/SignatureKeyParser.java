@@ -19,6 +19,8 @@ class SignatureKeyParser implements KeyParser {
 	public PublicKey parsePublicKey(byte[] encodedKey)
 			throws GeneralSecurityException {
 		if (encodedKey.length != 32) throw new GeneralSecurityException();
+		if (!EdSignature.isValidPublicKey(encodedKey))
+			throw new GeneralSecurityException();
 		return new SignaturePublicKey(encodedKey);
 	}
 

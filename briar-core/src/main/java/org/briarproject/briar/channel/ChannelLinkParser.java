@@ -2,8 +2,8 @@ package org.briarproject.briar.channel;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.ClientHelper;
+import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.crypto.PublicKey;
-import org.briarproject.bramble.api.crypto.SignaturePublicKey;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.identity.AuthorFactory;
@@ -12,6 +12,7 @@ import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -43,13 +44,15 @@ import static org.briarproject.briar.api.channel.ChannelTitle.isAllowed;
 public class ChannelLinkParser {
 
 	private final ClientHelper clientHelper;
+	private final CryptoComponent crypto;
 	private final AuthorFactory authorFactory;
 	private final BlogFactory blogFactory;
 
 	@Inject
-	ChannelLinkParser(ClientHelper clientHelper, AuthorFactory authorFactory,
-			BlogFactory blogFactory) {
+	ChannelLinkParser(ClientHelper clientHelper, CryptoComponent crypto,
+			AuthorFactory authorFactory, BlogFactory blogFactory) {
 		this.clientHelper = clientHelper;
+		this.crypto = crypto;
 		this.authorFactory = authorFactory;
 		this.blogFactory = blogFactory;
 	}
@@ -77,10 +80,11 @@ public class ChannelLinkParser {
 		checkLength(title, 1, MAX_AUTHOR_NAME_LENGTH);
 		PublicKey publicKey;
 		try {
-			publicKey = new SignaturePublicKey(parsed.getRaw(2));
-		} catch (IllegalArgumentException e) {
-			// A link comes from outside, so a key of the wrong length
-			// is a malformed link rather than a bug
+			publicKey = crypto.getSignatureKeyParser()
+					.parsePublicKey(parsed.getRaw(2));
+		} catch (GeneralSecurityException e) {
+			// A link comes from outside, so a key of the wrong length, or
+			// one that isn't a point on the curve, is a malformed link
 			throw new FormatException();
 		}
 		List<String> mirrors = parseMirrors(parsed.getList(3));

@@ -155,6 +155,15 @@ public class KeyEncodingAndParsingTest extends BrambleTestCase {
 		assertArrayEquals(signature, signature1);
 	}
 
+	@Test(expected = GeneralSecurityException.class)
+	public void testSignatureKeyParserRejectsBytesThatAreNotAPoint()
+			throws Exception {
+		// No point on the curve has y = 2
+		byte[] notAPoint = new byte[32];
+		notAPoint[0] = 2;
+		crypto.getSignatureKeyParser().parsePublicKey(notAPoint);
+	}
+
 	@Test
 	public void testSignatureKeyParserByFuzzing() {
 		KeyParser parser = crypto.getSignatureKeyParser();

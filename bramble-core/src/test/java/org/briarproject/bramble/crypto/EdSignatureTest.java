@@ -198,4 +198,24 @@ public class EdSignatureTest extends SignatureTest {
 		signature.update(messageBytes);
 		assertFalse(signature.verify(malleated));
 	}
+
+	@Test(expected = GeneralSecurityException.class)
+	public void testPublicKeyThatIsNotAPointIsRejected() throws Exception {
+		// No point on the curve has y = 2, so these bytes aren't a key. The
+		// library throws an unchecked exception for them, which would crash
+		// the validator if it escaped
+		byte[] notAPoint = new byte[32];
+		notAPoint[0] = 2;
+		new EdSignature().initVerify(new SignaturePublicKey(notAPoint));
+	}
+
+	@Test
+	public void testPublicKeyValidity() throws Exception {
+		byte[] notAPoint = new byte[32];
+		notAPoint[0] = 2;
+		assertFalse(EdSignature.isValidPublicKey(notAPoint));
+		assertFalse(EdSignature.isValidPublicKey(new byte[5]));
+		byte[] publicKey = fromHexString(TEST_VECTORS[0][1]);
+		assertTrue(EdSignature.isValidPublicKey(publicKey));
+	}
 }

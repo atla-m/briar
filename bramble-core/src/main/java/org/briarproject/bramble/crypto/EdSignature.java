@@ -13,6 +13,7 @@ import org.briarproject.bramble.api.crypto.PublicKey;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.security.GeneralSecurityException;
+import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.Provider;
 
@@ -66,9 +67,35 @@ class EdSignature implements Signature {
 	public void initVerify(PublicKey k) throws GeneralSecurityException {
 		if (!k.getKeyType().equals(KEY_TYPE_SIGNATURE))
 			throw new IllegalArgumentException();
-		EdDSAPublicKey publicKey = new EdDSAPublicKey(
-				new EdDSAPublicKeySpec(k.getEncoded(), CURVE_SPEC));
-		signature.initVerify(publicKey);
+		signature.initVerify(decodePublicKey(k.getEncoded()));
+	}
+
+	/**
+	 * Returns true if the given bytes encode a point on the curve, so they
+	 * can be used as a public key.
+	 */
+	static boolean isValidPublicKey(byte[] encoded) {
+		try {
+			decodePublicKey(encoded);
+			return true;
+		} catch (InvalidKeyException e) {
+			return false;
+		}
+	}
+
+	/**
+	 * The library throws an unchecked exception for bytes that aren't a
+	 * point on the curve. Keys come from other people, so such bytes must
+	 * make the message invalid rather than crash whatever is verifying it.
+	 */
+	private static EdDSAPublicKey decodePublicKey(byte[] encoded)
+			throws InvalidKeyException {
+		try {
+			return new EdDSAPublicKey(
+					new EdDSAPublicKeySpec(encoded, CURVE_SPEC));
+		} catch (IllegalArgumentException e) {
+			throw new InvalidKeyException(e);
+		}
 	}
 
 	@Override
