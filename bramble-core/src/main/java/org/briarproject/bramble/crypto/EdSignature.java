@@ -27,6 +27,21 @@ class EdSignature implements Signature {
 	private static final EdDSANamedCurveSpec CURVE_SPEC =
 			EdDSANamedCurveTable.getByName("Ed25519");
 
+	private static final int SCALAR_LENGTH = 32;
+	private static final int SIGNATURE_LENGTH = 2 * SCALAR_LENGTH;
+
+	/**
+	 * The order of the Ed25519 base point, 2^252 +
+	 * 27742317777372353535851937790883648493, little-endian.
+	 */
+	private static final byte[] GROUP_ORDER = {
+			(byte) 0xed, (byte) 0xd3, (byte) 0xf5, (byte) 0x5c,
+			(byte) 0x1a, (byte) 0x63, (byte) 0x12, (byte) 0x58,
+			(byte) 0xd6, (byte) 0x9c, (byte) 0xf7, (byte) 0xa2,
+			(byte) 0xde, (byte) 0xf9, (byte) 0xde, (byte) 0x14,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10
+	};
+
 	private final java.security.Signature signature;
 
 	EdSignature() {
@@ -77,8 +92,26 @@ class EdSignature implements Signature {
 		return signature.sign();
 	}
 
+	/**
+	 * Verifies a signature, refusing one whose S isn't less than the group
+	 * order, as RFC 8032 requires. The library doesn't check this, so
+	 * without it anyone could turn a valid signature into others that are
+	 * also valid, and a signed message into copies with different IDs.
+	 */
 	@Override
 	public boolean verify(byte[] sig) throws GeneralSecurityException {
-		return signature.verify(sig);
+		// Verify first either way, so the engine is reset as usual
+		return signature.verify(sig) && sig.length == SIGNATURE_LENGTH
+				&& isCanonical(sig);
+	}
+
+	private static boolean isCanonical(byte[] sig) {
+		// S is the last 32 bytes, little-endian, so compare from the end
+		for (int i = SCALAR_LENGTH - 1; i >= 0; i--) {
+			int s = sig[SCALAR_LENGTH + i] & 0xFF;
+			int l = GROUP_ORDER[i] & 0xFF;
+			if (s != l) return s < l;
+		}
+		return false;
 	}
 }

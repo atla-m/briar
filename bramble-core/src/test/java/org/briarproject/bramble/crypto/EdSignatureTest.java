@@ -7,10 +7,12 @@ import org.briarproject.bramble.api.crypto.SignaturePrivateKey;
 import org.briarproject.bramble.api.crypto.SignaturePublicKey;
 import org.junit.Test;
 
+import java.math.BigInteger;
 import java.security.GeneralSecurityException;
 
 import static org.briarproject.bramble.util.StringUtils.fromHexString;
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class EdSignatureTest extends SignatureTest {
@@ -169,5 +171,31 @@ public class EdSignatureTest extends SignatureTest {
 			signature.update(messageBytes);
 			assertTrue(signature.verify(signatureBytes));
 		}
+	}
+
+	@Test
+	public void testSignatureWithNonCanonicalSIsRejected() throws Exception {
+		String[] vector = TEST_VECTORS[0];
+		byte[] publicKeyBytes = fromHexString(vector[1]);
+		byte[] messageBytes = fromHexString(vector[2]);
+		byte[] signatureBytes = fromHexString(vector[3]);
+
+		// Adding the group order to S gives another encoding of the same
+		// scalar, which a lax verifier accepts as a different signature
+		byte[] s = new byte[32];
+		for (int i = 0; i < 32; i++) s[i] = signatureBytes[63 - i];
+		BigInteger order = BigInteger.ONE.shiftLeft(252).add(
+				new BigInteger("27742317777372353535851937790883648493"));
+		byte[] sPlusL = new BigInteger(1, s).add(order).toByteArray();
+		byte[] malleated = signatureBytes.clone();
+		for (int i = 0; i < 32; i++) {
+			int j = sPlusL.length - 1 - i;
+			malleated[32 + i] = j >= 0 ? sPlusL[j] : 0;
+		}
+
+		EdSignature signature = new EdSignature();
+		signature.initVerify(new SignaturePublicKey(publicKeyBytes));
+		signature.update(messageBytes);
+		assertFalse(signature.verify(malleated));
 	}
 }
