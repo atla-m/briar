@@ -174,26 +174,25 @@ public class ChannelFolderPublisher implements EventListener {
 
 	/**
 	 * Deletes what a deleted channel published to its folder, and stops
-	 * publishing it there. If another channel publishes to the same
-	 * folder, only the deleted channel's own file goes, since the files
-	 * beside it may be the other channel's too.
+	 * publishing it there. Only the channel's own file and its copies go:
+	 * other channel files beside it may be the user's own saved copies,
+	 * or another channel's. The images and files directory goes too,
+	 * unless another channel publishes to the same folder.
 	 */
 	private void wipeAndClear(Group group) throws DbException {
 		GroupId g = group.getId();
 		Uri tree = getFolder(g);
 		if (tree == null) return;
 		boolean shared = sharesFolder(g, tree);
-		String only = null;
-		if (shared) {
-			try {
-				only = fileName(blogFactory.parseBlog(group).getAuthor()
-						.getName());
-			} catch (FormatException e) {
-				throw new DbException(e);
-			}
+		String only;
+		try {
+			only = fileName(blogFactory.parseBlog(group).getAuthor()
+					.getName());
+		} catch (FormatException e) {
+			throw new DbException(e);
 		}
 		try {
-			wipeFolder(app.getContentResolver(), tree, only);
+			wipeFolder(app.getContentResolver(), tree, only, !shared);
 		} catch (IOException | RuntimeException e) {
 			// The folder may be gone, or no longer ours to write
 			logException(LOG, WARNING, e);
@@ -235,7 +234,10 @@ public class ChannelFolderPublisher implements EventListener {
 			if (!p.isWritePermission()) continue;
 			Uri tree = p.getUri();
 			try {
-				wipeFolder(resolver, tree, null);
+				// Every channel file goes, whoever saved it: this is the
+				// panic button, and a copy left behind would show that
+				// the phone held the channel
+				wipeFolder(resolver, tree, null, true);
 			} catch (IOException | RuntimeException e) {
 				logException(LOG, WARNING, e);
 			}
@@ -250,12 +252,12 @@ public class ChannelFolderPublisher implements EventListener {
 	}
 
 	/**
-	 * Deletes the channel files Briar wrote at the top of the folder, or
-	 * only the named one and its copies, and with all of them the
-	 * channel's images and files and their index.
+	 * Deletes the channel files at the top of the folder, or only the
+	 * named one and its copies, and if asked, the images and files
+	 * directory's contents and their index.
 	 */
 	private static void wipeFolder(ContentResolver resolver, Uri tree,
-			@Nullable String only) throws IOException {
+			@Nullable String only, boolean withFiles) throws IOException {
 		String rootId = DocumentsContract.getTreeDocumentId(tree);
 		for (Map.Entry<String, Uri> e :
 				listChildren(resolver, tree, rootId).entrySet()) {
@@ -265,7 +267,7 @@ public class ChannelFolderPublisher implements EventListener {
 							name.equals(only + ".old");
 			if (ours) DocumentsContract.deleteDocument(resolver, e.getValue());
 		}
-		if (only != null) return;
+		if (!withFiles) return;
 		String dirName =
 				FILES_DIRECTORY.substring(0, FILES_DIRECTORY.length() - 1);
 		Uri dir = findChild(resolver, tree, rootId, dirName);
