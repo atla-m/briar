@@ -310,4 +310,20 @@ public interface ChannelManager {
 	 */
 	int subscribeFromFile(InputStream in, GroupId confirmed)
 			throws DbException, IOException, FormatException;
+
+	/**
+	 * Like {@link #subscribeFromFile(InputStream, GroupId)}, for a file of
+	 * known length. A file too large to read whole is read from where the
+	 * newest part that fits begins, rather than from the start.
+	 */
+	int subscribeFromFile(InputStream in, GroupId confirmed, long length)
+			throws DbException, IOException, FormatException;
+
+	/**
+	 * Like {@link #importChannel(InputStream)}, for a file of known
+	 * length. A file too large to read whole is read from where the
+	 * newest part that fits begins, rather than from the start.
+	 */
+	int importChannel(InputStream in, long length)
+			throws DbException, IOException, FormatException;
 }

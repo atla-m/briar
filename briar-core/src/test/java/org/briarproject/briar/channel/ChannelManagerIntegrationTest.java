@@ -2734,6 +2734,33 @@ public class ChannelManagerIntegrationTest
 		}
 	}
 
+	@Test
+	public void testAFileTooLargeToReadWholeGivesTheNewestPosts()
+			throws Exception {
+		// A courier's file can outgrow what is read from one file. The
+		// file is oldest first, so it is the end that is read.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		List<Message> posts = new ArrayList<>();
+		long now = c1.getClock().currentTimeMillis();
+		for (int i = 0; i < 6; i++) {
+			posts.add(blogPostFactory.createBlogPost(g, now + i, null,
+					channel.getLocalAuthor(), "Post " + i).getMessage());
+		}
+		byte[] file = buildStream(channel.getBlog(),
+				posts.toArray(new Message[0]));
+		// Room for the last two posts, and a little to spare
+		long budget = file.length - buildStream(channel.getBlog(),
+				posts.subList(0, 4).toArray(new Message[0])).length + 10;
+		((ChannelManagerImpl) channelManager1).importFile(
+				new ByteArrayInputStream(file), g, true, file.length,
+				budget);
+		awaitPendingMessageDelivery(2);
+		for (int i = 0; i < 4; i++) assertFalse(isStored(posts.get(i).getId()));
+		assertTrue(isStored(posts.get(4).getId()));
+		assertTrue(isStored(posts.get(5).getId()));
+	}
+
 	private boolean isStored(MessageId m) throws Exception {
 		try {
 			db1.transactionWithResult(true,

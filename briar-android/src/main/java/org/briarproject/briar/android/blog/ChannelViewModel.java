@@ -1,7 +1,9 @@
 package org.briarproject.briar.android.blog;
 
 import android.app.Application;
+import android.database.Cursor;
 import android.net.Uri;
+import android.provider.OpenableColumns;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.db.DatabaseExecutor;
@@ -337,13 +339,32 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 	// IoExecutor
 	private void importFile(Uri uri, @Nullable GroupId confirmed) {
 		try (InputStream in = open(uri)) {
-			if (confirmed == null) channelManager.importChannel(in);
-			else channelManager.subscribeFromFile(in, confirmed);
+			// Knowing the length lets a file too large to read whole be
+			// read from its newest part
+			long length = sizeOf(uri);
+			if (confirmed == null) channelManager.importChannel(in, length);
+			else channelManager.subscribeFromFile(in, confirmed, length);
 			message.postEvent(R.string.channels_imported);
 		} catch (IOException | DbException e) {
 			logException(LOG, WARNING, e);
 			message.postEvent(R.string.channels_import_error);
 		}
+	}
+
+	/**
+	 * Returns the size of the file at the given URI, or -1 if the app
+	 * that holds it doesn't say.
+	 */
+	private long sizeOf(Uri uri) {
+		String[] columns = {OpenableColumns.SIZE};
+		try (Cursor c = getApplication().getContentResolver()
+				.query(uri, columns, null, null, null)) {
+			if (c != null && c.moveToFirst() && !c.isNull(0))
+				return c.getLong(0);
+		} catch (RuntimeException e) {
+			logException(LOG, WARNING, e);
+		}
+		return -1;
 	}
 
 	private InputStream open(Uri uri) throws IOException {

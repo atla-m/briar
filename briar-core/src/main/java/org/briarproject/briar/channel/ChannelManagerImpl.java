@@ -1265,6 +1265,9 @@ class ChannelManagerImpl
 		private long bytes = 0;
 		private boolean started = false;
 		private boolean complete = false;
+		// Bytes at the start of a file too large to read whole, which are
+		// read past rather than stored
+		private long skip = 0;
 		// Where the first message held back for being from the future
 		// starts, and how many messages came before it, or -1
 		private long heldBackAt = -1;
@@ -1966,7 +1969,7 @@ class ChannelManagerImpl
 	@Override
 	public int importChannel(InputStream in)
 			throws DbException, IOException, FormatException {
-		return importChannel(in, null, false);
+		return importFile(in, null, false, -1, MAX_IMPORT_BYTES);
 	}
 
 	@Override
@@ -1975,15 +1978,39 @@ class ChannelManagerImpl
 		// The user agreed to the channel the file named when it was read
 		// for the confirmation. The file may have changed since, so it
 		// must still name that channel.
-		return importChannel(in, confirmed, true);
+		return importFile(in, confirmed, true, -1, MAX_IMPORT_BYTES);
 	}
 
-	private int importChannel(InputStream in, @Nullable GroupId expected,
-			boolean subscribe)
+	@Override
+	public int subscribeFromFile(InputStream in, GroupId confirmed,
+			long length) throws DbException, IOException, FormatException {
+		return importFile(in, confirmed, true, length, MAX_IMPORT_BYTES);
+	}
+
+	@Override
+	public int importChannel(InputStream in, long length)
 			throws DbException, IOException, FormatException {
-		// A file opened by hand is counted on its own: the user chose it,
-		// and reading it again stores nothing new
-		Progress p = new Progress(MAX_IMPORT_BYTES, 0, MAX_IMPORT_MESSAGES);
+		return importFile(in, null, false, length, MAX_IMPORT_BYTES);
+	}
+
+	/**
+	 * Reads a channel file opened by hand. A file is counted on its own:
+	 * the user chose it, and reading it again stores nothing new. A file
+	 * of known length too large to read whole is read from where the
+	 * part that fits begins. The file is oldest first, so that is the
+	 * newest posts, which in a blackout are the ones that matter.
+	 *
+	 * @param length the file's length, or -1 if it isn't known
+	 */
+	int importFile(InputStream in, @Nullable GroupId expected,
+			boolean subscribe, long length, long budget)
+			throws DbException, IOException, FormatException {
+		long skip = length > budget ? length - budget : 0;
+		Progress p = new Progress(skip + budget, 0, MAX_IMPORT_MESSAGES);
+		p.skip = skip;
+		if (skip > 0 && LOG.isLoggable(INFO)) {
+			LOG.info("Channel file too large to read whole, reading the end");
+		}
 		CountingInputStream counted = countUpTo(in, p);
 		importEntries(expected, counted, true, subscribe, p);
 		return p.messages;
@@ -2073,6 +2100,9 @@ class ChannelManagerImpl
 			if (p.messagesBefore + p.messages + 1 > p.maxMessages)
 				throw new ChannelTooLargeException(
 						"Channel has too many messages");
+			// Entries before the part of a file we can take are read
+			// past, without being stored or counted
+			boolean skipped = in.getBytesRead() < p.skip;
 			BdfList entry = r.readList();
 			checkSize(entry, 2);
 			long timestamp = entry.getLong(0);
@@ -2091,6 +2121,11 @@ class ChannelManagerImpl
 			// is not the channel's and is skipped. So is a request, which
 			// the owner's file never carries. Skipped entries still count
 			// against the budget.
+			if (skipped) {
+				p.bytes = in.getBytesRead();
+				limited.allow(MAX_ENTRY_BYTES + 1);
+				continue;
+			}
 			// A message more than a day ahead of our clock would be
 			// marked invalid by the validator, and kept so for good.
 			// Usually it is our clock that is behind, so the message is
