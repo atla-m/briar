@@ -26,6 +26,7 @@ import javax.inject.Inject;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission;
+import androidx.core.content.ContextCompat;
 
 import static android.Manifest.permission.CAMERA;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
@@ -59,6 +60,7 @@ public class ScanChannelLinkActivity extends BriarActivity
 	private CameraView cameraView;
 	private QrCodeDecoder decoder;
 	private final AtomicBoolean done = new AtomicBoolean(false);
+	private final AtomicBoolean warned = new AtomicBoolean(false);
 	private final ActivityResultLauncher<String> permissionLauncher =
 			registerForActivityResult(new RequestPermission(), granted -> {
 				if (granted) startCamera();
@@ -84,7 +86,9 @@ public class ScanChannelLinkActivity extends BriarActivity
 	@Override
 	public void onStart() {
 		super.onStart();
-		if (checkSelfPermission(CAMERA) == PERMISSION_GRANTED) startCamera();
+		// Activity.checkSelfPermission() needs API 23; minSdk is 21
+		if (ContextCompat.checkSelfPermission(this, CAMERA) ==
+				PERMISSION_GRANTED) startCamera();
 		else permissionLauncher.launch(CAMERA);
 	}
 
@@ -112,8 +116,13 @@ public class ScanChannelLinkActivity extends BriarActivity
 		// Called on the IO executor, possibly more than once
 		String text = result.getText();
 		if (!text.startsWith(LINK_PREFIX)) {
-			runOnUiThread(() -> Toast.makeText(this,
-					R.string.channels_scan_qr_not_link, LENGTH_LONG).show());
+			// The decoder keeps decoding while the code is in view, so
+			// say this once rather than once per frame
+			if (warned.compareAndSet(false, true)) {
+				runOnUiThread(() -> Toast.makeText(this,
+						R.string.channels_scan_qr_not_link, LENGTH_LONG)
+						.show());
+			}
 			return;
 		}
 		if (!done.compareAndSet(false, true)) return;
