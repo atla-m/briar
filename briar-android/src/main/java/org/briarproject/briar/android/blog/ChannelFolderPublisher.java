@@ -33,6 +33,9 @@ import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.security.DigestOutputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -79,6 +82,11 @@ import static org.briarproject.briar.api.channel.ChannelConstants.FILE_EXTENSION
 public class ChannelFolderPublisher implements EventListener {
 
 	static final String SETTINGS_NAMESPACE = "channel-folders";
+	/**
+	 * Where a hash of what was last written for each channel is kept,
+	 * apart from the folders, which are read as a list of channels.
+	 */
+	private static final String HASH_NAMESPACE = "channel-folder-hashes";
 	static final String INDEX_NAME = "index.txt";
 	private static final String OCTET_STREAM = "application/octet-stream";
 	private static final String TEXT_PLAIN = "text/plain";
@@ -409,8 +417,8 @@ public class ChannelFolderPublisher implements EventListener {
 		ContentResolver resolver = app.getContentResolver();
 		String rootId = DocumentsContract.getTreeDocumentId(tree);
 		String mainName = fileName(title);
-		writeViaTemp(resolver, tree, rootId, mainName, OCTET_STREAM,
-				out -> channelManager.exportChannel(g, out));
+		writeIfChanged(resolver, tree, rootId, mainName, OCTET_STREAM,
+				key(g), out -> channelManager.exportChannel(g, out));
 		Collection<MessageId> files = channelManager.getCompleteFiles(g);
 		if (files.isEmpty()) return;
 		String dirName =
@@ -431,8 +439,56 @@ public class ChannelFolderPublisher implements EventListener {
 					out -> channelManager.exportChannelFile(g, id, out));
 		}
 		byte[] indexBytes = index.toString().getBytes(UTF_8);
-		writeViaTemp(resolver, tree, dirId, INDEX_NAME, TEXT_PLAIN,
-				out -> out.write(indexBytes));
+		writeIfChanged(resolver, tree, dirId, INDEX_NAME, TEXT_PLAIN,
+				key(g) + "-index", out -> out.write(indexBytes));
+	}
+
+	/**
+	 * Writes a file only if what it would hold differs from what was last
+	 * written, or the file is gone. Every sign-in brings the folders up to
+	 * date, and rewriting unchanged files then would date each sign-in in
+	 * the folder's timestamps, and leave old copies behind on a memory
+	 * card, where deleted files can often be recovered.
+	 */
+	private void writeIfChanged(ContentResolver resolver, Uri tree,
+			String parentId, String name, String mimeType, String hashKey,
+			Writer writer) throws IOException, DbException {
+		String hash = toHexString(digest(writer));
+		Settings s = settingsManager.getSettings(HASH_NAMESPACE);
+		if (hash.equals(s.get(hashKey)) &&
+				findChild(resolver, tree, parentId, name) != null) {
+			return;
+		}
+		writeViaTemp(resolver, tree, parentId, name, mimeType, writer);
+		Settings written = new Settings();
+		written.put(hashKey, hash);
+		settingsManager.mergeSettings(written, HASH_NAMESPACE);
+	}
+
+	private static byte[] digest(Writer writer)
+			throws IOException, DbException {
+		MessageDigest md;
+		try {
+			md = MessageDigest.getInstance("SHA-256");
+		} catch (NoSuchAlgorithmException e) {
+			throw new AssertionError(e);
+		}
+		try (OutputStream out =
+				new DigestOutputStream(new NullOutputStream(), md)) {
+			writer.write(out);
+		}
+		return md.digest();
+	}
+
+	private static class NullOutputStream extends OutputStream {
+
+		@Override
+		public void write(int b) {
+		}
+
+		@Override
+		public void write(byte[] b, int off, int len) {
+		}
 	}
 
 	/**
