@@ -2,6 +2,7 @@ package org.briarproject.briar.privategroup;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.BdfIncomingMessageHook;
+import org.briarproject.bramble.api.cleanup.CleanupHook;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.contact.ContactManager;
@@ -105,7 +106,7 @@ import static org.briarproject.briar.privategroup.GroupConstants.MISSING_ATTACHM
 @ThreadSafe
 @NotNullByDefault
 class PrivateGroupManagerImpl extends BdfIncomingMessageHook
-		implements PrivateGroupManager {
+		implements PrivateGroupManager, CleanupHook {
 
 	private final PrivateGroupFactory privateGroupFactory;
 	private final ContactManager contactManager;
@@ -803,6 +804,13 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				// the validator should only let valid types pass
 				throw new RuntimeException("Unknown MessageType");
 		}
+	}
+
+	@Override
+	public void deleteMessages(Transaction txn, GroupId g,
+			Collection<MessageId> messageIds) throws DbException {
+		// Only attachments, manifests and chunks carry cleanup timers
+		fileStore.deleteExpired(txn, g, messageIds);
 	}
 
 	private void handleAttachment(Transaction txn, Message m)
