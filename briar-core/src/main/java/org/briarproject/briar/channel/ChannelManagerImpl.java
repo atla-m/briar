@@ -119,6 +119,8 @@ import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.blog.MessageType.POST;
+import static org.briarproject.briar.api.blog.MessageType.WRAPPED_COMMENT;
+import static org.briarproject.briar.api.blog.MessageType.WRAPPED_POST;
 import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_INITIAL;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_INTERVAL;
@@ -1562,8 +1564,8 @@ class ChannelManagerImpl
 	/**
 	 * Decides whether a stream entry is stored. A post is if the channel
 	 * signed it, and the images and files it carries become wanted; an
-	 * image, manifest or chunk is stored only if wanted; a request never
-	 * is. Anything else is signed or otherwise checked
+	 * image, manifest or chunk is stored only if wanted; a request or a
+	 * wrapped post never is. Anything else is signed or otherwise checked
 	 * by the validator.
 	 * <p>
 	 * Whoever serves the stream is not trusted, so a field read here is
@@ -1580,6 +1582,12 @@ class ChannelManagerImpl
 			if (list.isEmpty()) return true;
 			long type = list.getLong(0);
 			if (type == FILE_REQUEST.getInt()) return false;
+			// A wrapped post is checked against a key it carries itself,
+			// not the channel's, so it can't belong to a channel
+			if (type == WRAPPED_POST.getInt() ||
+					type == WRAPPED_COMMENT.getInt()) {
+				return false;
+			}
 			if (type == ATTACHMENT.getInt() || type == FILE_MANIFEST.getInt())
 				return wanted.contains(m.getId());
 			if (type == FILE_CHUNK.getInt()) {

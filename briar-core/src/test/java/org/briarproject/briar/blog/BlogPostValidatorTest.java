@@ -195,6 +195,7 @@ public class BlogPostValidatorTest extends BrambleMockTestCase {
 			throws IOException, GeneralSecurityException {
 		// group descriptor, timestamp, content, signature
 		byte[] sigBytes = getRandomBytes(42);
+		expectNotChannel();
 		BdfList m = BdfList.of(WRAPPED_POST.getInt(), descriptor,
 				message.getTimestamp(), text, sigBytes);
 
@@ -237,6 +238,7 @@ public class BlogPostValidatorTest extends BrambleMockTestCase {
 				BdfList.of(getRandomId(), "image/jpeg"),
 				BdfList.of(getRandomId(), "application/pdf", "notice.pdf",
 						1234L));
+		expectNotChannel();
 		BdfList m = BdfList.of(WRAPPED_POST.getInt(), descriptor,
 				message.getTimestamp(), text, headers, sigBytes);
 
@@ -279,6 +281,7 @@ public class BlogPostValidatorTest extends BrambleMockTestCase {
 		// names, because the signature would no longer verify
 		byte[] sigBytes = getRandomBytes(42);
 		BdfList headers = BdfList.of(BdfList.of(getRandomId(), "image/jpeg"));
+		expectNotChannel();
 		BdfList m = BdfList.of(WRAPPED_POST.getInt(), descriptor,
 				message.getTimestamp(), text, headers, sigBytes);
 
@@ -319,6 +322,7 @@ public class BlogPostValidatorTest extends BrambleMockTestCase {
 		MessageId oldId = new MessageId(getRandomId());
 		byte[] sigBytes = getRandomBytes(42);
 		MessageId currentId = new MessageId(getRandomId());
+		expectNotChannel();
 		BdfList m = BdfList.of(WRAPPED_COMMENT.getInt(), descriptor,
 				message.getTimestamp(), comment, originalId, oldId, sigBytes,
 				currentId);
@@ -352,6 +356,45 @@ public class BlogPostValidatorTest extends BrambleMockTestCase {
 				message.getId().getBytes(), result.getRaw(KEY_ORIGINAL_MSG_ID));
 		assertEquals(currentId.getBytes(), result.getRaw(KEY_PARENT_MSG_ID));
 		context.assertIsSatisfied();
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsWrappedPostInAChannel()
+			throws IOException, GeneralSecurityException {
+		// A channel's posts must all be signed by the channel, and a
+		// wrapped post is checked against a key it carries itself
+		Blog channel = new Blog(group, author, false, true);
+		BdfList m = BdfList.of(WRAPPED_POST.getInt(), descriptor,
+				message.getTimestamp(), text, getRandomBytes(42));
+		context.checking(new Expectations() {{
+			oneOf(blogFactory).parseBlog(group);
+			will(returnValue(channel));
+		}});
+		validator.validateMessage(message, group, m);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsWrappedCommentInAChannel()
+			throws IOException, GeneralSecurityException {
+		Blog channel = new Blog(group, author, false, true);
+		BdfList m = BdfList.of(WRAPPED_COMMENT.getInt(), descriptor,
+				message.getTimestamp(), text, getRandomBytes(42));
+		context.checking(new Expectations() {{
+			oneOf(blogFactory).parseBlog(group);
+			will(returnValue(channel));
+		}});
+		validator.validateMessage(message, group, m);
+	}
+
+	/**
+	 * The validator first checks that a wrapped message isn't in a
+	 * channel, which parses the blog once more.
+	 */
+	private void expectNotChannel() throws FormatException {
+		context.checking(new Expectations() {{
+			oneOf(blogFactory).parseBlog(group);
+			will(returnValue(blog));
+		}});
 	}
 
 	private void expectCrypto(Blog b, String label, BdfList signed, byte[] sig)

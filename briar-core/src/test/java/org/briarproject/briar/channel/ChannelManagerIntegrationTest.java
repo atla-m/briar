@@ -2394,6 +2394,25 @@ public class ChannelManagerIntegrationTest
 		assertFalse(isStored(image.getId()));
 	}
 
+	@Test
+	public void testAWrappedPostInAStreamIsSkipped() throws Exception {
+		// A wrapped post is checked against a key it carries itself, not
+		// the channel's, so a channel never holds one
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		Blog other = blogManager0.getPersonalBlog(author0);
+		BlogPost original = blogPostFactory.createBlogPost(other.getId(),
+				1234, null, author0, "Elsewhere");
+		BdfList originalBody = c0.getClientHelper()
+				.toList(original.getMessage().getBody());
+		Message wrapped = blogPostFactory.wrapPost(g,
+				other.getGroup().getDescriptor(), 1234, originalBody);
+		channelManager1.importChannel(new ByteArrayInputStream(
+				buildStream(channel.getBlog(), wrapped)));
+		assertFalse(isStored(wrapped.getId()));
+	}
+
 	private boolean isStored(MessageId m) throws Exception {
 		try {
 			db1.transactionWithResult(true,

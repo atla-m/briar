@@ -212,9 +212,11 @@ public class BlogPostValidator extends BdfMessageValidator {
 				addMessageMetadata(c, m.getTimestamp());
 				break;
 			case WRAPPED_POST:
+				checkNotChannel(g);
 				c = validateWrappedPost(body);
 				break;
 			case WRAPPED_COMMENT:
+				checkNotChannel(g);
 				c = validateWrappedComment(body);
 				break;
 			case FILE_MANIFEST:
@@ -227,6 +229,19 @@ public class BlogPostValidator extends BdfMessageValidator {
 		}
 		c.getDictionary().put(KEY_TYPE, type);
 		return c;
+	}
+
+	/**
+	 * A wrapped post or comment is checked against a key it carries
+	 * itself, not the blog's. A personal blog holds them as reblogs, but
+	 * a channel's posts must all be signed by the channel, so it can't.
+	 */
+	private void checkNotChannel(Group g)
+			throws InvalidMessageException, FormatException {
+		if (blogFactory.parseBlog(g).isChannel()) {
+			throw new InvalidMessageException(
+					"A channel can't hold a wrapped message");
+		}
 	}
 
 	private BdfMessageContext validatePost(Message m, Group g, BdfList body)
