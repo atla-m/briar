@@ -1,11 +1,17 @@
 package org.briarproject.briar.api.channel;
 
+import org.briarproject.bramble.api.FormatException;
+import org.briarproject.bramble.api.crypto.PublicKey;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.List;
 
 import javax.annotation.Nullable;
@@ -67,4 +73,38 @@ public interface ChannelManager {
 	 * posts can ever be made, as the key pair is gone.
 	 */
 	void deleteChannel(GroupId g) throws DbException;
+
+	/**
+	 * Subscribes to a channel with the given title and public key, which a
+	 * subscriber learns from a channel link. Does nothing if we are already
+	 * subscribed.
+	 * <p>
+	 * Subscribing only means we will accept the channel's posts. It does not
+	 * fetch anything and tells no one, so a subscription is not visible to
+	 * our contacts.
+	 */
+	Blog subscribe(String title, PublicKey publicKey) throws DbException;
+
+	/**
+	 * Writes a channel's posts to the given stream, in the format its
+	 * subscribers can import. The stream carries the channel's own signed
+	 * messages, so whoever stores or serves it cannot alter them.
+	 */
+	void exportChannel(GroupId g, OutputStream out)
+			throws DbException, IOException;
+
+	/**
+	 * Reads a channel stream published by a channel's owner and stores the
+	 * messages it contains, which are validated exactly as messages
+	 * received from a contact are: a post that is not signed by the channel
+	 * is rejected.
+	 *
+	 * @return the number of messages read from the stream, including any
+	 * we already had
+	 * @throws NoSuchChannelException If we are not subscribed to the
+	 * channel the stream belongs to
+	 * @throws FormatException If the stream is malformed
+	 */
+	int importChannel(InputStream in)
+			throws DbException, IOException, FormatException;
 }

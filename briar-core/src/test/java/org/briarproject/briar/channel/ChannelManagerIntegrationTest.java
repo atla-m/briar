@@ -1,5 +1,6 @@
 package org.briarproject.briar.channel;
 
+import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
@@ -18,6 +19,8 @@ import org.briarproject.briar.test.DaggerBriarIntegrationTestComponent;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.Collection;
 import java.util.List;
 
@@ -25,6 +28,7 @@ import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
+import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -177,6 +181,90 @@ public class ChannelManagerIntegrationTest
 		assertNotEquals(NOT_SUPPORTED, db0.transactionWithResult(true, txn ->
 				blogSharingManager0.getSharingStatus(txn, personal.getId(),
 						contact)));
+	}
+
+	@Test
+	public void testImportingAStreamDeliversPostsWithoutSyncing()
+			throws Exception {
+		// The point of the stream: a device that has no sync relationship
+		// for this channel still gets its posts, by fetching a file the
+		// owner published
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		String text = getRandomString(42);
+		channelManager0.post(g, text);
+
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, out);
+
+		// The subscriber has only the title and public key, which is what
+		// a channel link carries
+		Blog subscribed = channelManager1.subscribe("Announcements",
+				channel.getLocalAuthor().getPublicKey());
+		assertEquals(g, subscribed.getId());
+		assertTrue(blogManager1.getPostHeaders(g).isEmpty());
+
+		assertEquals(1, channelManager1.importChannel(
+				new ByteArrayInputStream(out.toByteArray())));
+		awaitPendingMessageDelivery(1);
+
+		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
+		assertEquals(1, headers.size());
+		BlogPostHeader h = headers.iterator().next();
+		assertEquals(channel.getLocalAuthor().getId(), h.getAuthor().getId());
+		assertEquals(text, blogManager1.getPostText(h.getId()));
+	}
+
+	@Test
+	public void testRejectsAForgedPostInAStream() throws Exception {
+		// Whoever serves the stream is not trusted: a post that isn't
+		// signed by the channel must be rejected, not stored
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		Blog subscribed = channelManager1.subscribe("Announcements",
+				channel.getLocalAuthor().getPublicKey());
+		assertEquals(g, subscribed.getId());
+
+		// A post into the channel's group, signed by someone else
+		BlogPost forged = blogPostFactory.createBlogPost(g,
+				c1.getClock().currentTimeMillis(), null, author1,
+				"I am not the owner");
+
+		assertEquals(1, channelManager1.importChannel(
+				new ByteArrayInputStream(buildStream(subscribed,
+						forged.getMessage().getTimestamp(),
+						forged.getMessage().getBody()))));
+		awaitPendingMessageValidation(1);
+
+		// It was read from the stream but not accepted
+		assertTrue(blogManager1.getPostHeaders(g).isEmpty());
+	}
+
+	@Test(expected = NoSuchChannelException.class)
+	public void testRejectsAStreamForAChannelWeDidNotSubscribeTo()
+			throws Exception {
+		// A file can't add channels we never asked for
+		Channel channel = channelManager0.createChannel("Announcements");
+		channelManager0.post(channel.getBlogId(), getRandomString(42));
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(channel.getBlogId(), out);
+
+		channelManager1.importChannel(
+				new ByteArrayInputStream(out.toByteArray()));
+	}
+
+	/**
+	 * Builds a channel stream by hand, so a test can put something in it
+	 * that the owner never signed.
+	 */
+	private byte[] buildStream(Blog blog, long timestamp, byte[] body)
+			throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		out.write(c1.getClientHelper().toByteArray(BdfList.of(
+				STREAM_FORMAT_VERSION, blog.getGroup().getDescriptor())));
+		out.write(c1.getClientHelper()
+				.toByteArray(BdfList.of(timestamp, body)));
+		return out.toByteArray();
 	}
 
 	private void shareBothWays(GroupId g) throws Exception {

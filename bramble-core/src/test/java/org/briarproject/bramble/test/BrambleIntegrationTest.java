@@ -238,6 +238,17 @@ public abstract class BrambleIntegrationTest<C extends BrambleIntegrationTestCom
 		awaitPendingMessageDelivery(num, TIMEOUT);
 	}
 
+	/**
+	 * Waits for the given number of messages to be validated and found
+	 * invalid or pending, rather than delivered.
+	 */
+	protected void awaitPendingMessageValidation(int num)
+			throws TimeoutException, InterruptedException {
+		validationWaiter.await(TIMEOUT, num);
+		assertEquals("Messages validated", num,
+				validationCounter.getAndSet(0));
+	}
+
 	protected void awaitPendingMessageDelivery(int num, long timeout)
 			throws TimeoutException, InterruptedException {
 		deliveryWaiter.await(timeout, num);

@@ -19,10 +19,19 @@ public class MessageAddedEvent extends Event {
 	private final Message message;
 	@Nullable
 	private final ContactId contactId;
+	private final boolean validationRequired;
 
 	public MessageAddedEvent(Message message, @Nullable ContactId contactId) {
+		// A message from a contact needs validating; one we created
+		// ourselves doesn't
+		this(message, contactId, contactId != null);
+	}
+
+	public MessageAddedEvent(Message message, @Nullable ContactId contactId,
+			boolean validationRequired) {
 		this.message = message;
 		this.contactId = contactId;
+		this.validationRequired = validationRequired;
 	}
 
 	/**
@@ -46,5 +55,14 @@ public class MessageAddedEvent extends Event {
 	@Nullable
 	public ContactId getContactId() {
 		return contactId;
+	}
+
+	/**
+	 * Returns true if the message needs to be validated, which is the case
+	 * for any message we did not create ourselves, whether it came from a
+	 * contact or from somewhere else such as a published file.
+	 */
+	public boolean isValidationRequired() {
+		return validationRequired;
 	}
 }
