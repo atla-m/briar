@@ -1365,6 +1365,11 @@ class ChannelManagerImpl
 		private int stored = 0;
 		private long known = 0, junk = 0;
 		private boolean stopped = false;
+		// Whether to leave a stream that brings only messages we have.
+		// Only a mirror is read again and again; a file or a nearby
+		// exchange is read once, because the user asked, and stopping it
+		// would lose whatever new posts come after the part we have
+		private boolean stopWithoutNews = true;
 		// Where the first message held back for being from the future
 		// starts, and how many messages came before it, or -1
 		private long heldBackAt = -1;
@@ -2170,6 +2175,7 @@ class ChannelManagerImpl
 		long skip = length > budget ? length - budget : 0;
 		Progress p = new Progress(skip + budget, 0, MAX_IMPORT_MESSAGES);
 		p.skip = skip;
+		p.stopWithoutNews = false;
 		if (skip > 0 && LOG.isLoggable(INFO)) {
 			LOG.info("Channel file too large to read whole, reading the end");
 		}
@@ -2352,7 +2358,7 @@ class ChannelManagerImpl
 			if (p.junk > MAX_FETCH_BYTES_WITHOUT_NEWS) {
 				throw new IOException("Stream padded with junk");
 			}
-			if (p.known > MAX_FETCH_BYTES_WITHOUT_NEWS) {
+			if (p.stopWithoutNews && p.known > MAX_FETCH_BYTES_WITHOUT_NEWS) {
 				if (LOG.isLoggable(INFO)) {
 					LOG.info("Stream brings nothing new, leaving the rest");
 				}

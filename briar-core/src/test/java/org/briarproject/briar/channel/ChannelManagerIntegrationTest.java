@@ -78,6 +78,7 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_PREFIX;
+import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_FETCH_BYTES_WITHOUT_NEWS;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.ChannelConstants.FILE_STREAM_FORMAT_VERSION;
@@ -1424,6 +1425,30 @@ public class ChannelManagerIntegrationTest
 				new ByteArrayInputStream(exportChannel(g))));
 		awaitPendingMessageDelivery(2);
 		assertTrue(blogManager1.getFileStatus(file).isManifestReceived());
+	}
+
+	@Test
+	public void testAFileWeMostlyHaveIsReadToTheEnd() throws Exception {
+		// A mirror that serves only what we have is left after a while,
+		// but a file is read once, so its new posts after the part we
+		// have must not be lost however much of it we already hold
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		int posts = (int) (MAX_FETCH_BYTES_WITHOUT_NEWS
+				/ MAX_BLOG_POST_TEXT_LENGTH) + 2;
+		for (int i = 0; i < posts; i++) {
+			channelManager0.post(g, getRandomString(MAX_BLOG_POST_TEXT_LENGTH));
+		}
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		assertEquals(posts, channelManager1.importChannel(
+				new ByteArrayInputStream(exportChannel(g))));
+		awaitPendingMessageDelivery(posts);
+		MessageId last = channelManager0.post(g, "The newest post");
+		channelManager1.importChannel(
+				new ByteArrayInputStream(exportChannel(g)));
+		awaitPendingMessageDelivery(1);
+		assertTrue(db1.transactionWithResult(true,
+				txn -> db1.getMessageIds(txn, g)).contains(last));
 	}
 
 	@Test
