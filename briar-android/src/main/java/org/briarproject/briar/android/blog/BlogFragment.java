@@ -66,6 +66,12 @@ public class BlogFragment extends BaseFragment
 
 	private final static String TAG = BlogFragment.class.getName();
 
+	/**
+	 * Opens the contacts to tick once the screen is up, for the share
+	 * button on a channel post seen elsewhere.
+	 */
+	static final String CHOOSE_CONTACTS = "briar.CHOOSE_CONTACTS";
+
 	@Inject
 	ViewModelProvider.Factory viewModelFactory;
 
@@ -76,11 +82,12 @@ public class BlogFragment extends BaseFragment
 	private final BlogPostAdapter adapter = new BlogPostAdapter(false, this);
 	private BriarRecyclerView list;
 
-	static BlogFragment newInstance(GroupId groupId) {
+	static BlogFragment newInstance(GroupId groupId, boolean chooseContacts) {
 		BlogFragment f = new BlogFragment();
 
 		Bundle bundle = new Bundle();
 		bundle.putByteArray(GROUP_ID, groupId.getBytes());
+		bundle.putBoolean(CHOOSE_CONTACTS, chooseContacts);
 
 		f.setArguments(bundle);
 		return f;
@@ -103,6 +110,8 @@ public class BlogFragment extends BaseFragment
 		byte[] b = args.getByteArray(GROUP_ID);
 		if (b == null) throw new IllegalStateException("No group ID in args");
 		groupId = new GroupId(b);
+		chooseContactsWhenLoaded = savedInstanceState == null &&
+				args.getBoolean(CHOOSE_CONTACTS);
 
 		View v = inflater.inflate(R.layout.fragment_blog, container, false);
 
@@ -130,6 +139,10 @@ public class BlogFragment extends BaseFragment
 					}
 					shareWithContacts.setOnCheckedChangeListener(
 							(view, checked) -> onShareWithContactsChanged(checked));
+					if (chooseContactsWhenLoaded) {
+						chooseContactsWhenLoaded = false;
+						chooseContacts();
+					}
 				});
 		LayoutManager layoutManager = new LinearLayoutManager(getActivity());
 		list.setLayoutManager(layoutManager);
@@ -177,10 +190,14 @@ public class BlogFragment extends BaseFragment
 		inflater.inflate(R.menu.blogs_blog_actions, menu);
 		MenuItem writeButton = menu.findItem(R.id.action_write_blog_post);
 		MenuItem deleteButton = menu.findItem(R.id.action_blog_delete);
+		MenuItem shareButton = menu.findItem(R.id.action_blog_share);
 		MenuItem chooseContacts =
 				menu.findItem(R.id.action_blog_choose_contacts);
 		viewModel.getBlog().observe(getViewLifecycleOwner(), blog -> {
 			if (blog.isOurs()) writeButton.setVisible(true);
+			// A channel isn't shared by invitation: an accepted one would
+			// keep it visible to a contact the owner later unticks
+			shareButton.setVisible(!blog.getBlog().isChannel());
 			if (blog.canBeRemoved()) deleteButton.setEnabled(true);
 			// A channel is unsubscribed from, or deleted by its owner
 			if (blog.getBlog().isChannel()) {
@@ -307,6 +324,16 @@ public class BlogFragment extends BaseFragment
 	}
 
 	private SwitchMaterial shareWithContacts;
+	private boolean chooseContactsWhenLoaded = false;
+
+	/**
+	 * Shows the contacts to tick, turning the contacts switch on first
+	 * if it is off, so the same warning is shown either way.
+	 */
+	private void chooseContacts() {
+		if (shareWithContacts.isChecked()) showChooseContactsDialog(null);
+		else shareWithContacts.setChecked(true);
+	}
 
 	private void onShareWithContactsChanged(boolean on) {
 		if (!on) {
@@ -445,10 +472,7 @@ public class BlogFragment extends BaseFragment
 
 	@Override
 	public void onShareChannelClick(BlogPostItem post) {
-		Intent i = new Intent(getActivity(), ShareBlogActivity.class);
-		i.setFlags(FLAG_ACTIVITY_CLEAR_TOP);
-		i.putExtra(GROUP_ID, post.getGroupId().getBytes());
-		startActivityForResult(i, REQUEST_SHARE_BLOG);
+		chooseContacts();
 	}
 
 	@Override

@@ -23,6 +23,7 @@ import androidx.appcompat.widget.Toolbar;
 import androidx.lifecycle.ViewModelProvider;
 
 import static java.util.Objects.requireNonNull;
+import static org.briarproject.briar.android.blog.BlogFragment.CHOOSE_CONTACTS;
 import static org.briarproject.briar.android.blog.BlogPostFragment.POST_ID;
 
 @MethodsNotNullByDefault
@@ -85,7 +86,8 @@ public class BlogActivity extends BriarActivity
 
 		if (state == null) {
 			if (postId == null) {
-				showInitialFragment(BlogFragment.newInstance(groupId));
+				showInitialFragment(BlogFragment.newInstance(groupId,
+						i.getBooleanExtra(CHOOSE_CONTACTS, false)));
 			} else {
 				MessageId messageId = new MessageId(postId);
 				BaseFragment f =

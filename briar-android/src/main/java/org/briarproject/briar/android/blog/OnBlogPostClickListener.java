@@ -19,7 +19,8 @@ interface OnBlogPostClickListener
 
 	/**
 	 * Called when the share button on a channel post is tapped. Channel
-	 * posts are shared by sharing the channel, not by reblogging.
+	 * posts are shared by choosing contacts to exchange the channel's
+	 * posts with, not by reblogging or by invitation.
 	 */
 	void onShareChannelClick(BlogPostItem post);
 }
