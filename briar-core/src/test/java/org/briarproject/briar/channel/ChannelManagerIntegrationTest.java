@@ -522,8 +522,8 @@ public class ChannelManagerIntegrationTest
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		channelManager0.exportChannel(g, out);
 
-		assertEquals(1, channelManager1.importChannel(
-				new ByteArrayInputStream(out.toByteArray()), true));
+		assertEquals(1, channelManager1.subscribeFromFile(
+				new ByteArrayInputStream(out.toByteArray()), g));
 		awaitPendingMessageDelivery(1);
 
 		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
@@ -549,10 +549,10 @@ public class ChannelManagerIntegrationTest
 				c1.getClock().currentTimeMillis(), null, author1,
 				"I am not the owner");
 
-		assertEquals(1, channelManager1.importChannel(
+		assertEquals(1, channelManager1.subscribeFromFile(
 				new ByteArrayInputStream(buildStream(blog,
 						forged.getMessage().getTimestamp(),
-						forged.getMessage().getBody())), true));
+						forged.getMessage().getBody())), blog.getId()));
 		awaitPendingMessageValidation(1);
 
 		assertEquals(1, channelManager1.getSubscriptions().size());
@@ -571,8 +571,8 @@ public class ChannelManagerIntegrationTest
 		channelManager0.post(g, text);
 		ByteArrayOutputStream fromOwner = new ByteArrayOutputStream();
 		channelManager0.exportChannel(g, fromOwner);
-		channelManager1.importChannel(
-				new ByteArrayInputStream(fromOwner.toByteArray()), true);
+		channelManager1.subscribeFromFile(
+				new ByteArrayInputStream(fromOwner.toByteArray()), g);
 		awaitPendingMessageDelivery(1);
 
 		ByteArrayOutputStream fromSubscriber = new ByteArrayOutputStream();
@@ -1516,8 +1516,8 @@ public class ChannelManagerIntegrationTest
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
 		channelManager0.post(g, getRandomString(42));
-		channelManager1.importChannel(
-				new ByteArrayInputStream(exportChannel(g)), true);
+		channelManager1.subscribeFromFile(
+				new ByteArrayInputStream(exportChannel(g)), g);
 		assertTrue(channelManager1.getMirrors(g).isEmpty());
 		channelManager0.setMirrors(g,
 				singletonList("https://mirror.example/c.briar"));
@@ -1534,8 +1534,8 @@ public class ChannelManagerIntegrationTest
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		channelManager0.exportChannel(g, out, true);
 
-		assertEquals(5, channelManager1.importChannel(
-				new ByteArrayInputStream(out.toByteArray()), true));
+		assertEquals(5, channelManager1.subscribeFromFile(
+				new ByteArrayInputStream(out.toByteArray()), g));
 		awaitPendingMessageDelivery(5);
 		assertTrue(blogManager1.getFileStatus(file).isComplete());
 	}
@@ -1928,8 +1928,8 @@ public class ChannelManagerIntegrationTest
 		channelManager0.exportChannel(g, out);
 		assertTrue(out.size() < MAX_STREAM_BYTES);
 
-		assertEquals(posts, channelManager1.importChannel(
-				new ByteArrayInputStream(out.toByteArray()), true));
+		assertEquals(posts, channelManager1.subscribeFromFile(
+				new ByteArrayInputStream(out.toByteArray()), g));
 		awaitPendingMessageDelivery(posts);
 
 		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
@@ -2664,6 +2664,24 @@ public class ChannelManagerIntegrationTest
 				new MessageId(getRandomId()), "report\u202Efdp.apk",
 				"application/pdf", 100);
 		assertEquals("reportfdp.apk", h.getName());
+	}
+
+	@Test
+	public void testSubscribingFromAFileTakesOnlyTheConfirmedChannel()
+			throws Exception {
+		// The user agrees to the channel the file named when it was
+		// first read. If the file has changed since, it isn't taken.
+		Channel agreed = channelManager0.createChannel("Announcements");
+		Channel other = channelManager0.createChannel("Other");
+		channelManager0.post(other.getBlogId(), getRandomString(42));
+		try {
+			channelManager1.subscribeFromFile(new ByteArrayInputStream(
+					exportChannel(other.getBlogId())), agreed.getBlogId());
+			fail();
+		} catch (FormatException expected) {
+			// Expected
+		}
+		assertTrue(channelManager1.getSubscriptions().isEmpty());
 	}
 
 	private boolean isStored(MessageId m) throws Exception {

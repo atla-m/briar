@@ -309,10 +309,10 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 			}
 			try {
 				if (holds(blog.getId())) {
-					importFile(uri, false);
+					importFile(uri, null);
 				} else {
 					confirmImport.postEvent(new PendingImport(uri,
-							blog.getName(),
+							blog.getId(), blog.getName(),
 							ChannelFingerprint.of(blog.getAuthor())));
 				}
 			} catch (DbException e) {
@@ -327,13 +327,18 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 	 * user has seen which channel it is and agreed.
 	 */
 	void confirmImport(PendingImport pending) {
-		ioExecutor.execute(() -> importFile(pending.uri, true));
+		ioExecutor.execute(() -> importFile(pending.uri, pending.groupId));
 	}
 
+	/**
+	 * Reads a channel file, subscribing to its channel if the user agreed
+	 * to that channel, and only to that one.
+	 */
 	// IoExecutor
-	private void importFile(Uri uri, boolean subscribe) {
+	private void importFile(Uri uri, @Nullable GroupId confirmed) {
 		try (InputStream in = open(uri)) {
-			channelManager.importChannel(in, subscribe);
+			if (confirmed == null) channelManager.importChannel(in);
+			else channelManager.subscribeFromFile(in, confirmed);
 			message.postEvent(R.string.channels_imported);
 		} catch (IOException | DbException e) {
 			logException(LOG, WARNING, e);
@@ -368,10 +373,13 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 	static class PendingImport {
 
 		final Uri uri;
+		final GroupId groupId;
 		final String name, fingerprint;
 
-		private PendingImport(Uri uri, String name, String fingerprint) {
+		private PendingImport(Uri uri, GroupId groupId, String name,
+				String fingerprint) {
 			this.uri = uri;
+			this.groupId = groupId;
 			this.name = name;
 			this.fingerprint = fingerprint;
 		}

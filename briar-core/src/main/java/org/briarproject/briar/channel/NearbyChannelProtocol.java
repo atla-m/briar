@@ -51,6 +51,8 @@ public class NearbyChannelProtocol {
 
 	static final int PROTOCOL_VERSION = 0;
 	private static final long MANIFEST_WAIT_MS = 5_000;
+	// A version, a length or a file ID, with room to spare
+	private static final int MAX_LIST_BYTES = 256;
 
 	private static final Logger LOG =
 			getLogger(NearbyChannelProtocol.class.getName());
@@ -174,8 +176,11 @@ public class NearbyChannelProtocol {
 	private BdfList readList(InputStream in)
 			throws IOException, FormatException {
 		// A fresh reader each time: it holds no bytes back between
-		// lists, so the raw bytes that follow are read from the stream
-		BdfReader r = bdfReaderFactory.createReader(in);
+		// lists, so the raw bytes that follow are read from the stream.
+		// The lists here are short, and the other phone is a stranger, so
+		// a list may not run longer than the longest one we send.
+		BdfReader r = bdfReaderFactory.createReader(
+				new CountingInputStream(in, MAX_LIST_BYTES));
 		return r.readList();
 	}
 

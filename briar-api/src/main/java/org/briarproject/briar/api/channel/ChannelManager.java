@@ -294,23 +294,20 @@ public interface ChannelManager {
 			throws IOException, FormatException;
 
 	/**
-	 * Reads a channel stream as {@link #importChannel(InputStream)} does,
-	 * but if {@code subscribe} is true and we don't hold the channel the
-	 * stream carries, subscribes to it first.
-	 * <p>
-	 * A file must not add channels nobody asked for, so the caller passes
-	 * true only after the user has seen which channel the file holds, from
-	 * {@link #readChannelHeader(InputStream)}, and agreed. Like subscribing
-	 * from a link, this tells no one. The stream carries no mirrors, so a
-	 * channel subscribed to this way can be updated by file or by
-	 * contacts, and from mirrors only once a link arrives.
+	 * Subscribes to the channel a stream carries and stores its messages,
+	 * once the user has seen which channel it is, from
+	 * {@link #readChannelHeader(InputStream)}, and agreed. The stream must
+	 * still carry that channel: a file can change between being read for
+	 * the confirmation and being imported. Like subscribing from a link,
+	 * this tells no one. The stream carries no mirrors, so a channel
+	 * subscribed to this way can be updated by file or by contacts, and
+	 * from mirrors only once a link arrives.
 	 *
 	 * @return the number of messages read from the stream, including any
 	 * we already had
-	 * @throws NoSuchChannelException If {@code subscribe} is false and we
-	 * are not subscribed to the channel the stream belongs to
-	 * @throws FormatException If the stream is malformed
+	 * @throws FormatException If the stream is malformed, or carries
+	 * another channel
 	 */
-	int importChannel(InputStream in, boolean subscribe)
+	int subscribeFromFile(InputStream in, GroupId confirmed)
 			throws DbException, IOException, FormatException;
 }

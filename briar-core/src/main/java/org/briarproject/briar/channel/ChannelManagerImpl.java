@@ -110,6 +110,7 @@ import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.data.BdfDictionary.NULL_VALUE;
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_AUTHOR_NAME_LENGTH;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_GROUP_DESCRIPTOR_LENGTH;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.StringUtils.toHexString;
@@ -192,6 +193,12 @@ class ChannelManagerImpl
 	 * tens of megabytes, and a mirror trickling bytes would otherwise
 	 * hold the scheduled fetch, and so every other channel, for hours.
 	 */
+	// A stream's header is a format version and a channel's descriptor
+	private static final int MAX_HEADER_BYTES =
+			MAX_GROUP_DESCRIPTOR_LENGTH + 64;
+	// An entry is a timestamp and a message body
+	private static final int MAX_ENTRY_BYTES = MAX_MESSAGE_BODY_LENGTH + 64;
+
 	private static final long FETCH_TIMEOUT_MS = MINUTES.toMillis(10);
 	/**
 	 * How long after a file could not be fetched from any mirror before
@@ -1946,27 +1953,37 @@ class ChannelManagerImpl
 	@Override
 	public int importChannel(InputStream in)
 			throws DbException, IOException, FormatException {
-		return importChannel(in, false);
+		return importChannel(in, null, false);
 	}
 
 	@Override
-	public int importChannel(InputStream in, boolean subscribe)
+	public int subscribeFromFile(InputStream in, GroupId confirmed)
+			throws DbException, IOException, FormatException {
+		// The user agreed to the channel the file named when it was read
+		// for the confirmation. The file may have changed since, so it
+		// must still name that channel.
+		return importChannel(in, confirmed, true);
+	}
+
+	private int importChannel(InputStream in, @Nullable GroupId expected,
+			boolean subscribe)
 			throws DbException, IOException, FormatException {
 		// A file opened by hand is counted on its own: the user chose it,
 		// and reading it again stores nothing new
 		Progress p = new Progress(MAX_IMPORT_BYTES, 0, MAX_IMPORT_MESSAGES);
 		CountingInputStream counted = countUpTo(in, p);
-		importEntries(null, counted, true, subscribe, p);
+		importEntries(expected, counted, true, subscribe, p);
 		return p.messages;
 	}
 
 	@Override
 	public Blog readChannelHeader(InputStream in)
 			throws IOException, FormatException {
-		// Bounded like an import, since the file comes from anyone
-		Progress p = new Progress(MAX_IMPORT_BYTES, 0, MAX_IMPORT_MESSAGES);
-		BdfReader r = bdfReaderFactory.createReader(countUpTo(in, p));
-		return readHeader(r);
+		// The file comes from anyone, so the header is read within the
+		// space a real one needs, before anything is shown to the user
+		AllowanceInputStream limited = new AllowanceInputStream(in);
+		limited.allow(MAX_HEADER_BYTES);
+		return readHeader(bdfReaderFactory.createReader(limited));
 	}
 
 	/**
@@ -2003,9 +2020,11 @@ class ChannelManagerImpl
 	private void importEntries(@Nullable GroupId expected,
 			CountingInputStream in, boolean expectHeader, boolean subscribe,
 			Progress p) throws DbException, IOException, FormatException {
-		BdfReader r = bdfReaderFactory.createReader(in);
+		AllowanceInputStream limited = new AllowanceInputStream(in);
+		BdfReader r = bdfReaderFactory.createReader(limited);
 		GroupId g;
 		if (expectHeader) {
+			limited.allow(MAX_HEADER_BYTES);
 			Blog blog = readHeader(r);
 			g = blog.getId();
 			// A mirror can serve any channel's file; this must be ours
@@ -2030,6 +2049,9 @@ class ChannelManagerImpl
 		p.started = true;
 		Set<MessageId> wanted = null;
 		PublicKey channelKey = null;
+		// Each entry may use one byte more than the largest entry, since
+		// the reader looks one byte ahead to find where the stream ends
+		limited.allow(MAX_ENTRY_BYTES + 1);
 		while (!r.eof()) {
 			// The limits apply to the file, so what earlier fetches of
 			// it stored counts against them too. Going over one is not a
@@ -2075,6 +2097,7 @@ class ChannelManagerImpl
 			// The reader has no bytes in hand between messages, so this
 			// is exactly where the message ended
 			p.bytes = in.getBytesRead();
+			limited.allow(MAX_ENTRY_BYTES + 1);
 		}
 		// The stream was allowed one byte beyond the budget, so having
 		// read that byte means the file is larger than we will store
