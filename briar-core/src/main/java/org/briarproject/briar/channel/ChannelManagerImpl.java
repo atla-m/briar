@@ -226,6 +226,19 @@ class ChannelManagerImpl
 			"Mozilla/5.0 (Windows NT 10.0; rv:140.0) Gecko/20100101 Firefox/140.0";
 
 	private static final long FETCH_TIMEOUT_MS = MINUTES.toMillis(10);
+
+	/**
+	 * How long a mirror has to accept a connection before the next mirror
+	 * is asked. Tor reaches a working onion service in seconds, but can
+	 * spend minutes on one that is down or blocked, and a channel is
+	 * fetched from several mirrors in turn: at the proxy's usual allowance
+	 * one dead mirror cost every fetch about five minutes. The time is
+	 * split between the connection to Tor and Tor's own attempt.
+	 */
+	private static final int MIRROR_CONNECT_TIMEOUT_MS =
+			(int) SECONDS.toMillis(45);
+	private static final int MIRROR_EXTRA_CONNECT_TIMEOUT_MS =
+			(int) SECONDS.toMillis(15);
 	/**
 	 * How long after a file could not be fetched from any mirror before
 	 * it is tried again without being asked for, so files the owner has
@@ -1129,7 +1142,8 @@ class ChannelManagerImpl
 	 */
 	private OkHttpClient httpClient(GroupId g) throws IOException {
 		SocketFactory sockets = isolatedSocketFactory.create(
-				"channel-" + toHexString(g.getBytes()));
+				"channel-" + toHexString(g.getBytes()),
+				MIRROR_EXTRA_CONNECT_TIMEOUT_MS);
 		SSLContext tls;
 		X509TrustManager trust;
 		try {
@@ -1157,6 +1171,10 @@ class ChannelManagerImpl
 				.sslSocketFactory(tls.getSocketFactory(), trust)
 				.socketFactory(sockets)
 				.connectionPool(new ConnectionPool(0, 1, SECONDS))
+				.connectTimeout(MIRROR_CONNECT_TIMEOUT_MS, MILLISECONDS)
+				// A mirror that can't be reached is left for the next
+				// one, not tried twice
+				.retryOnConnectionFailure(false)
 				.callTimeout(FETCH_TIMEOUT_MS, MILLISECONDS).build();
 	}
 

@@ -33,8 +33,19 @@ public class SocksModule {
 				torSocksPort);
 		// Tor puts streams with different SOCKS credentials on different
 		// circuits. The credentials go no further than Tor itself.
-		return isolationKey -> new SocksSocketFactory(proxy,
-				CONNECT_TO_PROXY_TIMEOUT, EXTRA_CONNECT_TIMEOUT,
-				EXTRA_SOCKET_TIMEOUT, isolationKey, "x");
+		return new IsolatedSocketFactory() {
+			@Override
+			public SocketFactory create(String isolationKey) {
+				return create(isolationKey, EXTRA_CONNECT_TIMEOUT);
+			}
+
+			@Override
+			public SocketFactory create(String isolationKey,
+					int extraConnectTimeout) {
+				return new SocksSocketFactory(proxy, CONNECT_TO_PROXY_TIMEOUT,
+						extraConnectTimeout, EXTRA_SOCKET_TIMEOUT,
+						isolationKey, "x");
+			}
+		};
 	}
 }

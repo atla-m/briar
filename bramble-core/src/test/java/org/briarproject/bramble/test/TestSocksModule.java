@@ -17,7 +17,18 @@ public class TestSocksModule {
 
 	@Provides
 	IsolatedSocketFactory provideIsolatedSocketFactory() {
-		return isolationKey -> SocketFactory.getDefault();
+		return new IsolatedSocketFactory() {
+			@Override
+			public SocketFactory create(String isolationKey) {
+				return SocketFactory.getDefault();
+			}
+
+			@Override
+			public SocketFactory create(String isolationKey,
+					int extraConnectTimeout) {
+				return SocketFactory.getDefault();
+			}
+		};
 	}
 
 }
