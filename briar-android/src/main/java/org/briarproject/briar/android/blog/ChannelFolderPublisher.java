@@ -51,7 +51,6 @@ import javax.inject.Singleton;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.lifecycle.LifecycleManager.LifecycleState.RUNNING;
@@ -337,7 +336,9 @@ public class ChannelFolderPublisher implements EventListener {
 		} catch (SecurityException e) {
 			// Already gone
 		}
-		LOG.info("Stopped publishing channel to folder");
+		// Not at INFO: the feedback screen keeps INFO lines, and only an
+		// owner's phone publishes to a folder
+		LOG.fine("Stopped publishing channel to folder");
 	}
 
 	@Nullable
@@ -383,7 +384,9 @@ public class ChannelFolderPublisher implements EventListener {
 			Uri tree = getFolder(g);
 			if (tree == null) return;
 			export(g, tree);
-			if (LOG.isLoggable(INFO)) LOG.info("Published channel to folder");
+			// Not at INFO, which the feedback screen and reports keep: only
+			// an owner's phone writes this, just after each of their posts
+			LOG.fine("Published channel to folder");
 		} catch (DbException | IOException | RuntimeException e) {
 			logException(LOG, WARNING, e);
 		}
