@@ -25,11 +25,14 @@ class BriarAccountManager extends AndroidAccountManager {
 	@Override
 	public void deleteAccount() {
 		synchronized (stateChangeLock) {
+			// The database goes first: it holds the channels' keys, and
+			// wiping folders through the storage framework can be slow
+			// enough for a panic to be cut short
+			super.deleteAccount();
 			// Channels published to a folder, often on a memory card,
 			// would otherwise outlive the account
 			ChannelFolderPublisher.wipeAllFolders(
 					appContext.getContentResolver());
-			super.deleteAccount();
 			Localizer.reinitialize();
 			UiUtils.setTheme(appContext,
 					appContext.getString(R.string.pref_theme_system_value));
