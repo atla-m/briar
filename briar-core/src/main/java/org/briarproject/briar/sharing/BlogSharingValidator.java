@@ -6,6 +6,7 @@ import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.system.Clock;
+import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -28,7 +29,13 @@ class BlogSharingValidator extends SharingValidator {
 	@Override
 	protected GroupId validateDescriptor(BdfList descriptor)
 			throws FormatException {
-		return blogFactory.parseBlog(descriptor).getId();
+		Blog blog = blogFactory.parseBlog(descriptor);
+		// A channel is passed to contacts by its owner's switch and tick
+		// list, never by invitation: an accepted invitation would keep the
+		// channel visible to a contact the owner later unticks. This
+		// build sends none, so one that arrives is a modified client's
+		if (blog.isChannel()) throw new FormatException();
+		return blog.getId();
 	}
 
 }

@@ -90,7 +90,6 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.IN_PROGRESS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.TOO_LARGE;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
-import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.util.IoUtils.copyAndClose;
@@ -246,26 +245,6 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
-	public void testChannelIsNotOfferedToOlderClients() throws Exception {
-		// Sharing is gated on the major version, which channels don't
-		// change, so the blog sharing client's minor version decides
-		// whether a contact is offered a channel
-		Channel channel = channelManager0.createChannel("Announcements");
-		Contact contact = contactManager0.getContact(contactId1From0);
-
-		// Both devices run this build, so the channel can be shared
-		assertEquals(SHAREABLE, db0.transactionWithResult(true, txn ->
-				blogSharingManager0.getSharingStatus(txn,
-						channel.getBlogId(), contact)));
-
-		// A personal blog is shareable either way
-		Blog personal = blogManager0.getPersonalBlog(author1);
-		assertNotEquals(NOT_SUPPORTED, db0.transactionWithResult(true, txn ->
-				blogSharingManager0.getSharingStatus(txn, personal.getId(),
-						contact)));
-	}
-
-	@Test
 	public void testSharingWithContactsNeedsBothAndDoesNotLoop()
 			throws Exception {
 		// Two contacts who both hold a channel. Turning sharing on sends
@@ -340,73 +319,23 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
-	public void testSharingSwitchLeavesAnInvitedChannelAlone()
-			throws Exception {
-		// A channel shared with a contact by invitation belongs to the
-		// sharing protocol: the switch neither hides it nor re-shares it
+	public void testAChannelIsNotSharedByInvitation() throws Exception {
+		// An accepted invitation keeps a channel visible to the contact
+		// whatever the switch says, so a contact who was ticked would keep
+		// getting posts after being unticked. A channel can't be offered,
+		// and the validator drops an invitation to one that arrives.
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
 		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		assertEquals(NOT_SUPPORTED,
+				blogSharingManager0.getSharingStatus(g, contact1From0));
 		blogSharingManager0.sendInvitation(g, contactId1From0, null);
-		sync0To1(1, true);
-		blogSharingManager1.respondToInvitation(blogManager1.getBlog(g),
-				contact0From1, true);
-		sync1To0(1, true);
-		assertEquals(SHARED, visibility(db0, contactId1From0, g));
-
-		channelManager0.setSharingWithContacts(g, true);
-		channelManager0.setSharingWithContacts(g, false);
-		assertEquals(SHARED, visibility(db0, contactId1From0, g));
-	}
-
-	@Test
-	public void testSharingSwitchSurvivesADeclinedInvitation()
-			throws Exception {
-		// Both have the switch on. The owner also invites by hand and the
-		// contact declines, which makes the sharing protocol hide the
-		// channel; the switch puts it back once the session is over
-		Channel channel = channelManager0.createChannel("Announcements");
-		GroupId g = channel.getBlogId();
-		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
-		channelManager0.setSharingWithContacts(g, true);
-		channelManager1.setSharingWithContacts(g, true);
-		sync0To1(1, true);
-		sync1To0(1, true);
-		assertEquals(SHARED, visibility(db0, contactId1From0, g));
-
-		blogSharingManager0.sendInvitation(g, contactId1From0, null);
-		sync0To1(1, true);
-		blogSharingManager1.respondToInvitation(blogManager1.getBlog(g),
-				contact0From1, false);
-		sync1To0(1, true);
-		long deadline = System.currentTimeMillis() + 10_000;
-		while (visibility(db0, contactId1From0, g) != SHARED) {
-			if (System.currentTimeMillis() > deadline) {
-				throw new AssertionError("Switch not reapplied");
-			}
-			Thread.sleep(50);
-		}
-	}
-
-	@Test
-	public void testAPendingInvitationDoesNotStopUnticking()
-			throws Exception {
-		// A ticked contact sends an invitation of their own, which leaves
-		// a session pending, then the owner unticks them: the channel
-		// must still be hidden, or they keep getting every post
-		Channel channel = channelManager0.createChannel("Announcements");
-		GroupId g = channel.getBlogId();
-		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
-		channelManager0.setSharingWithContacts(g, true);
-		sync0To1(1, true);
-		channelManager1.setSharingWithContacts(g, true);
-		sync1To0(1, true);
-		assertEquals(SHARED, visibility(db0, contactId1From0, g));
-
-		blogSharingManager1.sendInvitation(g, contactId0From1, null);
-		sync1To0(1, true);
-		channelManager0.setSharingContacts(g, singletonList(contactId2From0));
-		assertEquals(INVISIBLE, visibility(db0, contactId1From0, g));
+		assertNothingToSend(db0, contactId1From0);
+		// A personal blog is shared by invitation as before
+		Blog personal = blogManager0.getPersonalBlog(author1);
+		assertNotEquals(NOT_SUPPORTED,
+				blogSharingManager0.getSharingStatus(personal.getId(),
+						contact1From0));
 	}
 
 	private Visibility visibility(DatabaseComponent db, ContactId c,

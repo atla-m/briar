@@ -30,7 +30,6 @@ import javax.inject.Inject;
 class BlogSharingManagerImpl extends SharingManagerImpl<Blog>
 		implements BlogSharingManager, RemoveBlogHook {
 
-	private final ClientVersioningManager clientVersioningManager;
 	private final IdentityManager identityManager;
 	private final BlogManager blogManager;
 
@@ -47,7 +46,6 @@ class BlogSharingManagerImpl extends SharingManagerImpl<Blog>
 		super(db, clientHelper, clientVersioningManager, metadataParser,
 				messageParser, sessionEncoder, sessionParser, messageTracker,
 				contactGroupFactory, engine, invitationFactory);
-		this.clientVersioningManager = clientVersioningManager;
 		this.identityManager = identityManager;
 		this.blogManager = blogManager;
 	}
@@ -67,14 +65,12 @@ class BlogSharingManagerImpl extends SharingManagerImpl<Blog>
 			Contact c) throws DbException {
 		SharingStatus status = super.getSharingStatus(txn, g, c);
 		if (status != SharingStatus.SHAREABLE) return status;
-		// Sharing is gated on the major version, which channels don't
-		// change. A channel's group descriptor has a third element that
-		// older clients can't parse, so they would reject the invitation
-		// and the session would break: don't offer them a channel.
-		if (!blogManager.getBlog(txn, g).isChannel()) return status;
-		int minorVersion = clientVersioningManager.getClientMinorVersion(txn,
-				c.getId(), CLIENT_ID, MAJOR_VERSION);
-		if (minorVersion < MIN_CHANNEL_MINOR_VERSION)
+		// A channel is passed to contacts by its owner's switch and tick
+		// list, never by invitation: an accepted invitation would keep
+		// the channel visible to a contact the owner later unticks, and
+		// the validator refuses one that arrives. A session that already
+		// exists keeps its state.
+		if (blogManager.getBlog(txn, g).isChannel())
 			return SharingStatus.NOT_SUPPORTED;
 		return status;
 	}

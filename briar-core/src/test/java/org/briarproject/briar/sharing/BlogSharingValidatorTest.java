@@ -122,14 +122,17 @@ public class BlogSharingValidatorTest extends SharingValidatorTest {
 		assertExpectedContext(context, previousMsgId);
 	}
 
-	@Test
-	public void testAcceptsInvitationForChannel() throws Exception {
-		expectParseBlog(channelDescriptor);
-		expectEncodeMetadata(INVITE, NO_AUTO_DELETE_TIMER);
-		BdfMessageContext context = validator.validateMessage(message, group,
+	@Test(expected = FormatException.class)
+	public void testRejectsInvitationForChannel() throws Exception {
+		// A channel reaches contacts through its owner's switch, never by
+		// invitation, which would outlive the owner unticking the contact
+		context.checking(new Expectations() {{
+			oneOf(blogFactory).parseBlog(channelDescriptor);
+			will(returnValue(new Blog(group, author, false, true)));
+		}});
+		validator.validateMessage(message, group,
 				BdfList.of(INVITE.getValue(), previousMsgId,
 						channelDescriptor, text));
-		assertExpectedContext(context, previousMsgId);
 	}
 
 	@Test(expected = FormatException.class)
