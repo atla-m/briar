@@ -2,10 +2,10 @@ package org.briarproject.briar.api.attachment;
 
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.briar.api.channel.ChannelTitle;
 import org.briarproject.nullsafety.NotNullByDefault;
 
-import java.util.regex.Pattern;
-
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 /**
@@ -18,11 +18,11 @@ import javax.annotation.concurrent.Immutable;
 @NotNullByDefault
 public class FileHeader {
 
-	// Embeddings, overrides and isolates, U+202A to U+202E and U+2066 to
-	// U+2069. The marks U+200E and U+200F only affect neutral characters
-	// beside them, so they are left alone.
-	private static final Pattern DIRECTION_OVERRIDES =
-			Pattern.compile("[\u202A-\u202E\u2066-\u2069]");
+	/**
+	 * The name shown for a file whose own name is nothing but characters
+	 * we don't show.
+	 */
+	public static final String NAMELESS = "file";
 
 	private final GroupId groupId;
 	private final MessageId manifestId;
@@ -33,27 +33,24 @@ public class FileHeader {
 			String contentType, long size) {
 		this.groupId = groupId;
 		this.manifestId = manifestId;
-		this.name = withoutDirectionOverrides(name);
+		this.name = cleanName(name);
 		this.contentType = contentType;
 		this.size = size;
 	}
 
 	/**
-	 * Removes the characters that override the direction of the text
-	 * around them. A file name using them can be shown with its real type
-	 * hidden: "report\u202Efdp.apk" shows as "reportkpa.pdf". Names don't
-	 * need them, in Persian or any other language.
+	 * Removes from a file name the characters that could make it look like
+	 * something else: line breaks, control characters and invisible
+	 * characters, the same set a channel's title may not hold. A name
+	 * using them can be shown with its real type hidden, as
+	 * "report‮fdp.apk" shows as "reportkpa.pdf" and
+	 * "video.mp4 .apk" shows as "video.mp4" on one line with the
+	 * ".apk" out of sight. The name comes from whoever sent the file, so
+	 * it is cleaned where it is read, not only where it is written.
 	 */
-	public static String withoutDirectionOverrides(String s) {
-		return DIRECTION_OVERRIDES.matcher(s).replaceAll("");
-	}
-
-	/**
-	 * Returns true if the string holds a character that overrides the
-	 * direction of the text around it.
-	 */
-	public static boolean hasDirectionOverride(String s) {
-		return DIRECTION_OVERRIDES.matcher(s).find();
+	public static String cleanName(String name) {
+		String clean = ChannelTitle.clean(name);
+		return clean.isEmpty() ? NAMELESS : clean;
 	}
 
 	public GroupId getGroupId() {
@@ -74,6 +71,34 @@ public class FileHeader {
 
 	public long getSize() {
 		return size;
+	}
+
+	/**
+	 * Returns the name to save the file under: the file's name with its
+	 * extension replaced by the one that belongs to its content type, so a
+	 * file saved as a video is one. The sender chooses both the name and
+	 * the content type, but the content type is what decides how the file
+	 * is opened here, so it is the one the saved name must agree with.
+	 *
+	 * @param extension The extension for the file's content type, without
+	 * the dot, or null if the type has no known extension, in which case
+	 * the name's own extension is dropped rather than trusted.
+	 */
+	public String getSaveName(@Nullable String extension) {
+		int dot = name.lastIndexOf('.');
+		String base = dot > 0 ? name.substring(0, dot) : name;
+		if (extension == null) return base;
+		String suffix = "." + extension;
+		if (endsWithIgnoreCase(name, suffix)) return name;
+		// "video.mp4.apk" saved as a video is "video.mp4", not
+		// "video.mp4.mp4"
+		if (endsWithIgnoreCase(base, suffix)) return base;
+		return base + suffix;
+	}
+
+	private static boolean endsWithIgnoreCase(String s, String suffix) {
+		return s.regionMatches(true, s.length() - suffix.length(), suffix, 0,
+				suffix.length());
 	}
 
 	/**

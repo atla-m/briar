@@ -23,6 +23,7 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.activity.BriarActivity;
+import org.briarproject.briar.android.attachment.FileRowBinder;
 import org.briarproject.briar.android.util.ActivityLaunchers.CreateDocumentAdvanced;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
@@ -366,7 +367,7 @@ public class MediaActivity extends BriarActivity {
 		builder.setIcon(getDialogIcon(this, R.drawable.ic_security));
 		builder.setPositiveButton(R.string.save_file, (dialog, which) -> {
 			try {
-				saveLauncher.launch(header.getName());
+				saveLauncher.launch(FileRowBinder.getSaveName(header));
 			} catch (ActivityNotFoundException e) {
 				Toast.makeText(this, R.string.error_start_activity,
 						LENGTH_LONG).show();

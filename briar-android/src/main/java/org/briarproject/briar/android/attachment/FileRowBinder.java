@@ -4,6 +4,7 @@ import android.content.Context;
 import android.text.format.Formatter;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.webkit.MimeTypeMap;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -39,6 +40,18 @@ public class FileRowBinder {
 
 	public interface Listener {
 		void onFileClick(FileHeader header);
+	}
+
+	/**
+	 * Returns the name the file is shown under and saved as: its name with
+	 * the extension its content type calls for, so what the row says the
+	 * file is and what the saved file does agree. The sender chooses the
+	 * name, so its own extension isn't trusted.
+	 */
+	public static String getSaveName(FileHeader header) {
+		String extension = MimeTypeMap.getSingleton()
+				.getExtensionFromMimeType(header.getContentType());
+		return header.getSaveName(extension);
 	}
 
 	/**
@@ -93,7 +106,7 @@ public class FileRowBinder {
 			TextView status = row.findViewById(R.id.fileStatus);
 			ProgressBar progress = row.findViewById(R.id.fileProgress);
 			icon.setImageResource(getFileIcon(h.getContentType()));
-			name.setText(h.getName());
+			name.setText(getSaveName(h));
 			String size = Formatter.formatShortFileSize(ctx, h.getSize());
 			FileStatus s = statuses.getFileStatus(h);
 			if (attached || (ours && (s == null || !s.isComplete()))) {

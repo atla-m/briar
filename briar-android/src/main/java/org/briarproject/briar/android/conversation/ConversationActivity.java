@@ -1232,7 +1232,8 @@ public class ConversationActivity extends BriarActivity
 			i.putExtra(MediaActivity.GROUP_ID, header.getGroupId().getBytes());
 			i.putExtra(MediaActivity.MANIFEST_ID,
 					header.getManifestId().getBytes());
-			i.putExtra(MediaActivity.NAME, header.getName());
+			i.putExtra(MediaActivity.NAME,
+					FileRowBinder.getSaveName(header));
 			i.putExtra(MediaActivity.CONTENT_TYPE, header.getContentType());
 			i.putExtra(MediaActivity.SIZE, header.getSize());
 			i.putExtra(MediaActivity.CLIENT,
@@ -1242,7 +1243,7 @@ public class ConversationActivity extends BriarActivity
 			// Nothing to show for other files; let the user save it
 			fileToSave = header;
 			try {
-				saveLauncher.launch(header.getName());
+				saveLauncher.launch(FileRowBinder.getSaveName(header));
 			} catch (ActivityNotFoundException e) {
 				Toast.makeText(this, R.string.error_start_activity,
 						LENGTH_LONG).show();

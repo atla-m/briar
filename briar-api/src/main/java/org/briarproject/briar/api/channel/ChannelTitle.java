@@ -12,6 +12,10 @@ import java.util.regex.Pattern;
  * characters, which could make two different titles look the same or
  * hide the direction of the text around them. The zero-width non-joiner
  * is the one invisible character allowed, since Persian needs it.
+ * <p>
+ * The names of shared files are held to the same set, for the same
+ * reasons; see
+ * {@link org.briarproject.briar.api.attachment.FileHeader#cleanName}.
  */
 @NotNullByDefault
 public class ChannelTitle {
