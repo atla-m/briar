@@ -88,6 +88,7 @@ import static java.util.logging.Level.WARNING;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static java.util.logging.Logger.getLogger;
+import static org.briarproject.bramble.api.data.BdfDictionary.NULL_VALUE;
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_AUTHOR_NAME_LENGTH;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.util.LogUtils.logException;
@@ -346,7 +347,14 @@ class ChannelManagerImpl
 			throw new FormatException();
 		String title = parsed.getString(1);
 		checkLength(title, 1, MAX_AUTHOR_NAME_LENGTH);
-		PublicKey publicKey = new SignaturePublicKey(parsed.getRaw(2));
+		PublicKey publicKey;
+		try {
+			publicKey = new SignaturePublicKey(parsed.getRaw(2));
+		} catch (IllegalArgumentException e) {
+			// A link comes from outside, so a key of the wrong length
+			// is a malformed link rather than a bug
+			throw new FormatException();
+		}
 		List<String> mirrors = parseMirrors(parsed.getList(3));
 		Blog blog = subscribe(title, publicKey);
 		if (!mirrors.isEmpty()) setMirrors(blog.getId(), mirrors);
@@ -662,10 +670,13 @@ class ChannelManagerImpl
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(GROUP_KEY_FETCH_OFFSET, offset);
 		meta.put(GROUP_KEY_FETCH_MESSAGES, (long) messages);
-		if (etag != null) meta.put(GROUP_KEY_ETAG, etag);
-		if (lastModified != null) {
-			meta.put(GROUP_KEY_LAST_MODIFIED, lastModified);
-		}
+		// Both validators are always written, never left as they were.
+		// A tag or date we did not just receive describes some earlier
+		// file, and sending it back would have a mirror tell us there
+		// was nothing new about a file we have not finished reading.
+		meta.put(GROUP_KEY_ETAG, etag == null ? NULL_VALUE : etag);
+		meta.put(GROUP_KEY_LAST_MODIFIED,
+				lastModified == null ? NULL_VALUE : lastModified);
 		db.transaction(false, txn -> {
 			try {
 				clientHelper.mergeGroupMetadata(txn, g, meta);
@@ -801,7 +812,7 @@ class ChannelManagerImpl
 			// it stored counts against them too. Going over one is not a
 			// malformed stream but a file we will not store, so we give
 			// up on this mirror rather than reading the file again.
-			if (p.messagesBefore + ++p.messages > MAX_STREAM_MESSAGES)
+			if (p.messagesBefore + p.messages + 1 > MAX_STREAM_MESSAGES)
 				throw new IOException("Channel has too many messages");
 			BdfList entry = r.readList();
 			checkSize(entry, 2);
@@ -819,6 +830,10 @@ class ChannelManagerImpl
 					throw new NoSuchChannelException();
 				db.importMessage(txn, m);
 			});
+			// Counted once it has been stored, so a fetch that fails
+			// part way through an entry doesn't spend the file's budget
+			// on a message it never imported
+			p.messages++;
 			// The reader has no bytes in hand between messages, so this
 			// is exactly where the message ended
 			p.bytes = in.getBytesRead();
