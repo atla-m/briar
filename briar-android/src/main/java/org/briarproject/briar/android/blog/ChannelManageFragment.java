@@ -18,6 +18,7 @@ import android.widget.Toast;
 
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.briar.R;
+import org.briarproject.briar.android.blog.ChannelViewModel.PendingImport;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.blog.ChannelAdapter.ChannelListener;
 import org.briarproject.briar.android.fragment.BaseFragment;
@@ -123,7 +124,21 @@ public class ChannelManageFragment extends BaseFragment
 				this::showMirrorsDialog);
 		viewModel.getFetched().observeEvent(getViewLifecycleOwner(),
 				this::showFetchResult);
+		viewModel.getConfirmImport().observeEvent(getViewLifecycleOwner(),
+				this::showConfirmImportDialog);
 		return v;
+	}
+
+	private void showConfirmImportDialog(PendingImport pending) {
+		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
+				R.style.BriarDialogTheme);
+		b.setTitle(R.string.channels_import_confirm_title);
+		b.setMessage(getString(R.string.channels_import_confirm_message,
+				pending.name));
+		b.setPositiveButton(R.string.channels_import_confirm_button,
+				(d, w) -> viewModel.confirmImport(pending));
+		b.setNegativeButton(R.string.cancel, null);
+		b.show();
 	}
 
 	@Override
@@ -184,12 +199,14 @@ public class ChannelManageFragment extends BaseFragment
 	public void onActionsClick(ChannelItem channel, View anchor) {
 		PopupMenu menu = new PopupMenu(requireContext(), anchor);
 		menu.inflate(R.menu.channel_item_actions);
-		// Only a channel's author can post to it or publish it, and only
-		// a reader can unsubscribe from it
+		// Only a channel's author can post to it, and only a reader can
+		// unsubscribe from it. Anyone holding a channel can save it to a
+		// file: the file carries only the channel's own signed messages,
+		// so a copy made by a reader is exactly the copy the author would
+		// have made, and if the author is out of reach it is the only way
+		// the channel travels further without the internet
 		boolean owned = channel.isOwned();
 		menu.getMenu().findItem(R.id.action_channel_write).setVisible(owned);
-		menu.getMenu().findItem(R.id.action_channel_publish)
-				.setVisible(owned);
 		menu.getMenu().findItem(R.id.action_channel_delete).setVisible(owned);
 		menu.getMenu().findItem(R.id.action_channel_unsubscribe)
 				.setVisible(!owned);

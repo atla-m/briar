@@ -618,7 +618,7 @@ class ChannelManagerImpl
 		Progress p = new Progress(MAX_STREAM_BYTES - offset, messages);
 		CountingInputStream counted = countUpTo(in, p);
 		try {
-			importEntries(g, counted, expectHeader, p);
+			importEntries(g, counted, expectHeader, false, p);
 		} finally {
 			// The offset is where the last whole message ended, not how
 			// far the stream got, so a fetch that breaks in the middle of
@@ -767,10 +767,42 @@ class ChannelManagerImpl
 	@Override
 	public int importChannel(InputStream in)
 			throws DbException, IOException, FormatException {
+		return importChannel(in, false);
+	}
+
+	@Override
+	public int importChannel(InputStream in, boolean subscribe)
+			throws DbException, IOException, FormatException {
 		Progress p = new Progress(MAX_STREAM_BYTES, 0);
 		CountingInputStream counted = countUpTo(in, p);
-		importEntries(null, counted, true, p);
+		importEntries(null, counted, true, subscribe, p);
 		return p.messages;
+	}
+
+	@Override
+	public Blog readChannelHeader(InputStream in)
+			throws IOException, FormatException {
+		// Bounded like an import, since the file comes from anyone
+		Progress p = new Progress(MAX_STREAM_BYTES, 0);
+		BdfReader r = bdfReaderFactory.createReader(countUpTo(in, p));
+		return readHeader(r);
+	}
+
+	/**
+	 * Reads a channel stream's header and returns the channel it names.
+	 * The header carries the channel blog's descriptor, which is its
+	 * title and public key, so the group ID is derived from it rather than
+	 * taken on trust.
+	 */
+	private Blog readHeader(BdfReader r) throws IOException, FormatException {
+		BdfList header = r.readList();
+		checkSize(header, 2);
+		if (header.getInt(0) != STREAM_FORMAT_VERSION)
+			throw new FormatException();
+		BdfList descriptor = clientHelper.toList(header.getRaw(1));
+		Blog blog = blogFactory.parseBlog(descriptor);
+		if (!blog.isChannel()) throw new FormatException();
+		return blog;
 	}
 
 	/**
@@ -782,24 +814,29 @@ class ChannelManagerImpl
 	 * the channel from the stream's own header
 	 * @param expectHeader false if the stream starts partway through the
 	 * file, after the header
+	 * @param subscribe true to subscribe to the stream's channel if we
+	 * don't hold it; only with a header, and only after the user agreed
 	 */
 	private void importEntries(@Nullable GroupId expected,
-			CountingInputStream in, boolean expectHeader, Progress p)
-			throws DbException, IOException, FormatException {
+			CountingInputStream in, boolean expectHeader, boolean subscribe,
+			Progress p) throws DbException, IOException, FormatException {
 		BdfReader r = bdfReaderFactory.createReader(in);
 		GroupId g;
 		if (expectHeader) {
-			BdfList header = r.readList();
-			checkSize(header, 2);
-			if (header.getInt(0) != STREAM_FORMAT_VERSION)
-				throw new FormatException();
-			BdfList descriptor = clientHelper.toList(header.getRaw(1));
-			Blog blog = blogFactory.parseBlog(descriptor);
-			if (!blog.isChannel()) throw new FormatException();
+			Blog blog = readHeader(r);
 			g = blog.getId();
 			// A mirror can serve any channel's file; this must be ours
 			if (expected != null && !expected.equals(g))
 				throw new FormatException();
+			if (subscribe) {
+				// The blog comes from the header's own descriptor, so it
+				// is exactly the channel the stream's posts are checked
+				// against, not one rebuilt from a title that could differ
+				db.transaction(false, txn -> {
+					if (!db.containsGroup(txn, g))
+						blogManager.addBlog(txn, blog);
+				});
+			}
 			p.bytes = in.getBytesRead();
 		} else {
 			// Without a header the group comes from our own subscription,
