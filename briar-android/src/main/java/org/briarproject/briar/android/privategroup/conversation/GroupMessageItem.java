@@ -5,6 +5,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.attachment.ImageGridAdapter;
 import org.briarproject.briar.android.threaded.ThreadItem;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.identity.AuthorInfo;
@@ -25,7 +26,8 @@ import androidx.annotation.UiThread;
 
 @UiThread
 @NotThreadSafe
-class GroupMessageItem extends ThreadItem {
+class GroupMessageItem extends ThreadItem
+		implements ImageGridAdapter.Item {
 
 	private final GroupId groupId;
 	private final boolean hasText;
@@ -75,7 +77,8 @@ class GroupMessageItem extends ThreadItem {
 	 * Returns the attachment items, which are empty until
 	 * {@link #setAttachments(List)} has been called.
 	 */
-	List<AttachmentItem> getAttachments() {
+	@Override
+	public List<AttachmentItem> getAttachments() {
 		return attachments;
 	}
 

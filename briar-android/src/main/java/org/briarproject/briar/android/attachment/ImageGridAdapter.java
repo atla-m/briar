@@ -1,4 +1,4 @@
-package org.briarproject.briar.android.privategroup.conversation;
+package org.briarproject.briar.android.attachment;
 
 import android.content.Context;
 import android.content.res.Resources;
@@ -12,8 +12,8 @@ import android.widget.ImageView;
 
 import com.bumptech.glide.load.Transformation;
 
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
-import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.conversation.glide.BriarImageTransformation;
 import org.briarproject.briar.android.conversation.glide.GlideApp;
 import org.briarproject.briar.android.conversation.glide.Radii;
@@ -38,28 +38,40 @@ import static org.briarproject.briar.android.attachment.AttachmentItem.State.AVA
 import static org.briarproject.briar.android.attachment.AttachmentItem.State.ERROR;
 
 /**
- * Shows the image attachments of a private group post in a two-column grid.
+ * Shows the images carried by a message in a two-column grid. Used by
+ * private group posts and blog posts alike; the message type is the
+ * adapter's parameter so that each screen's listener keeps its own type.
  */
 @UiThread
 @NotNullByDefault
-class GroupImageAdapter extends RecyclerView.Adapter<GroupImageAdapter.Holder> {
+public class ImageGridAdapter<I extends ImageGridAdapter.Item>
+		extends RecyclerView.Adapter<ImageGridAdapter<I>.Holder> {
 
 	@DrawableRes
 	private static final int ERROR_RES = R.drawable.ic_image_broken;
 
-	interface Listener {
-		void onAttachmentClicked(View view, GroupMessageItem item,
-				AttachmentItem attachment);
+	/**
+	 * A message that carries images, which the grid draws.
+	 */
+	public interface Item {
+
+		MessageId getId();
+
+		List<AttachmentItem> getAttachments();
+	}
+
+	public interface Listener<I extends Item> {
+		void onAttachmentClicked(View view, I item, AttachmentItem attachment);
 	}
 
 	private final List<AttachmentItem> items = new ArrayList<>();
-	private final Listener listener;
+	private final Listener<I> listener;
 	private final int imageSize;
 	private final Radii radii;
 	@Nullable
-	private GroupMessageItem messageItem;
+	private I messageItem;
 
-	GroupImageAdapter(Context ctx, Listener listener) {
+	public ImageGridAdapter(Context ctx, Listener<I> listener) {
 		this.listener = listener;
 		imageSize = getImageSize(ctx);
 		int radius = ctx.getResources()
@@ -76,7 +88,7 @@ class GroupImageAdapter extends RecyclerView.Adapter<GroupImageAdapter.Holder> {
 
 	@Override
 	public void onBindViewHolder(Holder holder, int position) {
-		GroupMessageItem messageItem = requireNonNull(this.messageItem);
+		I messageItem = requireNonNull(this.messageItem);
 		AttachmentItem item = items.get(position);
 		holder.itemView.setOnClickListener(v ->
 				listener.onAttachmentClicked(v, messageItem, item));
@@ -91,14 +103,14 @@ class GroupImageAdapter extends RecyclerView.Adapter<GroupImageAdapter.Holder> {
 		return items.size();
 	}
 
-	void setMessageItem(GroupMessageItem item) {
+	public void setMessageItem(I item) {
 		messageItem = item;
 		items.clear();
 		items.addAll(item.getAttachments());
 		notifyDataSetChanged();
 	}
 
-	void clear() {
+	public void clear() {
 		messageItem = null;
 		items.clear();
 		notifyDataSetChanged();
@@ -119,7 +131,7 @@ class GroupImageAdapter extends RecyclerView.Adapter<GroupImageAdapter.Holder> {
 		return Math.min(displayMetrics.widthPixels / 3, maxSize);
 	}
 
-	class Holder extends RecyclerView.ViewHolder {
+	public class Holder extends RecyclerView.ViewHolder {
 
 		private final ImageView imageView;
 
@@ -128,8 +140,8 @@ class GroupImageAdapter extends RecyclerView.Adapter<GroupImageAdapter.Holder> {
 			imageView = v.findViewById(R.id.imageView);
 		}
 
-		void bind(AttachmentItem a, GroupMessageItem messageItem,
-				boolean single, boolean singleInRow) {
+		void bind(AttachmentItem a, I messageItem, boolean single,
+				boolean singleInRow) {
 			LayoutParams params = (LayoutParams) imageView.getLayoutParams();
 			int width = singleInRow ? imageSize * 2 : imageSize;
 			params.width = single ? a.getThumbnailWidth() : width;

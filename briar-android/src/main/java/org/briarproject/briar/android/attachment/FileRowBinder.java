@@ -50,8 +50,24 @@ public class FileRowBinder {
 				contentType.startsWith("video/");
 	}
 
+	/**
+	 * Fills a container with one row per file that is waiting to be sent,
+	 * showing its name and size but no progress or action, for the screen
+	 * that is composing the message.
+	 */
+	public static void bindAttached(LinearLayout fileList,
+			List<FileHeader> headers) {
+		bind(fileList, headers, header -> null, header -> {
+		}, true);
+	}
+
 	public static void bind(LinearLayout fileList, List<FileHeader> headers,
 			StatusLookup statuses, Listener listener) {
+		bind(fileList, headers, statuses, listener, false);
+	}
+
+	private static void bind(LinearLayout fileList, List<FileHeader> headers,
+			StatusLookup statuses, Listener listener, boolean attached) {
 		fileList.removeAllViews();
 		if (headers.isEmpty()) {
 			fileList.setVisibility(GONE);
@@ -71,7 +87,10 @@ public class FileRowBinder {
 			name.setText(h.getName());
 			String size = Formatter.formatShortFileSize(ctx, h.getSize());
 			FileStatus s = statuses.getFileStatus(h);
-			if (s != null && s.isComplete()) {
+			if (attached) {
+				status.setText(size);
+				progress.setVisibility(GONE);
+			} else if (s != null && s.isComplete()) {
 				int action = isPlayable(h.getContentType())
 						? R.string.file_tap_to_play : R.string.file_tap_to_save;
 				status.setText(size + " \u00b7 " + ctx.getString(action));
@@ -84,7 +103,7 @@ public class FileRowBinder {
 				progress.setVisibility(VISIBLE);
 				progress.setProgress(total == 0 ? 0 : 100 * received / total);
 			}
-			row.setOnClickListener(v -> listener.onFileClick(h));
+			if (!attached) row.setOnClickListener(v -> listener.onFileClick(h));
 			fileList.addView(row);
 		}
 	}

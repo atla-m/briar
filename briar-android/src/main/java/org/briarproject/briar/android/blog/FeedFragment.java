@@ -9,14 +9,18 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 
+import android.widget.Toast;
+
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
+import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.blog.BaseViewModel.ListUpdate;
 import org.briarproject.briar.android.fragment.BaseFragment;
 import org.briarproject.briar.android.util.BriarSnackbarBuilder;
 import org.briarproject.briar.android.view.BriarRecyclerView;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
@@ -27,6 +31,8 @@ import androidx.annotation.Nullable;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 
+import static android.widget.Toast.LENGTH_SHORT;
+import static androidx.recyclerview.widget.RecyclerView.NO_POSITION;
 import static android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP;
 import static com.google.android.material.snackbar.Snackbar.LENGTH_LONG;
 import static org.briarproject.briar.android.activity.BriarActivity.GROUP_ID;
@@ -43,6 +49,8 @@ public class FeedFragment extends BaseFragment
 	ViewModelProvider.Factory viewModelFactory;
 
 	private FeedViewModel viewModel;
+	private final BlogAttachmentBinder attachmentBinder =
+			new BlogAttachmentBinder(this);
 	private final BlogPostAdapter adapter = new BlogPostAdapter(true, this);
 	private LinearLayoutManager layoutManager;
 	private BriarRecyclerView list;
@@ -61,6 +69,7 @@ public class FeedFragment extends BaseFragment
 		component.inject(this);
 		viewModel = new ViewModelProvider(this, viewModelFactory)
 				.get(FeedViewModel.class);
+		attachmentBinder.setViewModel(viewModel);
 	}
 
 	@Nullable
@@ -84,6 +93,17 @@ public class FeedFragment extends BaseFragment
 				result.onError(this::handleException)
 						.onSuccess(this::onBlogPostsLoaded)
 		);
+
+		// redraw a post when one of its images or files has changed
+		viewModel.getAttachmentUpdated().observe(getViewLifecycleOwner(), id -> {
+			int position = adapter.findItemPosition(id);
+			if (position != NO_POSITION) adapter.notifyItemChanged(position);
+		});
+		viewModel.getSaveError().observeEvent(getViewLifecycleOwner(),
+				error -> Toast.makeText(requireContext(),
+						error ? R.string.save_file_error
+								: R.string.save_file_success,
+						LENGTH_SHORT).show());
 
 		return v;
 	}
@@ -156,6 +176,17 @@ public class FeedFragment extends BaseFragment
 	public void onAuthorClick(BlogPostItem post) {
 		Intent i = getBlogActivityIntent(post.getGroupId());
 		requireContext().startActivity(i);
+	}
+
+	@Override
+	public void onAttachmentClicked(View view, BlogPostItem post,
+			AttachmentItem attachment) {
+		attachmentBinder.onAttachmentClicked(view, post, attachment);
+	}
+
+	@Override
+	public void onFileClick(BlogPostItem post, FileHeader header) {
+		attachmentBinder.onFileClicked(post, header);
 	}
 
 	@Override

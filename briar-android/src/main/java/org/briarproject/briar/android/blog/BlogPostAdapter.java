@@ -4,12 +4,14 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
 import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.ListAdapter;
+import androidx.recyclerview.widget.RecyclerView;
 
 @MethodsNotNullByDefault
 @ParametersNotNullByDefault
@@ -32,6 +34,17 @@ class BlogPostAdapter extends ListAdapter<BlogPostItem, BlogPostViewHolder> {
 		});
 		this.authorClickable = authorClickable;
 		this.listener = listener;
+	}
+
+	/**
+	 * Returns the position of the post with the given ID, or
+	 * {@link RecyclerView#NO_POSITION} if it is not in the list.
+	 */
+	int findItemPosition(MessageId id) {
+		for (int i = 0; i < getItemCount(); i++) {
+			if (getItem(i).getId().equals(id)) return i;
+		}
+		return RecyclerView.NO_POSITION;
 	}
 
 	@Override

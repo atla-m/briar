@@ -11,6 +11,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
+import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.fragment.BaseFragment;
 import org.briarproject.briar.android.view.TextInputView;
 import org.briarproject.briar.android.view.TextSendController;
@@ -18,6 +19,7 @@ import org.briarproject.briar.android.view.TextSendController.SendListener;
 import org.briarproject.briar.android.view.TextSendController.SendState;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
@@ -165,6 +167,18 @@ public class ReblogFragment extends BaseFragment implements SendListener {
 		public void onLinkClick(String url) {
 			LinkDialogFragment f = LinkDialogFragment.newInstance(url);
 			f.show(getParentFragmentManager(), f.getUniqueTag());
+		}
+
+		@Override
+		public void onAttachmentClicked(View view, BlogPostItem post,
+				AttachmentItem attachment) {
+			// The post being reblogged is shown as a preview, so its
+			// images are not opened from here
+		}
+
+		@Override
+		public void onFileClick(BlogPostItem post, FileHeader header) {
+			// As above: the preview does not open the post's files
 		}
 	}
 

@@ -8,10 +8,14 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
+import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.attachment.FileRowBinder;
+import org.briarproject.briar.android.attachment.ImageGridAdapter;
 import org.briarproject.briar.android.view.AuthorView;
 import org.briarproject.briar.api.blog.BlogCommentHeader;
 import org.briarproject.briar.api.blog.BlogPostHeader;
@@ -20,6 +24,8 @@ import org.briarproject.nullsafety.NotNullByDefault;
 import androidx.annotation.UiThread;
 import androidx.core.view.ViewCompat;
 import androidx.recyclerview.widget.RecyclerView;
+
+import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
 import static android.view.View.GONE;
 import static android.view.View.VISIBLE;
@@ -43,6 +49,9 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 	private final AuthorView author;
 	private final ImageButton reblogButton;
 	private final TextView text;
+	private final RecyclerView imageList;
+	private final LinearLayout fileList;
+	private final ImageGridAdapter<BlogPostItem> imageAdapter;
 	private final ViewGroup commentContainer;
 	private final boolean fullText, authorClickable;
 	private final int padding;
@@ -62,6 +71,10 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 		author = v.findViewById(R.id.authorView);
 		reblogButton = v.findViewById(R.id.commentView);
 		text = v.findViewById(R.id.textView);
+		imageList = v.findViewById(R.id.imageList);
+		fileList = v.findViewById(R.id.fileList);
+		imageAdapter = new ImageGridAdapter<>(ctx, listener);
+		imageList.setAdapter(imageAdapter);
 		commentContainer = v.findViewById(R.id.commentContainer);
 		padding = ctx.getResources()
 				.getDimensionPixelSize(R.dimen.listitem_vertical_margin);
@@ -118,6 +131,11 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 			text.setText(postText);
 		}
 
+		// the images and files the post carries
+		bindAttachments(item);
+		FileRowBinder.bind(fileList, item.getFileHeaders(),
+				item::getFileStatus, h -> listener.onFileClick(item, h));
+
 		// reblog button
 		reblogButton.setOnClickListener(v -> {
 			Intent i = new Intent(ctx, ReblogActivity.class);
@@ -133,6 +151,28 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 		} else {
 			reblogger.setVisibility(GONE);
 		}
+	}
+
+	private void bindAttachments(BlogPostItem item) {
+		if (item.getAttachmentHeaders().isEmpty()) {
+			imageList.setVisibility(GONE);
+			imageAdapter.clear();
+			return;
+		}
+		imageList.setVisibility(VISIBLE);
+		// A single image is shown at its own size; a grid of several
+		// images sizes itself
+		ViewGroup.LayoutParams lp = imageList.getLayoutParams();
+		if (item.getAttachments().size() == 1) {
+			AttachmentItem a = item.getAttachments().get(0);
+			lp.width = a.getThumbnailWidth();
+			lp.height = a.getThumbnailHeight();
+		} else {
+			lp.width = WRAP_CONTENT;
+			lp.height = WRAP_CONTENT;
+		}
+		imageList.setLayoutParams(lp);
+		imageAdapter.setMessageItem(item);
 	}
 
 	private void onBindComment(BlogCommentItem item, boolean authorClickable) {

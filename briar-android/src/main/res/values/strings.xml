@@ -388,6 +388,9 @@
 	<string name="file_tap_to_play">Tap to play</string>
 	<string name="file_tap_to_save">Tap to save</string>
 	<string name="file_still_receiving">This file has not fully arrived yet</string>
+	<string name="blogs_attach_image">Add an image</string>
+	<string name="blogs_attach_file">Add a file</string>
+	<string name="blogs_attached_files">Attached: %s</string>
 	<string name="save_file">Save</string>
 	<string name="dialog_title_save_file">Save file?</string>
 	<string name="dialog_message_save_file">Saving this file will allow other apps to access it.\n\nAre you sure you want to save?</string>
@@ -501,6 +504,7 @@
 	<string name="blogs_write_blog_post">Write Blog Post</string>
 	<string name="blogs_write_blog_post_body_hint">Type your blog post</string>
 	<string name="blogs_publish_blog_post">Publish</string>
+	<string name="blogs_publishing_blog_post_error">Could not publish the post</string>
 	<string name="blogs_blog_post_created">Blog Post Created</string>
 	<string name="blogs_blog_post_received">New Blog Post Received</string>
 	<string name="blogs_blog_post_scroll_to">Scroll To</string>

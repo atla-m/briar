@@ -6,18 +6,41 @@
 	android:layout_height="match_parent"
 	tools:context=".android.blog.WriteBlogPostActivity">
 
-	<org.briarproject.briar.android.view.LargeTextInputView
-		android:id="@+id/textInput"
+	<LinearLayout
 		android:layout_width="match_parent"
 		android:layout_height="match_parent"
-		android:gravity="bottom"
-		app:buttonText="@string/blogs_publish_blog_post"
-		app:fillHeight="true"
-		app:hint="@string/blogs_write_blog_post_body_hint">
+		android:orientation="vertical">
 
-		<requestFocus />
+		<org.briarproject.briar.android.view.ImagePreview
+			android:id="@+id/imagePreview"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:visibility="gone"
+			tools:visibility="visible" />
 
-	</org.briarproject.briar.android.view.LargeTextInputView>
+		<!-- One row per file the post will carry, added by the activity -->
+		<LinearLayout
+			android:id="@+id/fileList"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:orientation="vertical"
+			android:visibility="gone"
+			tools:visibility="visible" />
+
+		<org.briarproject.briar.android.view.LargeTextInputView
+			android:id="@+id/textInput"
+			android:layout_width="match_parent"
+			android:layout_height="match_parent"
+			android:gravity="bottom"
+			app:buttonText="@string/blogs_publish_blog_post"
+			app:fillHeight="true"
+			app:hint="@string/blogs_write_blog_post_body_hint">
+
+			<requestFocus />
+
+		</org.briarproject.briar.android.view.LargeTextInputView>
+
+	</LinearLayout>
 
 	<com.google.android.material.progressindicator.CircularProgressIndicator
 		android:id="@+id/progressBar"

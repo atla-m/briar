@@ -46,6 +46,12 @@ public class TextAttachmentController extends TextSendController
 
 	private final ImagePreview imagePreview;
 	private final AttachmentListener attachmentListener;
+	/**
+	 * The chat screens send with a button that doubles as the camera
+	 * button; a screen that composes one post has a plain send button and
+	 * attaches images from its menu instead, in which case this is null.
+	 */
+	@Nullable
 	private final CompositeSendButton sendButton;
 	private final AttachmentManager attachmentManager;
 
@@ -61,13 +67,19 @@ public class TextAttachmentController extends TextSendController
 		this.attachmentManager = attachmentManager;
 		this.imagePreview.setImagePreviewListener(this);
 
-		sendButton = (CompositeSendButton) compositeSendButton;
-		sendButton.setOnImageClickListener(view -> onImageButtonClicked());
+		if (compositeSendButton instanceof CompositeSendButton) {
+			sendButton = (CompositeSendButton) compositeSendButton;
+			sendButton.setOnImageClickListener(
+					view -> onImageButtonClicked());
+		} else {
+			sendButton = null;
+		}
 	}
 
 	@Override
 	protected void updateViewState() {
 		super.updateViewState();
+		if (sendButton == null) return;
 		if (loadingUris) {
 			sendButton.showProgress(true);
 		} else if (imageUris.isEmpty()) {
@@ -126,11 +138,15 @@ public class TextAttachmentController extends TextSendController
 	}
 
 	public void setImagesSupported() {
-		sendButton.setImagesSupported();
+		if (sendButton != null) sendButton.setImagesSupported();
 	}
 
-	private void onImageButtonClicked() {
-		if (!sendButton.hasImageSupport()) {
+	/**
+	 * Asks the screen to let the user choose images. Called by the camera
+	 * button, or by a menu item on a screen that has no such button.
+	 */
+	public void onImageButtonClicked() {
+		if (sendButton != null && !sendButton.hasImageSupport()) {
 			Context ctx = imagePreview.getContext();
 			Builder builder = new Builder(ctx, R.style.OnboardingDialogTheme);
 			builder.setTitle(

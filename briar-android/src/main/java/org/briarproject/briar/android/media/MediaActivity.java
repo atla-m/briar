@@ -47,8 +47,8 @@ import static java.util.Objects.requireNonNull;
 import static org.briarproject.briar.android.util.UiUtils.getDialogIcon;
 
 /**
- * Plays an audio or video file shared in a private group or a private
- * conversation, and lets the user save it.
+ * Plays an audio or video file shared in a private group, a private
+ * conversation or a blog post, and lets the user save it.
  */
 @MethodsNotNullByDefault
 @ParametersNotNullByDefault
@@ -60,10 +60,14 @@ public class MediaActivity extends BriarActivity {
 	public static final String CONTENT_TYPE = "contentType";
 	public static final String SIZE = "size";
 	/**
-	 * True if the file belongs to a private group, false if it belongs to
-	 * a private conversation.
+	 * Which client holds the file: one of {@link #CLIENT_GROUP},
+	 * {@link #CLIENT_MESSAGING} or {@link #CLIENT_BLOG}.
 	 */
-	public static final String IS_GROUP = "isGroup";
+	public static final String CLIENT = "client";
+
+	public static final int CLIENT_GROUP = 0;
+	public static final int CLIENT_MESSAGING = 1;
+	public static final int CLIENT_BLOG = 2;
 
 	private static final int PROGRESS_INTERVAL_MS = 250;
 
@@ -112,7 +116,7 @@ public class MediaActivity extends BriarActivity {
 		String name = requireNonNull(i.getStringExtra(NAME));
 		String contentType = requireNonNull(i.getStringExtra(CONTENT_TYPE));
 		long size = i.getLongExtra(SIZE, 0);
-		boolean isGroup = i.getBooleanExtra(IS_GROUP, true);
+		int client = i.getIntExtra(CLIENT, CLIENT_GROUP);
 		header = new FileHeader(groupId, manifestId, name, contentType, size);
 		isVideo = contentType.startsWith("video/");
 
@@ -180,7 +184,7 @@ public class MediaActivity extends BriarActivity {
 			}
 		});
 
-		viewModel.setFile(header, isGroup);
+		viewModel.setFile(header, client);
 		viewModel.getSource().observe(this, source -> {
 			if (isVideo && !surfaceReady) pendingSource = source;
 			else startPlayer(source);

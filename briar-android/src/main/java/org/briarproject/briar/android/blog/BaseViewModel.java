@@ -1,6 +1,7 @@
 package org.briarproject.briar.android.blog;
 
 import android.app.Application;
+import android.net.Uri;
 
 import org.briarproject.bramble.api.db.DatabaseExecutor;
 import org.briarproject.bramble.api.db.DbException;
@@ -10,13 +11,22 @@ import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.identity.IdentityManager;
 import org.briarproject.bramble.api.identity.LocalAuthor;
+import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.AndroidExecutor;
+import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.attachment.AttachmentRetriever;
 import org.briarproject.briar.android.viewmodel.DbViewModel;
+import org.briarproject.briar.android.viewmodel.LiveEvent;
 import org.briarproject.briar.android.viewmodel.LiveResult;
+import org.briarproject.briar.android.viewmodel.MutableLiveEvent;
 import org.briarproject.briar.api.android.AndroidNotificationManager;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
+import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogCommentHeader;
 import org.briarproject.briar.api.blog.BlogManager;
@@ -24,9 +34,14 @@ import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.util.HtmlUtils;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
 
@@ -35,9 +50,12 @@ import javax.annotation.Nullable;
 import androidx.annotation.UiThread;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
+import androidx.lifecycle.Observer;
 
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
+import static java.util.Objects.requireNonNull;
+import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.bramble.util.LogUtils.logDuration;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.LogUtils.now;
@@ -51,9 +69,26 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	protected final IdentityManager identityManager;
 	protected final AndroidNotificationManager notificationManager;
 	protected final BlogManager blogManager;
+	protected final AttachmentRetriever attachmentRetriever;
+	@IoExecutor
+	private final Executor ioExecutor;
 
 	protected final MutableLiveData<LiveResult<ListUpdate>> blogPosts =
 			new MutableLiveData<>();
+
+	// The ID of a post whose images or files have changed state, so the
+	// list can redraw that post
+	private final MutableLiveData<MessageId> attachmentUpdated =
+			new MutableLiveData<>();
+	// UiThread
+	private final List<AttachmentSubscription> attachmentSubscriptions =
+			new ArrayList<>();
+	// The posts that share files, keyed by manifest ID, so progress events
+	// for a file can be routed to the post that shares it. UiThread
+	private final Map<MessageId, BlogPostItem> filePosts = new HashMap<>();
+	// true if there was an error, false if the file was saved
+	private final MutableLiveEvent<Boolean> saveError =
+			new MutableLiveEvent<>();
 
 	BaseViewModel(Application application,
 			@DatabaseExecutor Executor dbExecutor,
@@ -63,12 +98,16 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 			EventBus eventBus,
 			IdentityManager identityManager,
 			AndroidNotificationManager notificationManager,
-			BlogManager blogManager) {
+			BlogManager blogManager,
+			AttachmentRetriever attachmentRetriever,
+			@IoExecutor Executor ioExecutor) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
 		this.eventBus = eventBus;
 		this.identityManager = identityManager;
 		this.notificationManager = notificationManager;
 		this.blogManager = blogManager;
+		this.attachmentRetriever = attachmentRetriever;
+		this.ioExecutor = ioExecutor;
 		eventBus.addListener(this);
 	}
 
@@ -76,6 +115,145 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	protected void onCleared() {
 		super.onCleared();
 		eventBus.removeListener(this);
+		clearAttachmentSubscriptions();
+	}
+
+	// Images and files. They may arrive before or after the post that
+	// references them, so each post's items are observed and the list is
+	// told to redraw the post when one changes state.
+
+	/**
+	 * Handles a file progress event for one of this screen's posts.
+	 * Subclasses call this from their event handler.
+	 */
+	protected void onFileProgress(FileProgressEvent p) {
+		if (p.isComplete()) {
+			// A chunked image is referenced by its manifest ID and can be
+			// shown once all of its chunks have arrived
+			runOnDbThread(() ->
+					attachmentRetriever.loadAttachmentItem(p.getManifestId()));
+		}
+		androidExecutor.runOnUiThread(() -> {
+			BlogPostItem item = filePosts.get(p.getManifestId());
+			if (item == null) return;
+			for (FileHeader h : item.getFileHeaders()) {
+				if (h.getManifestId().equals(p.getManifestId()))
+					loadFileStatus(item, h);
+			}
+		});
+	}
+
+	/**
+	 * Handles an image arriving for one of this screen's posts.
+	 * Subclasses call this from their event handler.
+	 */
+	protected void onAttachmentReceived(MessageId messageId) {
+		runOnDbThread(() ->
+				attachmentRetriever.loadAttachmentItem(messageId));
+	}
+
+	@UiThread
+	protected void loadAttachments(List<BlogPostItem> items) {
+		clearAttachmentSubscriptions();
+		filePosts.clear();
+		for (BlogPostItem item : items) loadAttachments(item);
+	}
+
+	@UiThread
+	protected void loadAttachments(BlogPostItem item) {
+		for (FileHeader h : item.getFileHeaders()) {
+			filePosts.put(h.getManifestId(), item);
+			loadFileStatus(item, h);
+		}
+		List<AttachmentHeader> headers = item.getAttachmentHeaders();
+		if (headers.isEmpty()) return;
+		List<LiveData<AttachmentItem>> liveDataList =
+				attachmentRetriever.getAttachmentItems(headers);
+		List<AttachmentItem> attachments = new ArrayList<>(headers.size());
+		for (LiveData<AttachmentItem> liveData : liveDataList) {
+			attachments.add(requireNonNull(liveData.getValue()));
+			AttachmentSubscription s =
+					new AttachmentSubscription(item, liveData);
+			attachmentSubscriptions.add(s);
+			liveData.observeForever(s);
+		}
+		item.setAttachments(attachments);
+	}
+
+	@UiThread
+	private void loadFileStatus(BlogPostItem item, FileHeader h) {
+		runOnDbThread(() -> {
+			try {
+				FileStatus status = blogManager.getFileStatus(h);
+				androidExecutor.runOnUiThread(() -> {
+					// Only redraw if this post is still being shown
+					if (filePosts.get(h.getManifestId()) == item &&
+							item.updateFileStatus(status)) {
+						attachmentUpdated.setValue(item.getId());
+					}
+				});
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
+	@UiThread
+	private void clearAttachmentSubscriptions() {
+		for (AttachmentSubscription s : attachmentSubscriptions) s.remove();
+		attachmentSubscriptions.clear();
+	}
+
+	private class AttachmentSubscription implements Observer<AttachmentItem> {
+
+		private final BlogPostItem item;
+		private final LiveData<AttachmentItem> liveData;
+
+		private AttachmentSubscription(BlogPostItem item,
+				LiveData<AttachmentItem> liveData) {
+			this.item = item;
+			this.liveData = liveData;
+		}
+
+		@Override
+		public void onChanged(AttachmentItem attachment) {
+			if (item.updateAttachments(attachment)) {
+				attachmentUpdated.setValue(item.getId());
+			}
+			// Once the image is loaded (or failed), stop observing
+			if (attachment.getState().isFinal()) remove();
+		}
+
+		private void remove() {
+			liveData.removeObserver(this);
+		}
+	}
+
+	LiveData<MessageId> getAttachmentUpdated() {
+		return attachmentUpdated;
+	}
+
+	LiveEvent<Boolean> getSaveError() {
+		return saveError;
+	}
+
+	/**
+	 * Copies a fully received file to the location the user chose.
+	 */
+	void saveFile(FileHeader header, Uri uri) {
+		ioExecutor.execute(() -> {
+			try {
+				InputStream is = blogManager.getFile(header);
+				OutputStream os = getApplication().getContentResolver()
+						.openOutputStream(uri);
+				if (os == null) throw new IOException("Cannot open " + uri);
+				copyAndClose(is, os);
+				saveError.postEvent(false);
+			} catch (IOException | DbException e) {
+				logException(LOG, WARNING, e);
+				saveError.postEvent(true);
+			}
+		});
 	}
 
 	@DatabaseExecutor
@@ -142,6 +320,7 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 
 	@UiThread
 	private void onBlogPostItemAdded(BlogPostItem item, boolean local) {
+		loadAttachments(item);
 		List<BlogPostItem> items = addListItem(getBlogPostItems(), item);
 		if (items != null) {
 			Collections.sort(items);
@@ -160,6 +339,17 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 				handleException(e);
 			}
 		});
+	}
+
+	/**
+	 * Publishes a freshly loaded list of posts, loading the images and
+	 * files they carry first.
+	 */
+	@UiThread
+	protected void setBlogPosts(LiveResult<ListUpdate> result) {
+		ListUpdate update = result.getResultOrNull();
+		if (update != null) loadAttachments(update.getItems());
+		blogPosts.setValue(result);
 	}
 
 	LiveData<LiveResult<ListUpdate>> getBlogPosts() {

@@ -6,6 +6,7 @@ import android.view.ViewGroup;
 
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
+import org.briarproject.briar.android.attachment.ImageGridAdapter;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.threaded.BaseThreadItemViewHolder;
 import org.briarproject.briar.android.threaded.ThreadItemAdapter;
@@ -22,7 +23,7 @@ import androidx.annotation.UiThread;
 class GroupMessageAdapter extends ThreadItemAdapter<GroupMessageItem>
 		implements GroupPostViewHolder.Listener {
 
-	private final GroupImageAdapter.Listener imageListener;
+	private final ImageGridAdapter.Listener<GroupMessageItem> imageListener;
 	private final QuoteListener quoteListener;
 	private final FileListener fileListener;
 
@@ -36,7 +37,7 @@ class GroupMessageAdapter extends ThreadItemAdapter<GroupMessageItem>
 	}
 
 	GroupMessageAdapter(ThreadItemListener<GroupMessageItem> listener,
-			GroupImageAdapter.Listener imageListener,
+			ImageGridAdapter.Listener<GroupMessageItem> imageListener,
 			QuoteListener quoteListener, FileListener fileListener) {
 		super(listener);
 		this.imageListener = imageListener;

@@ -10,14 +10,18 @@ import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.identity.IdentityManager;
+import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
 import org.briarproject.bramble.api.system.AndroidExecutor;
+import org.briarproject.briar.android.attachment.AttachmentRetriever;
 import org.briarproject.briar.android.viewmodel.LiveResult;
 import org.briarproject.briar.api.android.AndroidNotificationManager;
+import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogManager;
+import org.briarproject.briar.api.blog.event.BlogAttachmentReceivedEvent;
 import org.briarproject.briar.api.blog.event.BlogPostAddedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -54,16 +58,24 @@ class FeedViewModel extends BaseViewModel {
 			EventBus eventBus,
 			IdentityManager identityManager,
 			AndroidNotificationManager notificationManager,
-			BlogManager blogManager) {
+			BlogManager blogManager,
+			AttachmentRetriever attachmentRetriever,
+			@IoExecutor Executor ioExecutor) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
-				eventBus, identityManager, notificationManager, blogManager);
+				eventBus, identityManager, notificationManager, blogManager,
+				attachmentRetriever, ioExecutor);
 		loadPersonalBlog();
 		loadAllBlogPosts();
 	}
 
 	@Override
 	public void eventOccurred(Event e) {
-		if (e instanceof BlogPostAddedEvent) {
+		if (e instanceof FileProgressEvent) {
+			onFileProgress((FileProgressEvent) e);
+		} else if (e instanceof BlogAttachmentReceivedEvent) {
+			onAttachmentReceived(
+					((BlogAttachmentReceivedEvent) e).getMessageId());
+		} else if (e instanceof BlogPostAddedEvent) {
 			BlogPostAddedEvent b = (BlogPostAddedEvent) e;
 			LOG.info("Blog post added");
 			onBlogPostAdded(b.getHeader(), b.isLocal());
@@ -104,7 +116,7 @@ class FeedViewModel extends BaseViewModel {
 	}
 
 	private void loadAllBlogPosts() {
-		loadFromDb(this::loadAllBlogPosts, blogPosts::setValue);
+		loadFromDb(this::loadAllBlogPosts, this::setBlogPosts);
 	}
 
 	@DatabaseExecutor
@@ -126,7 +138,7 @@ class FeedViewModel extends BaseViewModel {
 				item.getGroupId().equals(g)
 		);
 		if (items != null) {
-			blogPosts.setValue(new LiveResult<>(new ListUpdate(null, items)));
+			setBlogPosts(new LiveResult<>(new ListUpdate(null, items)));
 		}
 	}
 
