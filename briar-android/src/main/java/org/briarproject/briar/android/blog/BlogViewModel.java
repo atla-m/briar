@@ -259,6 +259,21 @@ class BlogViewModel extends BaseViewModel {
 		});
 	}
 
+	/**
+	 * Deletes our own channel with its key, or unsubscribes from someone
+	 * else's. Removing only the blog would leave our key behind.
+	 */
+	void leaveChannel(boolean owner) {
+		runOnDbThread(() -> {
+			try {
+				if (owner) channelManager.deleteChannel(groupId);
+				else channelManager.unsubscribe(groupId);
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
 	LiveData<Boolean> getSharingWithContacts() {
 		return sharingWithContacts;
 	}

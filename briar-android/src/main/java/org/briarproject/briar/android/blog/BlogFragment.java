@@ -194,14 +194,16 @@ public class BlogFragment extends BaseFragment
 		MenuItem chooseContacts =
 				menu.findItem(R.id.action_blog_choose_contacts);
 		viewModel.getBlog().observe(getViewLifecycleOwner(), blog -> {
-			if (blog.isOurs()) writeButton.setVisible(true);
+			// A channel is signed by a key of its own, not by us
+			if (blog.isOurs() || blog.isOwnChannel())
+				writeButton.setVisible(true);
 			// A channel isn't shared by invitation: an accepted one would
 			// keep it visible to a contact the owner later unticks
 			shareButton.setVisible(!blog.getBlog().isChannel());
 			if (blog.canBeRemoved()) deleteButton.setEnabled(true);
 			// A channel is unsubscribed from, or deleted by its owner
 			if (blog.getBlog().isChannel()) {
-				deleteButton.setTitle(blog.isOurs() ?
+				deleteButton.setTitle(blog.isOwnChannel() ?
 						R.string.channels_delete_channel :
 						R.string.channels_unsubscribe_channel);
 			}
@@ -491,6 +493,11 @@ public class BlogFragment extends BaseFragment
 	}
 
 	private void showDeleteDialog() {
+		BlogItem blog = viewModel.getBlog().getValue();
+		if (blog != null && blog.getBlog().isChannel()) {
+			showDeleteChannelDialog(blog.isOwnChannel());
+			return;
+		}
 		MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(
 				requireContext(), R.style.BriarDialogTheme);
 		builder.setTitle(getString(R.string.blogs_remove_blog));
@@ -499,6 +506,26 @@ public class BlogFragment extends BaseFragment
 		builder.setPositiveButton(R.string.cancel, null);
 		builder.setNegativeButton(R.string.blogs_remove_blog_ok,
 				(dialog, which) -> deleteBlog());
+		builder.show();
+	}
+
+	/**
+	 * A channel is left as on the list of channels: its owner deletes its
+	 * key with it, and anyone else unsubscribes, each warned as there.
+	 */
+	private void showDeleteChannelDialog(boolean owner) {
+		MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(
+				requireContext(), R.style.BriarDialogTheme);
+		builder.setTitle(owner ? R.string.channels_delete_title :
+				R.string.channels_unsubscribe_title);
+		builder.setMessage(owner ? R.string.channels_delete_message :
+				R.string.channels_unsubscribe_message);
+		builder.setPositiveButton(owner ? R.string.delete :
+				R.string.channels_unsubscribe, (dialog, which) -> {
+			viewModel.leaveChannel(owner);
+			finish();
+		});
+		builder.setNegativeButton(R.string.cancel, null);
 		builder.show();
 	}
 
