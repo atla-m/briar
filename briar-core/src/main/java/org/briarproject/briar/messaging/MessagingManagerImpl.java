@@ -83,6 +83,7 @@ import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMA
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
+import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_ONLY;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
@@ -657,7 +658,10 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			ContactId c) throws DbException {
 		int minorVersion = clientVersioningManager
 				.getClientMinorVersion(txn, c, CLIENT_ID, 0);
-		if (minorVersion >= 6) return TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
+		if (minorVersion >= 7)
+			return TEXT_IMAGES_AUTO_DELETE_FILES_SIGNED_FORWARD;
+		else if (minorVersion >= 6)
+			return TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
 		else if (minorVersion >= 5) return TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
 		else if (minorVersion >= 4) return TEXT_IMAGES_AUTO_DELETE_FILES;
 		else if (minorVersion >= 3) return TEXT_IMAGES_AUTO_DELETE;

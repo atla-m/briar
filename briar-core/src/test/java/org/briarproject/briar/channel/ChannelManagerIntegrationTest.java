@@ -30,6 +30,8 @@ import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.api.messaging.ForwardedPost;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.messaging.PrivateMessage;
+import org.briarproject.briar.api.messaging.PrivateMessageHeader;
+import org.briarproject.briar.api.conversation.ConversationMessageHeader;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.attachment.CountingInputStream;
@@ -2812,6 +2814,10 @@ public class ChannelManagerIntegrationTest
 		MessageId postId = channelManager0.post(g, text);
 		ForwardedPost post = channelManager0.getForwardedPost(g, postId);
 		assertEquals(text, post.getText());
+		// The contact's client is this one, so it can take a forward
+		assertTrue(db0.transactionWithResult(true, txn ->
+				c0.getMessagingManager().getContactMessageFormat(txn,
+						contactId1From0)).supportsForwarding());
 		assertEquals(channelManager0.getChannelLink(g), post.getChannelLink());
 
 		PrivateMessage m = forward(post);
@@ -2822,6 +2828,11 @@ public class ChannelManagerIntegrationTest
 				.getForwardedPost(m.getMessage().getId());
 		assertEquals(text, received.getText());
 		assertEquals(post.getChannelLink(), received.getChannelLink());
+		// Both sides' conversations show it as a forward
+		assertEquals(post.getChannelLink(), forwardHeader(c0,
+				contactId1From0, m.getMessage().getId()).getChannelLink());
+		assertEquals(post.getChannelLink(), forwardHeader(c1,
+				contactId0From1, m.getMessage().getId()).getChannelLink());
 		assertFalse(db1.transactionWithResult(true,
 				txn -> db1.containsGroup(txn, g)));
 
@@ -2848,6 +2859,15 @@ public class ChannelManagerIntegrationTest
 				post.getAttachmentHeaders(), post.getSignature());
 		forward(forged);
 		syncMessage(c0, c1, contactId1From0, 1, 0, 1, 0);
+	}
+
+	private PrivateMessageHeader forwardHeader(BriarIntegrationTestComponent c,
+			ContactId contact, MessageId id) throws Exception {
+		for (ConversationMessageHeader h : c.getConversationManager()
+				.getMessageHeaders(contact)) {
+			if (h.getId().equals(id)) return (PrivateMessageHeader) h;
+		}
+		throw new AssertionError("No such message");
 	}
 
 	private PrivateMessage forward(ForwardedPost post) throws Exception {
