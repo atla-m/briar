@@ -2402,6 +2402,34 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testANearbyCopyOfAnotherChannelIsRefused() throws Exception {
+		// A stranger met while sharing one channel serves another channel
+		// we hold, to push posts into it or to learn that we hold it
+		Channel shared = channelManager0.createChannel("Announcements");
+		Channel other = channelManager0.createChannel("News");
+		GroupId g = shared.getBlogId();
+		GroupId otherId = other.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		channelManager1.subscribeFromLink(
+				channelManager0.getChannelLink(otherId));
+		channelManager0.post(otherId, getRandomString(42));
+		ClientHelper h = c1.getClientHelper();
+		byte[] copy = exportChannel(otherId);
+		ByteArrayOutputStream served = new ByteArrayOutputStream();
+		served.write(h.toByteArray(BdfList.of((long) copy.length)));
+		served.write(copy);
+		served.write(h.toByteArray(new BdfList()));
+		try {
+			c1.getNearbyChannelProtocol().read(g,
+					new ByteArrayInputStream(served.toByteArray()),
+					new ByteArrayOutputStream());
+			fail();
+		} catch (FormatException expected) {
+			// The copy must be of the channel being shared
+		}
+	}
+
+	@Test
 	public void testAForgedPostCannotGetAnImageStored() throws Exception {
 		// Images are unsigned, and are stored only if a post carries
 		// them. A post that isn't the owner's must not count, even

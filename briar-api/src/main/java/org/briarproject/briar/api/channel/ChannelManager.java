@@ -281,6 +281,20 @@ public interface ChannelManager {
 			throws DbException, IOException, FormatException;
 
 	/**
+	 * Like {@link #importChannel(InputStream)}, for a stream that must
+	 * carry the given channel, such as a copy served by a stranger met
+	 * while sharing that channel nearby. A stream of any other channel
+	 * is refused before anything is stored, in the same way whether or
+	 * not we hold that channel, so the stream can't learn which channels
+	 * we hold or add posts to them.
+	 *
+	 * @throws FormatException If the stream is malformed, or carries
+	 * another channel
+	 */
+	int importChannel(InputStream in, GroupId expected)
+			throws DbException, IOException, FormatException;
+
+	/**
 	 * Reads the header of a channel stream and returns the channel it
 	 * carries, without storing anything. The header holds the channel's
 	 * title and public key, the same identity a channel link carries, so

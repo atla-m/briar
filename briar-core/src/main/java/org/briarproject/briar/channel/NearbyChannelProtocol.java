@@ -107,8 +107,9 @@ public class NearbyChannelProtocol {
 		writeList(out, BdfList.of(PROTOCOL_VERSION));
 		long length = readLength(in, MAX_IMPORT_BYTES);
 		if (length == 0) throw new FormatException();
+		// The copy must be of the channel this session shares
 		int messages = channelManager.importChannel(
-				new CountingInputStream(in, length));
+				new CountingInputStream(in, length), g);
 		if (LOG.isLoggable(INFO)) {
 			LOG.info("Read " + messages + " messages from a nearby copy");
 		}

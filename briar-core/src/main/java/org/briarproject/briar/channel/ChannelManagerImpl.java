@@ -1973,6 +1973,12 @@ class ChannelManagerImpl
 	}
 
 	@Override
+	public int importChannel(InputStream in, GroupId expected)
+			throws DbException, IOException, FormatException {
+		return importFile(in, expected, false, -1, MAX_IMPORT_BYTES);
+	}
+
+	@Override
 	public int subscribeFromFile(InputStream in, GroupId confirmed)
 			throws DbException, IOException, FormatException {
 		// The user agreed to the channel the file named when it was read
