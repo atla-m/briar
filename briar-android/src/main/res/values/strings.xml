@@ -598,10 +598,11 @@
 	<string name="channels_mirrors_explanation">Web addresses where this channel\'s file is published, one per line. Subscribers fetch from these over Tor. Hosts can\'t change posts, but they can leave some out and see when the file is fetched. Use hosts you trust, and more than one in case one is blocked.</string>
 	<string name="channels_mirrors_hint">https://example.com/channel.briar</string>
 	<string name="channels_mirrors_saved">Saved. The channel link now includes these addresses.</string>
-	<string name="channels_mirrors_invalid">Those addresses could not be saved</string>
+	<string name="channels_mirrors_invalid">Those addresses could not be saved. Each must start with https://, or be a .onion address.</string>
 	<string name="channels_fetch">Fetch now</string>
 	<string name="channels_fetch_none">Nothing new</string>
 	<string name="channels_fetch_no_mirrors">This channel has no addresses to fetch from</string>
+	<string name="channels_fetch_no_safe_mirrors">This channel\'s addresses don\'t use https, so they aren\'t used: anyone along the way could read or change what is fetched. Ask for a new link.</string>
 	<string name="channels_fetch_unreachable">Could not reach any of this channel\'s addresses. You may be missing recent posts.</string>
 	<string name="channels_unsubscribe">Unsubscribe</string>
 	<string name="channels_unsubscribe_channel">Unsubscribe from channel</string>

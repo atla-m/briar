@@ -66,6 +66,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -96,6 +97,7 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 import static java.util.Collections.emptyList;
+import static java.util.Collections.shuffle;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -140,6 +142,7 @@ import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MES
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_SAFE_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.IN_PROGRESS;
@@ -215,6 +218,7 @@ class ChannelManagerImpl
 	private final Executor ioExecutor;
 	private final ChannelContactSharing contactSharing;
 	private final WeakSingletonProvider<OkHttpClient> httpClientProvider;
+	private final SecureRandom secureRandom;
 	private final AtomicBoolean fetcherStarted = new AtomicBoolean(false);
 	// Channels and files being fetched now, so that a scheduled fetch,
 	// "Fetch now" and the file triggers don't read the same bytes twice
@@ -243,8 +247,10 @@ class ChannelManagerImpl
 			BdfWriterFactory bdfWriterFactory, Clock clock,
 			TaskScheduler scheduler, @IoExecutor Executor ioExecutor,
 			WeakSingletonProvider<OkHttpClient> httpClientProvider,
-			ChannelContactSharing contactSharing) {
+			ChannelContactSharing contactSharing,
+			SecureRandom secureRandom) {
 		this.contactSharing = contactSharing;
+		this.secureRandom = secureRandom;
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.contactGroupFactory = contactGroupFactory;
@@ -591,11 +597,11 @@ class ChannelManagerImpl
 			// A channel that came from a file has nowhere to fetch from
 			// until a link arrives, so a link's mirrors are welcome then
 			if (getMirrors(blog.getId()).isEmpty() && !parsed.mirrors.isEmpty())
-				setMirrors(blog.getId(), parsed.mirrors);
+				storeMirrors(blog.getId(), parsed.mirrors);
 			return blog;
 		}
 		db.transaction(false, txn -> blogManager.addBlog(txn, blog));
-		if (!parsed.mirrors.isEmpty()) setMirrors(blog.getId(), parsed.mirrors);
+		if (!parsed.mirrors.isEmpty()) storeMirrors(blog.getId(), parsed.mirrors);
 		return blog;
 	}
 
@@ -645,14 +651,26 @@ class ChannelManagerImpl
 			throws DbException {
 		if (mirrors.size() > MAX_MIRRORS)
 			throw new IllegalArgumentException();
-		BdfList list = new BdfList();
 		for (String mirror : mirrors) {
 			if (mirror.isEmpty() || mirror.length() > MAX_MIRROR_LENGTH)
 				throw new IllegalArgumentException();
-			if (HttpUrl.parse(mirror) == null)
+			// The owner can only add mirrors that are safe to fetch from
+			HttpUrl url = HttpUrl.parse(mirror);
+			if (url == null || !isSafeMirror(url))
 				throw new IllegalArgumentException();
-			list.add(mirror);
 		}
+		storeMirrors(g, mirrors);
+	}
+
+	/**
+	 * Stores a channel's mirrors. Those from a link have been parsed but
+	 * may include plain HTTP ones, which are kept, so the link can be
+	 * passed on whole, and skipped when fetching.
+	 */
+	private void storeMirrors(GroupId g, List<String> mirrors)
+			throws DbException {
+		BdfList list = new BdfList();
+		for (String mirror : mirrors) list.add(mirror);
 		BdfDictionary meta =
 				BdfDictionary.of(new BdfEntry(GROUP_KEY_MIRRORS, list));
 		db.transaction(false, txn -> {
@@ -741,57 +759,114 @@ class ChannelManagerImpl
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
-		// Try each mirror until one answers. A mirror can withhold the
-		// channel but can't change it, so trying another is always safe.
-		// A mirror that has less of the file than we do may be lagging
-		// behind the one we read from, so every mirror is asked to
-		// continue the file before it is taken to have been replaced.
-		boolean changed = false;
+		// Plain HTTP mirrors are kept, since links naming them are in
+		// circulation, but never used
+		List<String> safe = new ArrayList<>(mirrors.size());
 		for (String mirror : mirrors) {
-			try {
-				return fetched(g, fetchFrom(g, mirror, state,
-						state.offset > 0));
-			} catch (ChangedFileException e) {
-				changed = true;
-			} catch (ChannelTooLargeException e) {
-				// The limit is on the file, not the mirror, so no other
-				// mirror can help
-				logException(LOG, INFO, e);
-				return new FetchResult(TOO_LARGE, 0);
-			} catch (IOException e) {
-				logException(LOG, INFO, e);
-			}
+			HttpUrl url = HttpUrl.parse(mirror);
+			if (url != null && isSafeMirror(url)) safe.add(mirror);
 		}
-		if (changed) {
-			// The file we were reading is not the file being served
-			// now, so read it from the beginning, forgetting what we
-			// knew about the old one. We must forget the validators
-			// as well as the offset: a mirror that gave the same tag
-			// or date for a file we can't continue would otherwise
-			// answer that there was nothing new, and we would never
-			// read the file it is actually serving.
+		if (safe.isEmpty()) return new FetchResult(NO_SAFE_MIRRORS, 0);
+		// Mirrors are asked in a random order, so no one mirror sees
+		// every fetch or decides alone what we get
+		shuffle(safe, secureRandom);
+		Answers first = askMirrors(g, safe, state, state.offset > 0);
+		if (first.fetched != null) return fetched(g, first.fetched);
+		// A mirror that has less of the file than we do may be lagging
+		// behind the one we read from, or the file may have been
+		// replaced. If two mirrors didn't agree that we're up to date,
+		// read the file from the beginning, forgetting what we knew
+		// about the old one. We must forget the validators as well as
+		// the offset: a mirror that gave the same tag or date for a
+		// file we can't continue would otherwise answer that there was
+		// nothing new, and we would never read the file it is serving.
+		if (first.changed && first.count() < 2) {
 			if (LOG.isLoggable(INFO)) {
 				LOG.info("Channel file changed, fetching in full");
 			}
 			FetchState fresh = new FetchState(null, null, 0, 0);
-			for (String mirror : mirrors) {
-				try {
-					return fetched(g, fetchFrom(g, mirror, fresh, false));
-				} catch (ChangedFileException e) {
-					// Only a fetch that is continuing a file can throw this
-					throw new AssertionError(e);
-				} catch (ChannelTooLargeException e) {
-					logException(LOG, INFO, e);
-					return new FetchResult(TOO_LARGE, 0);
-				} catch (IOException e) {
-					logException(LOG, INFO, e);
-				}
-			}
+			Answers again = askMirrors(g, safe, fresh, false);
+			if (again.fetched != null) return fetched(g, again.fetched);
+			if (again.count() > 0) return again.combined();
 		}
+		if (first.count() > 0) return first.combined();
 		// Not the same as being up to date: we may be missing everything
 		// published since we last fetched
 		if (LOG.isLoggable(INFO)) LOG.info("No mirror answered for channel");
 		return new FetchResult(UNREACHABLE, 0);
+	}
+
+	/**
+	 * Asks mirrors in turn until one serves the channel, or until two
+	 * have answered without serving it. A mirror can withhold the channel
+	 * but can't change it, so one that says there is nothing new, or that
+	 * the file is too large, is checked with one other.
+	 */
+	private Answers askMirrors(GroupId g, List<String> mirrors,
+			FetchState state, boolean resume) throws DbException {
+		Answers answers = new Answers();
+		for (String mirror : mirrors) {
+			try {
+				FetchResult r = fetchFrom(g, mirror, state, resume);
+				if (r.getOutcome() == FETCHED) {
+					answers.fetched = r;
+					return answers;
+				}
+				answers.unchanged++;
+			} catch (ChangedFileException e) {
+				answers.changed = true;
+			} catch (ChannelTooLargeException e) {
+				// The limit is on the file, but a mirror can serve junk
+				// to pass it. What it served doesn't count against the
+				// channel's real file, so the state is put back.
+				logException(LOG, INFO, e);
+				storeFetchState(g, state.offset, state.messages,
+						state.etag, state.lastModified);
+				answers.tooLarge++;
+			} catch (IOException e) {
+				logException(LOG, INFO, e);
+			}
+			if (answers.count() >= 2) return answers;
+		}
+		return answers;
+	}
+
+	/**
+	 * The answers from the mirrors asked for one fetch.
+	 */
+	private static class Answers {
+
+		@Nullable
+		private FetchResult fetched = null;
+		private int unchanged = 0, tooLarge = 0;
+		private boolean changed = false;
+
+		private int count() {
+			return unchanged + tooLarge;
+		}
+
+		/**
+		 * If any mirror said we're up to date, that is believed over one
+		 * that said the file is too large, which may be serving junk.
+		 */
+		private FetchResult combined() {
+			return new FetchResult(unchanged > 0 ? UNCHANGED : TOO_LARGE, 0);
+		}
+	}
+
+	/**
+	 * Returns true if fetching from the given URL over Tor keeps what is
+	 * fetched private and unchanged. HTTPS does, and so does an onion
+	 * service, which is reached without an exit. Plain HTTP to anywhere
+	 * else lets the exit read and change the request and the reply. A
+	 * loopback address is allowed for tests: Tor refuses to connect to
+	 * one, so it is never reached.
+	 */
+	static boolean isSafeMirror(HttpUrl url) {
+		if (url.isHttps()) return true;
+		String host = url.host();
+		return host.endsWith(".onion") || host.equals("localhost") ||
+				host.equals("127.0.0.1") || host.equals("::1");
 	}
 
 	/**
@@ -870,6 +945,10 @@ class ChannelManagerImpl
 		try (ResponseBody body = response.body()) {
 			int code = response.code();
 			if (code == 304) {
+				// Without a tag or date to compare, the mirror can't know
+				// what we have, so this is withholding, not an answer
+				if (state.etag == null && state.lastModified == null)
+					throw new IOException("Unchanged, but we didn't ask");
 				if (LOG.isLoggable(INFO)) LOG.info("Channel unchanged");
 				return new FetchResult(UNCHANGED, 0);
 			}

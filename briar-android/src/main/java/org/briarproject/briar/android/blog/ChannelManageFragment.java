@@ -448,6 +448,9 @@ public class ChannelManageFragment extends BaseFragment
 			case NO_MIRRORS:
 				showMessage(R.string.channels_fetch_no_mirrors);
 				return;
+			case NO_SAFE_MIRRORS:
+				showMessage(R.string.channels_fetch_no_safe_mirrors);
+				return;
 			case UNREACHABLE:
 				// Not the same as being up to date
 				showMessage(R.string.channels_fetch_unreachable);

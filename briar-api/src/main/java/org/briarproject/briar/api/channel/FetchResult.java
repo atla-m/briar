@@ -21,6 +21,12 @@ public class FetchResult {
 		 */
 		NO_MIRRORS,
 		/**
+		 * The channel's mirrors all use plain HTTP to a site that isn't
+		 * an onion service, where the Tor exit could read and change
+		 * what is fetched, so none of them was used.
+		 */
+		NO_SAFE_MIRRORS,
+		/**
 		 * None of the channel's mirrors answered.
 		 */
 		UNREACHABLE,

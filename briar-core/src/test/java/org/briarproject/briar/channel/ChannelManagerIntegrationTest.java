@@ -69,6 +69,7 @@ import static org.briarproject.briar.api.channel.ChannelConstants.LINK_PREFIX;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.ChannelConstants.FILE_STREAM_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_SAFE_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.IN_PROGRESS;
@@ -732,18 +733,50 @@ public class ChannelManagerIntegrationTest
 		channelManager0.post(g, getRandomString(42));
 		byte[] three = exportChannel(g);
 
+		// Mirrors are asked in a random order, so each answers the same
+		// whenever it is asked. The lagging one has the second file and
+		// then falls back to an older one that ends before where we are.
+		AtomicInteger phase = new AtomicInteger(1);
+		AtomicInteger fullFetches = new AtomicInteger();
 		MockWebServer lagging = new MockWebServer();
-		lagging.enqueue(new MockResponse().setBody(new Buffer().write(two)));
-		// Still serving the older file, which ends before where we are
-		lagging.enqueue(new MockResponse().setResponseCode(416)
-				.setHeader("Content-Range", "bytes */" + one.length));
+		lagging.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				if (request.getHeader("Range") == null) {
+					if (phase.get() == 2) fullFetches.incrementAndGet();
+					return new MockResponse()
+							.setBody(new Buffer().write(two));
+				}
+				return new MockResponse().setResponseCode(416)
+						.setHeader("Content-Range", "bytes */" + one.length);
+			}
+		});
 		lagging.start();
 		MockWebServer current = new MockWebServer();
-		current.enqueue(new MockResponse().setResponseCode(206)
-				.setHeader("Content-Range", "bytes " + two.length + "-" +
-						(three.length - 1) + "/" + three.length)
-				.setBody(new Buffer().write(three, two.length,
-						three.length - two.length)));
+		current.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				byte[] file = phase.get() == 1 ? two : three;
+				String range = request.getHeader("Range");
+				if (range == null) {
+					if (phase.get() == 2) fullFetches.incrementAndGet();
+					return new MockResponse()
+							.setBody(new Buffer().write(file));
+				}
+				if (!range.equals("bytes=" + two.length + "-"))
+					return new MockResponse().setResponseCode(400);
+				if (file == two) {
+					return new MockResponse().setResponseCode(416)
+							.setHeader("Content-Range", "bytes */" +
+									two.length);
+				}
+				return new MockResponse().setResponseCode(206)
+						.setHeader("Content-Range", "bytes " + two.length +
+								"-" + (three.length - 1) + "/" + three.length)
+						.setBody(new Buffer().write(three, two.length,
+								three.length - two.length));
+			}
+		});
 		current.start();
 		try {
 			channelManager0.setMirrors(g, asList(
@@ -754,15 +787,14 @@ public class ChannelManagerIntegrationTest
 			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
 			awaitPendingMessageDelivery(2);
 
+			phase.set(2);
 			FetchResult result = channelManager1.fetchChannel(g);
 			assertEquals(FETCHED, result.getOutcome());
 			assertEquals(1, result.getMessages());
 			awaitPendingMessageDelivery(1);
 			assertEquals(3, blogManager1.getPostHeaders(g).size());
-			// The lagging mirror was not asked for the whole file
-			assertEquals(2, lagging.getRequestCount());
-			assertEquals("bytes=" + two.length + "-",
-					current.takeRequest().getHeader("Range"));
+			// Neither mirror was asked for the whole file
+			assertEquals(0, fullFetches.get());
 		} finally {
 			lagging.shutdown();
 			current.shutdown();
@@ -1262,21 +1294,21 @@ public class ChannelManagerIntegrationTest
 		// title and key and their own mirrors
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
-		subscribeWithMirror(g, "http://first.example/c.briar");
+		subscribeWithMirror(g, "https://first.example/c.briar");
 		channelManager0.setMirrors(g,
-				singletonList("http://second.example/c.briar"));
+				singletonList("https://second.example/c.briar"));
 		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
-		assertEquals(singletonList("http://first.example/c.briar"),
+		assertEquals(singletonList("https://first.example/c.briar"),
 				channelManager1.getMirrors(g));
 		// The owner's own mirrors are safe from it too
 		Author a = channel.getBlog().getAuthor();
 		byte[] raw = c1.getClientHelper().toByteArray(BdfList.of(
 				LINK_FORMAT_VERSION, a.getName(),
 				a.getPublicKey().getEncoded(),
-				BdfList.of("http://evil.example/c.briar")));
+				BdfList.of("https://evil.example/c.briar")));
 		channelManager0.subscribeFromLink(
 				LINK_PREFIX + Base32.encode(raw).toLowerCase(US));
-		assertEquals(singletonList("http://second.example/c.briar"),
+		assertEquals(singletonList("https://second.example/c.briar"),
 				channelManager0.getMirrors(g));
 	}
 
@@ -1488,9 +1520,9 @@ public class ChannelManagerIntegrationTest
 				new ByteArrayInputStream(exportChannel(g)), true);
 		assertTrue(channelManager1.getMirrors(g).isEmpty());
 		channelManager0.setMirrors(g,
-				singletonList("http://mirror.example/c.briar"));
+				singletonList("https://mirror.example/c.briar"));
 		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
-		assertEquals(singletonList("http://mirror.example/c.briar"),
+		assertEquals(singletonList("https://mirror.example/c.briar"),
 				channelManager1.getMirrors(g));
 	}
 
@@ -2268,7 +2300,7 @@ public class ChannelManagerIntegrationTest
 				GROUP_KEY_MIRRORS, BdfList.of("x")));
 		db1.transaction(false, txn ->
 				c1.getClientHelper().mergeGroupMetadata(txn, g, meta));
-		assertEquals(UNREACHABLE,
+		assertEquals(NO_SAFE_MIRRORS,
 				channelManager1.fetchChannel(g).getOutcome());
 	}
 
@@ -2411,6 +2443,154 @@ public class ChannelManagerIntegrationTest
 		channelManager1.importChannel(new ByteArrayInputStream(
 				buildStream(channel.getBlog(), wrapped)));
 		assertFalse(isStored(wrapped.getId()));
+	}
+
+	@Test
+	public void testAMirrorSayingNothingIsNewIsCheckedWithAnother()
+			throws Exception {
+		// A mirror that always says nothing has changed must not be able
+		// to hold the channel back, whichever mirror is asked first
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		MockWebServer liar = new MockWebServer();
+		liar.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				return new MockResponse().setResponseCode(304);
+			}
+		});
+		liar.start();
+		AtomicInteger version = new AtomicInteger(1);
+		Map<Integer, byte[]> files = new HashMap<>();
+		files.put(1, exportChannel(g));
+		MockWebServer honest = new MockWebServer();
+		honest.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				String tag = "\"v" + version.get() + "\"";
+				if (tag.equals(request.getHeader("If-None-Match")))
+					return new MockResponse().setResponseCode(304);
+				return new MockResponse().setHeader("ETag", tag)
+						.setBody(new Buffer().write(
+								files.get(version.get())));
+			}
+		});
+		honest.start();
+		try {
+			channelManager0.setMirrors(g, asList(
+					liar.url("/c.briar").toString(),
+					honest.url("/c.briar").toString()));
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(1);
+			for (int i = 2; i <= 6; i++) {
+				channelManager0.post(g, getRandomString(42));
+				files.put(i, exportChannel(g));
+				version.set(i);
+				assertEquals(FETCHED,
+						channelManager1.fetchChannel(g).getOutcome());
+				awaitPendingMessageDelivery(1);
+			}
+			assertEquals(6, blogManager1.getPostHeaders(g).size());
+		} finally {
+			liar.shutdown();
+			honest.shutdown();
+		}
+	}
+
+	@Test
+	public void testANothingNewAnswerWeDidNotAskForIsNotBelieved()
+			throws Exception {
+		// Without a tag or date to compare, a mirror can't know what we
+		// have, so "nothing new" means it is withholding the channel
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		MockWebServer liar = new MockWebServer();
+		liar.enqueue(new MockResponse().setResponseCode(304));
+		liar.start();
+		try {
+			subscribeWithMirror(g, liar.url("/c.briar").toString());
+			assertEquals(UNREACHABLE,
+					channelManager1.fetchChannel(g).getOutcome());
+		} finally {
+			liar.shutdown();
+		}
+	}
+
+	@Test
+	public void testAMirrorServingJunkCannotMakeTheChannelTooLarge()
+			throws Exception {
+		// A mirror can serve enough junk to pass the limit on a file.
+		// That says nothing about the channel's real file, so another
+		// mirror is asked, and the junk doesn't count against the file.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		ClientHelper h = c0.getClientHelper();
+		ByteArrayOutputStream junk = new ByteArrayOutputStream();
+		junk.write(h.toByteArray(BdfList.of(STREAM_FORMAT_VERSION,
+				channel.getBlog().getGroup().getDescriptor())));
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		body.write(h.toByteArray(
+				BdfList.of(ATTACHMENT.getInt(), "image/jpeg")));
+		body.write(getRandomBytes(30_000));
+		byte[] entry = h.toByteArray(BdfList.of(1234L, body.toByteArray()));
+		while (junk.size() <= MAX_STREAM_BYTES) junk.write(entry);
+		MockWebServer liar = new MockWebServer();
+		liar.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				return new MockResponse()
+						.setBody(new Buffer().write(junk.toByteArray()));
+			}
+		});
+		liar.start();
+		MockWebServer honest = serveChannel(g);
+		try {
+			channelManager0.setMirrors(g, asList(
+					liar.url("/c.briar").toString(),
+					honest.url("/c.briar").toString()));
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			for (int i = 0; i < 3; i++) {
+				FetchResult.Outcome o =
+						channelManager1.fetchChannel(g).getOutcome();
+				assertTrue(o.toString(), o == FETCHED || o == UNCHANGED);
+			}
+			awaitPendingMessageDelivery(1);
+			assertEquals(1, blogManager1.getPostHeaders(g).size());
+		} finally {
+			liar.shutdown();
+			honest.shutdown();
+		}
+	}
+
+	@Test
+	public void testAPlainHttpMirrorIsRefusedOrSkipped() throws Exception {
+		// Over plain HTTP the Tor exit reads and can change the request
+		// and the reply, so the owner can't add such a mirror. A link
+		// that already names one still subscribes, but it isn't used.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		try {
+			channelManager0.setMirrors(g,
+					singletonList("http://example.com/c.briar"));
+			fail();
+		} catch (IllegalArgumentException expected) {
+			// Expected
+		}
+		channelManager0.setMirrors(g, asList("https://example.com/c.briar",
+				"http://example7.onion/c.briar"));
+		BdfList link = BdfList.of(LINK_FORMAT_VERSION, "Announcements",
+				channel.getLocalAuthor().getPublicKey().getEncoded(),
+				BdfList.of("http://example.com/c.briar"));
+		channelManager1.subscribeFromLink(LINK_PREFIX + Base32.encode(
+				c1.getClientHelper().toByteArray(link)).toLowerCase(US));
+		assertEquals(NO_SAFE_MIRRORS,
+				channelManager1.fetchChannel(g).getOutcome());
 	}
 
 	private boolean isStored(MessageId m) throws Exception {
