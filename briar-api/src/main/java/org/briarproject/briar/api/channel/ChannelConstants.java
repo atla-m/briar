@@ -56,6 +56,24 @@ public interface ChannelConstants {
 	int STREAM_FORMAT_VERSION = 0;
 
 	/**
+	 * The current version of a channel's attachment file: the chunks of one
+	 * image or file, published beside the channel's main file so that a
+	 * subscriber fetches them only when wanted.
+	 */
+	int FILE_STREAM_FORMAT_VERSION = 0;
+
+	/**
+	 * Where a channel's attachment files are published, relative to the
+	 * address of its main file.
+	 */
+	String FILES_DIRECTORY = "files/";
+
+	/**
+	 * The extension of a channel's main file and of its attachment files.
+	 */
+	String FILE_EXTENSION = ".briar";
+
+	/**
 	 * The largest channel stream we will read from mirrors, counted over
 	 * the whole file across every fetch of it. A stream is served by an
 	 * untrusted host, and a message it serves that never becomes

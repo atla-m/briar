@@ -577,6 +577,12 @@
 	<string name="channels_copy_link">Copy channel link</string>
 	<string name="channels_link_copied">Channel link copied</string>
 	<string name="channels_publish">Save to a file</string>
+	<string name="channels_publish_with_files_title">Include images and files?</string>
+	<string name="channels_publish_with_files_message">With them, whoever gets this file has everything at once, but it can be large. Without them, they get the posts and can get the files later from mirrors or contacts.</string>
+	<string name="channels_publish_with_files">Include them</string>
+	<string name="channels_publish_posts_only">Posts only</string>
+	<string name="channels_publish_folder">Publish to a folder</string>
+	<string name="channels_published_folder">Saved. Upload the channel\'s file and the files folder to each of its mirrors.</string>
 	<string name="channels_mirrors">Where it is published</string>
 	<string name="channels_mirrors_explanation">Web addresses where this channel\'s file is published, one per line. Subscribers fetch from these over Tor. Whoever hosts the file cannot change what the channel says, so several addresses are safe and one of them being blocked is not fatal.</string>
 	<string name="channels_mirrors_hint">https://example.com/channel.briar</string>
