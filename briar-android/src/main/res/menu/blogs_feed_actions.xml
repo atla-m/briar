@@ -10,11 +10,6 @@
 		app:showAsAction="always"/>
 
 	<item
-		android:id="@+id/action_channels"
-		android:title="@string/channels"
-		app:showAsAction="never"/>
-
-	<item
 		android:id="@+id/action_rss_feeds"
 		android:title="@string/blogs_rss_feeds"
 		app:showAsAction="never"/>
