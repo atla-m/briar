@@ -68,6 +68,10 @@ class ConversationVisitor implements
 					R.layout.list_item_conversation_msg_in, h, contactName,
 					attachments);
 		}
+		// A forwarded post carries the channel's link, so the recipient
+		// can subscribe and read the channel itself instead of taking our
+		// word for where the text came from
+		item.setChannelLink(h.getChannelLink());
 		if (h.hasText()) {
 			String text = textCache.getText(h.getId());
 			if (text != null) item.setText(text);

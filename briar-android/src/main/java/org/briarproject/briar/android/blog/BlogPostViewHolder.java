@@ -13,6 +13,7 @@ import android.widget.TextView;
 
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
+import org.briarproject.briar.android.forward.ForwardPostActivity;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.attachment.FileRowBinder;
 import org.briarproject.briar.android.attachment.ImageGridAdapter;
@@ -22,6 +23,7 @@ import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import androidx.annotation.UiThread;
+import androidx.appcompat.app.AlertDialog;
 import androidx.core.view.ViewCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -159,8 +161,29 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 			reblogButton.setImageResource(R.drawable.social_share_white);
 			reblogButton.setContentDescription(
 					ctx.getString(R.string.blogs_share_channel));
-			reblogButton.setOnClickListener(
-					v -> listener.onShareChannelClick(item));
+			// Two different things to pass on, so ask which: the channel,
+			// which keeps sending the recipient its posts, or this one
+			// post, which is a message and nothing more
+			reblogButton.setOnClickListener(v -> {
+				CharSequence[] options = {
+						ctx.getString(R.string.blogs_share_channel),
+						ctx.getString(R.string.blogs_forward_post)
+				};
+				new AlertDialog.Builder(ctx, R.style.BriarDialogTheme)
+						.setItems(options, (d, which) -> {
+							if (which == 0) {
+								listener.onShareChannelClick(item);
+							} else {
+								Intent i = new Intent(ctx,
+										ForwardPostActivity.class);
+								i.putExtra(GROUP_ID,
+										item.getGroupId().getBytes());
+								i.putExtra(POST_ID, item.getId().getBytes());
+								ctx.startActivity(i);
+							}
+						})
+						.show();
+			});
 		} else {
 			reblogButton.setImageResource(R.drawable.ic_repeat);
 			reblogButton.setContentDescription(

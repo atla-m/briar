@@ -10,6 +10,11 @@ import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.db.TransactionManager;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
+import org.briarproject.bramble.api.event.Event;
+import org.briarproject.bramble.api.event.EventBus;
+import org.briarproject.bramble.api.event.EventListener;
+import org.briarproject.bramble.api.sync.event.GroupAddedEvent;
+import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.system.AndroidExecutor;
@@ -44,12 +49,13 @@ import static org.briarproject.bramble.util.LogUtils.logDuration;
 import static org.briarproject.bramble.util.LogUtils.now;
 
 @NotNullByDefault
-class ChannelViewModel extends DbViewModel {
+class ChannelViewModel extends DbViewModel implements EventListener {
 
 	private static final Logger LOG =
 			getLogger(ChannelViewModel.class.getName());
 
 	private final ChannelManager channelManager;
+	private final EventBus eventBus;
 	private final Executor dbExecutor;
 	private final Executor ioExecutor;
 
@@ -74,12 +80,30 @@ class ChannelViewModel extends DbViewModel {
 			LifecycleManager lifecycleManager, TransactionManager db,
 			AndroidExecutor androidExecutor,
 			@IoExecutor Executor ioExecutor,
-			ChannelManager channelManager) {
+			ChannelManager channelManager, EventBus eventBus) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
 		this.dbExecutor = dbExecutor;
 		this.ioExecutor = ioExecutor;
 		this.channelManager = channelManager;
+		this.eventBus = eventBus;
+		eventBus.addListener(this);
 		loadChannels();
+	}
+
+	@Override
+	protected void onCleared() {
+		super.onCleared();
+		eventBus.removeListener(this);
+	}
+
+	@Override
+	public void eventOccurred(Event e) {
+		// A channel can be subscribed to or removed from somewhere else
+		// entirely, such as tapping a forwarded post in a conversation, so
+		// the list can't only refresh when this screen does the work
+		if (e instanceof GroupAddedEvent || e instanceof GroupRemovedEvent) {
+			loadChannels();
+		}
 	}
 
 	LiveData<LiveResult<List<ChannelItem>>> getChannels() {

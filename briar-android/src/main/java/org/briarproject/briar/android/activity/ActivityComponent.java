@@ -14,6 +14,8 @@ import org.briarproject.briar.android.blog.FeedFragment;
 import org.briarproject.briar.android.blog.ReblogActivity;
 import org.briarproject.briar.android.blog.ReblogFragment;
 import org.briarproject.briar.android.blog.ChannelManageFragment;
+import org.briarproject.briar.android.forward.ForwardPostActivity;
+import org.briarproject.briar.android.forward.ForwardPostFragment;
 import org.briarproject.briar.android.blog.RssFeedActivity;
 import org.briarproject.briar.android.blog.RssFeedDeleteFeedDialogFragment;
 import org.briarproject.briar.android.blog.RssFeedImportFailedDialogFragment;
@@ -82,6 +84,7 @@ import org.briarproject.briar.android.sharing.ShareBlogActivity;
 import org.briarproject.briar.android.sharing.ShareBlogFragment;
 import org.briarproject.briar.android.sharing.ShareForumActivity;
 import org.briarproject.briar.android.sharing.ShareForumFragment;
+import org.briarproject.briar.android.forward.ForwardModule;
 import org.briarproject.briar.android.sharing.SharingModule;
 import org.briarproject.briar.android.splash.SplashScreenActivity;
 import org.briarproject.briar.android.test.TestDataActivity;
@@ -95,7 +98,8 @@ import dagger.Component;
 		GroupInvitationModule.class,
 		GroupMemberModule.class,
 		GroupRevealModule.class,
-		SharingModule.SharingLegacyModule.class
+		SharingModule.SharingLegacyModule.class,
+		ForwardModule.class
 }, dependencies = AndroidComponent.class)
 public interface ActivityComponent {
 
@@ -246,6 +250,10 @@ public interface ActivityComponent {
 	void inject(RssFeedImportFragment fragment);
 
 	void inject(ChannelManageFragment fragment);
+
+	void inject(ForwardPostActivity activity);
+
+	void inject(ForwardPostFragment fragment);
 
 	void inject(RssFeedManageFragment fragment);
 

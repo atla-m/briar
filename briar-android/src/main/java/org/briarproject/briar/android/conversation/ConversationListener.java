@@ -23,6 +23,12 @@ interface ConversationListener {
 
 	void onAutoDeleteTimerNoticeClicked();
 
+	/**
+	 * Called when the notice above a forwarded channel post is tapped,
+	 * which offers to subscribe to the channel it came from.
+	 */
+	void onForwardedChannelClick(String channelLink);
+
 	void onLinkClick(String url);
 
 }
