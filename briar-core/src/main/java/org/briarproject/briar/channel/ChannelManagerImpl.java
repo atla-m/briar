@@ -1081,11 +1081,17 @@ class ChannelManagerImpl
 	 * fetched over Tor circuits of its own, and no connection is kept
 	 * open for the next fetch, so a site hosting several channels can't
 	 * tell from the connection that one subscriber reads them all.
+	 * Redirects aren't followed: a mirror could send the reader on to
+	 * plain HTTP, or from an onion service to the open internet, with
+	 * the request's tags and range, so a redirect is a mirror that
+	 * failed.
 	 */
 	private OkHttpClient httpClient(GroupId g) {
 		SocketFactory sockets = isolatedSocketFactory.create(
 				"channel-" + toHexString(g.getBytes()));
 		return httpClientProvider.get().newBuilder()
+				.followRedirects(false)
+				.followSslRedirects(false)
 				.socketFactory(sockets)
 				.connectionPool(new ConnectionPool(0, 1, SECONDS))
 				.callTimeout(FETCH_TIMEOUT_MS, MILLISECONDS).build();

@@ -741,6 +741,37 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testARedirectIsNotFollowed() throws Exception {
+		// A mirror could send the reader on to plain HTTP, or from an
+		// onion service to the open internet, with the request's tags
+		// and range, so a redirect counts as a mirror that failed
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+
+		MockWebServer elsewhere = new MockWebServer();
+		elsewhere.enqueue(new MockResponse().setBody(
+				new Buffer().write(exportChannel(g))));
+		elsewhere.start();
+		MockWebServer redirecting = new MockWebServer();
+		redirecting.enqueue(new MockResponse().setResponseCode(302)
+				.setHeader("Location", elsewhere.url("/c.briar")));
+		redirecting.start();
+		try {
+			channelManager0.setMirrors(g,
+					singletonList(redirecting.url("/c.briar").toString()));
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			assertEquals(UNREACHABLE,
+					channelManager1.fetchChannel(g).getOutcome());
+			assertEquals(0, elsewhere.getRequestCount());
+		} finally {
+			redirecting.shutdown();
+			elsewhere.shutdown();
+		}
+	}
+
+	@Test
 	public void testTriesTheNextMirrorWhenOneLagsBehind() throws Exception {
 		// A mirror that has less of the file than we do may be lagging
 		// behind the one we read from, so the next mirror is asked to
