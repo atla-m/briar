@@ -3,6 +3,7 @@ package org.briarproject.briar.blog;
 import org.briarproject.bramble.api.FeatureFlags;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.contact.ContactManager;
+import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.sync.GroupFactory;
@@ -63,11 +64,12 @@ public class BlogModule {
 	BlogPostValidator provideBlogPostValidator(
 			ValidationManager validationManager, GroupFactory groupFactory,
 			MessageFactory messageFactory, BlogFactory blogFactory,
-			ClientHelper clientHelper, MetadataEncoder metadataEncoder,
-			Clock clock, FeatureFlags featureFlags) {
+			ClientHelper clientHelper, BdfReaderFactory bdfReaderFactory,
+			MetadataEncoder metadataEncoder, Clock clock,
+			FeatureFlags featureFlags) {
 		BlogPostValidator validator = new BlogPostValidator(groupFactory,
-				messageFactory, blogFactory, clientHelper, metadataEncoder,
-				clock);
+				messageFactory, blogFactory, clientHelper, bdfReaderFactory,
+				metadataEncoder, clock);
 		if (featureFlags.shouldEnableBlogsInCore()) {
 			validationManager.registerMessageValidator(CLIENT_ID, MAJOR_VERSION,
 					validator);

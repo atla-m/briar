@@ -6,9 +6,15 @@ import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.Collection;
 import java.util.List;
 
@@ -56,6 +62,56 @@ public interface BlogManager {
 	 * Removes and deletes a blog with the given {@link Transaction}.
 	 */
 	void removeBlog(Transaction txn, Blog b) throws DbException;
+
+	/**
+	 * Stores an image to be carried by a blog post, which must then
+	 * reference it by the returned header. The image is not sent until a
+	 * post does.
+	 */
+	AttachmentHeader addLocalAttachment(GroupId groupId, long timestamp,
+			String contentType, InputStream in)
+			throws DbException, IOException;
+
+	/**
+	 * Stores a file to be carried by a blog post, splitting it into chunks
+	 * so it can arrive piece by piece. The file is not sent until a post
+	 * references it.
+	 */
+	FileHeader addLocalFile(GroupId groupId, long timestamp, String name,
+			String contentType, StreamSource source)
+			throws DbException, IOException;
+
+	/**
+	 * Returns the header of the file whose manifest has the given ID.
+	 */
+	FileHeader getFileHeader(GroupId groupId, MessageId manifestId)
+			throws DbException;
+
+	/**
+	 * Returns how much of the given file has arrived.
+	 */
+	FileStatus getFileStatus(FileHeader header) throws DbException;
+
+	/**
+	 * Returns a stream for reading a file that has fully arrived.
+	 */
+	InputStream getFile(FileHeader header) throws DbException;
+
+	/**
+	 * Returns the bytes of one chunk of a file that has fully arrived, for
+	 * playing audio and video without writing the file to disk.
+	 */
+	byte[] getFileChunk(FileHeader header, int index) throws DbException;
+
+	/**
+	 * Removes an image that no post has referenced yet.
+	 */
+	void removeAttachment(AttachmentHeader header) throws DbException;
+
+	/**
+	 * Removes a file that no post has referenced yet.
+	 */
+	void removeFile(FileHeader header) throws DbException;
 
 	/**
 	 * Stores a local blog post.

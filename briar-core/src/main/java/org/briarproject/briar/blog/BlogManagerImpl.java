@@ -3,6 +3,7 @@ package org.briarproject.briar.blog;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.BdfIncomingMessageHook;
 import org.briarproject.bramble.api.client.ClientHelper;
+import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.bramble.api.contact.ContactManager.ContactHook;
 import org.briarproject.bramble.api.data.BdfDictionary;
@@ -11,6 +12,7 @@ import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataParser;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.identity.AuthorId;
@@ -19,6 +21,7 @@ import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager.OpenDatabaseHook;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.blog.Blog;
@@ -29,12 +32,21 @@ import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
 import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.api.blog.MessageType;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
+import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.StreamSource;
+import org.briarproject.briar.attachment.ChunkedFileStore;
 import org.briarproject.briar.api.blog.event.BlogPostAddedEvent;
 import org.briarproject.briar.api.identity.AuthorInfo;
 import org.briarproject.briar.api.identity.AuthorManager;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.security.GeneralSecurityException;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -63,6 +75,14 @@ import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIMESTAMP;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIME_RECEIVED;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TYPE;
 import static org.briarproject.briar.api.blog.MessageType.COMMENT;
+import static org.briarproject.briar.api.blog.BlogConstants.MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
+import static org.briarproject.bramble.util.IoUtils.copyAndClose;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
+import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
+import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
+import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_COMMENT;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_POST;
@@ -76,18 +96,22 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	private final AuthorManager authorManager;
 	private final BlogFactory blogFactory;
 	private final BlogPostFactory blogPostFactory;
+	private final BlogFileClient fileClient;
+	private final ChunkedFileStore fileStore;
 	private final List<RemoveBlogHook> removeHooks;
 
 	@Inject
 	BlogManagerImpl(DatabaseComponent db, IdentityManager identityManager,
 			AuthorManager authorManager, ClientHelper clientHelper,
 			MetadataParser metadataParser, BlogFactory blogFactory,
-			BlogPostFactory blogPostFactory) {
+			BlogPostFactory blogPostFactory, CryptoComponent crypto) {
 		super(db, clientHelper, metadataParser);
 		this.identityManager = identityManager;
 		this.authorManager = authorManager;
 		this.blogFactory = blogFactory;
 		this.blogPostFactory = blogPostFactory;
+		fileClient = new BlogFileClient(clientHelper);
+		fileStore = new ChunkedFileStore(db, clientHelper, crypto, fileClient);
 		removeHooks = new CopyOnWriteArrayList<>();
 	}
 
@@ -111,12 +135,38 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	}
 
 	@Override
+	public DeliveryAction incomingMessage(Transaction txn, Message m,
+			Metadata meta) throws DbException, InvalidMessageException {
+		// An image or file chunk is a BDF list followed by raw bytes, so
+		// the superclass can't parse the body as a list. Handle it here.
+		try {
+			BdfDictionary metaDict = metadataParser.parse(meta);
+			MessageType type = getMessageType(metaDict);
+			if (type == ATTACHMENT) {
+				handleAttachment(txn, m);
+				return ACCEPT_SHARE;
+			} else if (type == FILE_CHUNK) {
+				fileStore.incomingChunk(txn, m, metaDict);
+				return ACCEPT_SHARE;
+			}
+		} catch (FormatException e) {
+			throw new InvalidMessageException(e);
+		}
+		return super.incomingMessage(txn, m, meta);
+	}
+
+	@Override
 	protected DeliveryAction incomingMessage(Transaction txn, Message m,
 			BdfList list, BdfDictionary meta)
 			throws DbException, FormatException {
 
 		GroupId groupId = m.getGroupId();
 		MessageType type = getMessageType(meta);
+
+		if (type == FILE_MANIFEST) {
+			fileStore.incomingManifest(txn, m, meta);
+			return ACCEPT_SHARE;
+		}
 
 		if (type == POST || type == COMMENT) {
 			BlogPostHeader h =
@@ -133,6 +183,14 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 				if (!Arrays.equals(original1, original2)) {
 					throw new FormatException();
 				}
+			}
+
+			// The images and files this post references are wanted now,
+			// so they aren't cleaned up while they're still arriving
+			if (type == POST) {
+				fileStore.onFilesReferenced(txn, groupId,
+						fileClient.getReferencedIds(meta));
+				stopAttachmentCleanupTimers(txn, groupId, meta);
 			}
 
 			// broadcast event about new post or comment
@@ -157,6 +215,104 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 		}
 		// don't share message until parent arrives
 		return ACCEPT_DO_NOT_SHARE;
+	}
+
+	/**
+	 * Gives an image that has just arrived a deadline, unless a post
+	 * already references it, so images that no post ever references don't
+	 * pile up.
+	 */
+	private void handleAttachment(Transaction txn, Message m)
+			throws DbException, FormatException {
+		if (!fileClient.isManifestReferenced(txn, m.getGroupId(), m.getId())) {
+			db.setCleanupTimerDuration(txn, m.getId(),
+					MISSING_ATTACHMENT_CLEANUP_DURATION_MS);
+			db.startCleanupTimer(txn, m.getId());
+		}
+	}
+
+	/**
+	 * Stops the deadlines of the images a delivered post references, which
+	 * are wanted now.
+	 */
+	private void stopAttachmentCleanupTimers(Transaction txn, GroupId g,
+			BdfDictionary postMeta) throws DbException, FormatException {
+		Set<MessageId> referenced = fileClient.getReferencedIds(postMeta);
+		if (referenced.isEmpty()) return;
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(KEY_TYPE, ATTACHMENT.getInt()));
+		Collection<MessageId> present =
+				clientHelper.getMessageIds(txn, g, query);
+		for (MessageId id : referenced) {
+			if (present.contains(id)) db.stopCleanupTimer(txn, id);
+		}
+	}
+
+	@Override
+	public AttachmentHeader addLocalAttachment(GroupId groupId, long timestamp,
+			String contentType, InputStream in)
+			throws DbException, IOException {
+		// An image is a BDF descriptor followed by the raw bytes, and the
+		// whole thing must fit into a single message
+		ByteArrayOutputStream bodyOut = new ByteArrayOutputStream();
+		byte[] descriptor = clientHelper.toByteArray(
+				BdfList.of(ATTACHMENT.getInt(), contentType));
+		bodyOut.write(descriptor);
+		copyAndClose(in, bodyOut);
+		if (bodyOut.size() > MAX_MESSAGE_BODY_LENGTH)
+			throw new FileTooBigException();
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(KEY_TYPE, ATTACHMENT.getInt());
+		meta.put(KEY_TIMESTAMP, timestamp);
+		meta.put(MSG_KEY_CONTENT_TYPE, contentType);
+		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptor.length);
+		Message m = clientHelper.createMessage(groupId, timestamp,
+				bodyOut.toByteArray());
+		// Not shared until the post that references it is added
+		db.transaction(false, txn ->
+				clientHelper.addLocalMessage(txn, m, meta, false, true));
+		return new AttachmentHeader(groupId, m.getId(), contentType);
+	}
+
+	@Override
+	public FileHeader addLocalFile(GroupId groupId, long timestamp,
+			String name, String contentType, StreamSource source)
+			throws DbException, IOException {
+		return fileStore.addLocalFile(groupId, timestamp, name, contentType,
+				source);
+	}
+
+	@Override
+	public FileHeader getFileHeader(GroupId groupId, MessageId manifestId)
+			throws DbException {
+		return fileStore.getFileHeader(groupId, manifestId);
+	}
+
+	@Override
+	public FileStatus getFileStatus(FileHeader header) throws DbException {
+		return fileStore.getFileStatus(header);
+	}
+
+	@Override
+	public InputStream getFile(FileHeader header) throws DbException {
+		return fileStore.getFile(header);
+	}
+
+	@Override
+	public byte[] getFileChunk(FileHeader header, int index)
+			throws DbException {
+		return fileStore.getFileChunk(header, index);
+	}
+
+	@Override
+	public void removeAttachment(AttachmentHeader header) throws DbException {
+		db.transaction(false, txn ->
+				db.removeMessage(txn, header.getMessageId()));
+	}
+
+	@Override
+	public void removeFile(FileHeader header) throws DbException {
+		fileStore.removeFile(header);
 	}
 
 	@Override
