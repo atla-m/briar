@@ -1891,7 +1891,8 @@ public class ChannelManagerIntegrationTest
 			awaitPendingMessageDelivery(2);
 			FetchResult.Outcome o = fetchFileWhenFree(g, file.getManifestId());
 			assertTrue(o.toString(), o == FETCHED || o == UNCHANGED);
-			assertTrue(blogManager1.getFileStatus(file).isComplete());
+			// The chunks read are delivered in the background
+			awaitComplete(file);
 			// Whichever was asked first, the honest mirror served the file
 			List<String> asked = new ArrayList<>();
 			int n = honest.getRequestCount();

@@ -118,7 +118,8 @@ public class NearbyChannelSharerImplTest extends BrambleTestCase {
 				public Object invoke(org.jmock.api.Invocation i)
 						throws Throwable {
 					serving.countDown();
-					if (!closed.await(5, SECONDS)) throw new AssertionError();
+					// Generous: the whole suite may be running alongside
+					if (!closed.await(60, SECONDS)) throw new AssertionError();
 					throw new IOException("Closed");
 				}
 			});

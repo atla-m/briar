@@ -70,6 +70,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.GeneralSecurityException;
+import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -94,6 +95,10 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 import javax.net.SocketFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
 
 import okhttp3.HttpUrl;
 import okhttp3.ConnectionPool;
@@ -1103,14 +1108,39 @@ class ChannelManagerImpl
 	 * Redirects aren't followed: a mirror could send the reader on to
 	 * plain HTTP, or from an onion service to the open internet, with
 	 * the request's tags and range, so a redirect is a mirror that
-	 * failed.
+	 * failed. TLS sessions aren't shared either: the shared client's
+	 * one session cache would let a host serving two channels, or a
+	 * channel and an RSS feed, see the second connection resume the
+	 * first, which joins up the circuits that were kept apart.
 	 */
-	private OkHttpClient httpClient(GroupId g) {
+	private OkHttpClient httpClient(GroupId g) throws IOException {
 		SocketFactory sockets = isolatedSocketFactory.create(
 				"channel-" + toHexString(g.getBytes()));
+		SSLContext tls;
+		X509TrustManager trust;
+		try {
+			TrustManagerFactory tmf = TrustManagerFactory.getInstance(
+					TrustManagerFactory.getDefaultAlgorithm());
+			tmf.init((KeyStore) null);
+			trust = null;
+			for (TrustManager tm : tmf.getTrustManagers()) {
+				if (tm instanceof X509TrustManager) {
+					trust = (X509TrustManager) tm;
+					break;
+				}
+			}
+			if (trust == null) throw new IOException("No trust manager");
+			// A context of its own for this fetch, so it has no session
+			// from any other to resume
+			tls = SSLContext.getInstance("TLS");
+			tls.init(null, new TrustManager[] {trust}, secureRandom);
+		} catch (GeneralSecurityException e) {
+			throw new IOException(e);
+		}
 		return httpClientProvider.get().newBuilder()
 				.followRedirects(false)
 				.followSslRedirects(false)
+				.sslSocketFactory(tls.getSocketFactory(), trust)
 				.socketFactory(sockets)
 				.connectionPool(new ConnectionPool(0, 1, SECONDS))
 				.callTimeout(FETCH_TIMEOUT_MS, MILLISECONDS).build();
