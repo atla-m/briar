@@ -82,8 +82,10 @@ public class MediaViewModel extends DbViewModel {
 
 	private final MutableLiveData<Source> source = new MutableLiveData<>();
 	// true if there was an error, false if the file was saved
-	private final MutableLiveEvent<Boolean> saveError = new MutableLiveEvent<>();
-	private final MutableLiveEvent<Boolean> loadError = new MutableLiveEvent<>();
+	private final MutableLiveEvent<Boolean> saveError =
+			new MutableLiveEvent<>();
+	private final MutableLiveEvent<Boolean> loadError =
+			new MutableLiveEvent<>();
 
 	@Nullable
 	private FileHeader header = null;
@@ -153,7 +155,8 @@ public class MediaViewModel extends DbViewModel {
 			FileReader r = reader;
 			ioExecutor.execute(() -> {
 				try {
-					File dir = new File(getApplication().getCacheDir(), "media");
+					File dir =
+							new File(getApplication().getCacheDir(), "media");
 					//noinspection ResultOfMethodCallIgnored
 					dir.mkdirs();
 					File f = File.createTempFile("media", null, dir);

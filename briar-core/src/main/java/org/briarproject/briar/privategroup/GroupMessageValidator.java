@@ -102,7 +102,8 @@ class GroupMessageValidator extends BdfMessageValidator {
 			InputStream in = new ByteArrayInputStream(m.getBody());
 			CountingInputStream countIn =
 					new CountingInputStream(in, MAX_MESSAGE_BODY_LENGTH);
-			BdfReader reader = bdfReaderFactory.createReader(countIn, canonical);
+			BdfReader reader =
+					bdfReaderFactory.createReader(countIn, canonical);
 			BdfList list = reader.readList();
 			long bytesRead = countIn.getBytesRead();
 			BdfMessageContext context;
@@ -141,7 +142,8 @@ class GroupMessageValidator extends BdfMessageValidator {
 
 		// File manifests have no member, they're authenticated by the signed
 		// post that references them
-		if (type == FILE_MANIFEST.getInt()) return validateFileManifest(m, body);
+		if (type == FILE_MANIFEST.getInt())
+			return validateFileManifest(m, body);
 
 		// Member (author)
 		BdfList memberList = body.getList(1);

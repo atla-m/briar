@@ -331,7 +331,8 @@ public class MessagingManagerIntegrationTest
 	public void testChunkedImage() throws Exception {
 		// An image too big for one message is stored as a chunked file and
 		// referenced like an ordinary attachment, by its manifest ID
-		byte[] imageBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 3 + 12345);
+		byte[] imageBytes =
+				getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 3 + 12345);
 		GroupId g = messagingManager0.getConversationId(contactId);
 		FileHeader file = messagingManager0.addLocalFile(g,
 				c0.getClock().currentTimeMillis(), "image.jpg", "image/jpeg",

@@ -372,7 +372,8 @@ abstract class JdbcDatabase implements Database<Connection> {
 	 * dependencies are still sent in the order they were stored.
 	 */
 	private static final String SEND_ORDER_TAIL =
-			" CASE WHEN length > " + SMALL_MESSAGE_LENGTH + " THEN 1 ELSE 0 END,"
+			" CASE WHEN length > " + SMALL_MESSAGE_LENGTH
+			+ " THEN 1 ELSE 0 END,"
 					+ " timestamp,"
 					+ " CASE WHEN length > " + SMALL_MESSAGE_LENGTH
 					+ " THEN RAND() ELSE 0 END";

@@ -538,7 +538,8 @@ public class PrivateGroupManagerIntegrationTest
 		addGroup();
 
 		// author0 stores a file that spans four chunks
-		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 3 + 12345);
+		byte[] fileBytes =
+				getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 3 + 12345);
 		long time = c0.getClock().currentTimeMillis();
 		FileHeader file = groupManager0.addLocalFile(groupId0, time,
 				"report.pdf", "application/pdf",
@@ -608,7 +609,8 @@ public class PrivateGroupManagerIntegrationTest
 		FileStatus complete = groupManager1.getFileStatus(received);
 		assertTrue(complete.isComplete());
 		assertEquals(4, complete.getChunksReceived());
-		assertArrayEquals(fileBytes, readFully(groupManager1.getFile(received)));
+		assertArrayEquals(fileBytes,
+				readFully(groupManager1.getFile(received)));
 		// only the post counts as a message
 		assertEquals(3, groupManager1.getGroupCount(groupId0).getMsgCount());
 	}
