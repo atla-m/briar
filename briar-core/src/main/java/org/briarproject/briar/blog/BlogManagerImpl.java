@@ -95,6 +95,7 @@ import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_COMMENT;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_POST;
 import static org.briarproject.briar.api.identity.AuthorInfo.Status.NONE;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 
 @NotNullByDefault
 class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
@@ -153,11 +154,14 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 			BdfDictionary metaDict = metadataParser.parse(meta);
 			MessageType type = getMessageType(metaDict);
 			if (type == ATTACHMENT) {
-				handleAttachment(txn, m);
-				return ACCEPT_SHARE;
+				boolean referenced = handleAttachment(txn, m);
+				return shareOrphan(txn, m.getGroupId(), referenced);
 			} else if (type == FILE_CHUNK) {
 				fileStore.incomingChunk(txn, m, metaDict);
-				return ACCEPT_SHARE;
+				MessageId manifestId = new MessageId(
+						metaDict.getRaw(KEY_FILE_MANIFEST_ID));
+				return shareOrphan(txn, m.getGroupId(),
+						fileStore.isReferenced(txn, manifestId));
 			}
 		} catch (FormatException e) {
 			throw new InvalidMessageException(e);
@@ -174,8 +178,8 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 		MessageType type = getMessageType(meta);
 
 		if (type == FILE_MANIFEST) {
-			fileStore.incomingManifest(txn, m, meta);
-			return ACCEPT_SHARE;
+			return shareOrphan(txn, groupId,
+					fileStore.incomingManifest(txn, m, meta));
 		}
 
 		if (type == FILE_REQUEST) {
@@ -204,9 +208,14 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 			// The images and files this post references are wanted now,
 			// so they aren't cleaned up while they're still arriving
 			if (type == POST) {
-				fileStore.onFilesReferenced(txn, groupId,
-						fileClient.getReferencedIds(meta));
+				Set<MessageId> referenced = fileClient.getReferencedIds(meta);
+				fileStore.onFilesReferenced(txn, groupId, referenced);
 				stopAttachmentCleanupTimers(txn, groupId, meta);
+				// In a channel they were kept to ourselves until now
+				if (!referenced.isEmpty() &&
+						getBlog(txn, groupId).isChannel()) {
+					shareReceivedAttachments(txn, groupId, referenced);
+				}
 			}
 
 			// broadcast event about new post or comment
@@ -245,13 +254,45 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 		fileStore.deleteExpired(txn, g, messageIds);
 	}
 
-	private void handleAttachment(Transaction txn, Message m)
+	private boolean handleAttachment(Transaction txn, Message m)
 			throws DbException, FormatException {
 		txn.attach(new BlogAttachmentReceivedEvent(m.getGroupId(), m.getId()));
-		if (!fileClient.isManifestReferenced(txn, m.getGroupId(), m.getId())) {
-			db.setCleanupTimerDuration(txn, m.getId(),
-					MISSING_ATTACHMENT_CLEANUP_DURATION_MS);
-			db.startCleanupTimer(txn, m.getId());
+		if (fileClient.isManifestReferenced(txn, m.getGroupId(), m.getId())) {
+			return true;
+		}
+		db.setCleanupTimerDuration(txn, m.getId(),
+				MISSING_ATTACHMENT_CLEANUP_DURATION_MS);
+		db.startCleanupTimer(txn, m.getId());
+		return false;
+	}
+
+	/**
+	 * Decides whether an image, manifest or chunk is passed on. None of
+	 * them is signed, so in a channel, where every post is signed by the
+	 * channel, one that no post names yet is kept to ourselves until one
+	 * does. Otherwise anyone passing the channel on could plant files on
+	 * every phone that holds it, and make each of them fetch whatever the
+	 * planted manifest names from the channel's mirrors.
+	 */
+	private DeliveryAction shareOrphan(Transaction txn, GroupId g,
+			boolean referenced) throws DbException {
+		if (referenced || !getBlog(txn, g).isChannel()) return ACCEPT_SHARE;
+		return ACCEPT_DO_NOT_SHARE;
+	}
+
+	/**
+	 * Shares the images and files a channel post names that arrived
+	 * before it, which were kept to ourselves until a post named them.
+	 */
+	private void shareReceivedAttachments(Transaction txn, GroupId g,
+			Set<MessageId> referenced) throws DbException, FormatException {
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(KEY_TYPE, ATTACHMENT.getInt()));
+		Collection<MessageId> images =
+				clientHelper.getMessageIds(txn, g, query);
+		for (MessageId id : referenced) {
+			if (images.contains(id)) db.setMessageShared(txn, id);
+			else fileStore.shareReceivedFile(txn, g, id);
 		}
 	}
 

@@ -62,8 +62,10 @@ import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static java.util.Locale.US;
 import static java.util.concurrent.TimeUnit.DAYS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
+import static org.briarproject.bramble.api.sync.validation.MessageState.DELIVERED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_PREFIX;
@@ -1542,6 +1544,31 @@ public class ChannelManagerIntegrationTest
 		} finally {
 			good.shutdown();
 			bad.shutdown();
+		}
+	}
+
+	@Test
+	public void testAManifestNoPostNamesIsNotFetched() throws Exception {
+		// A manifest is unsigned, so a contact passing the channel on can
+		// add one. Until a signed post names it, it must not make the
+		// reader ask the channel's mirrors for anything.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		MockWebServer server = new MockWebServer();
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			shareBothWays(g);
+			FileHeader planted = blogManager0.addLocalFile(g,
+					c0.getClock().currentTimeMillis(), "planted.bin",
+					"application/octet-stream",
+					() -> new ByteArrayInputStream(new byte[100]));
+			db0.transaction(false, txn ->
+					db0.setMessageShared(txn, planted.getManifestId()));
+			sync0To1(1, true);
+			assertNull(server.takeRequest(2, SECONDS));
+		} finally {
+			server.shutdown();
 		}
 	}
 

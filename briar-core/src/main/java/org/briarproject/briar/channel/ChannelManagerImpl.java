@@ -157,6 +157,7 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.IN_PROGRESS
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.TOO_LARGE;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_REFERENCED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_ETAG;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_VALIDATORS;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_MESSAGES;
@@ -1863,6 +1864,10 @@ class ChannelManagerImpl
 	private void fetchIfSmall(GroupId g, MessageId manifestId)
 			throws DbException {
 		if (getMirrors(g).isEmpty()) return;
+		// A manifest is unsigned, so it is fetched only once a signed post
+		// names it: otherwise whoever passed it on could make every phone
+		// holding the channel ask its mirrors for a path of their choice
+		if (!isReferenced(manifestId)) return;
 		FileHeader h = blogManager.getFileHeader(g, manifestId);
 		if (h.getSize() > MAX_PUSHED_FILE_SIZE) return;
 		if (blogManager.getFileStatus(h).isComplete()) return;
@@ -1872,6 +1877,19 @@ class ChannelManagerImpl
 			return;
 		}
 		fetchChannelFile(g, manifestId);
+	}
+
+	private boolean isReferenced(MessageId manifestId) throws DbException {
+		return db.transactionWithResult(true, txn -> {
+			try {
+				return clientHelper.getMessageMetadataAsDictionary(txn,
+						manifestId).getBoolean(KEY_FILE_REFERENCED, false);
+			} catch (NoSuchMessageException e) {
+				return false;
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+		});
 	}
 
 	/**
