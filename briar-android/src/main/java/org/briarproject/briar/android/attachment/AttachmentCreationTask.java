@@ -142,10 +142,12 @@ class AttachmentCreationTask {
 			// the image to fit into one
 			is = imageCompressor.compressImage(is, contentType);
 			storedType = MIME_TYPE;
-		} else if (getSize(uri) > maxSize) {
-			// The store chunks large images, but this one is over its limit,
-			// so compress it just enough to fit. Keep more detail than for
-			// single-message images, since there's far more room.
+		} else {
+			// The store chunks large images. Re-encode this one even if it
+			// fits, so that what is stored never carries the camera's
+			// metadata: the place and time it was taken, and the device.
+			// Keep more detail than for single-message images, since
+			// there's far more room.
 			is = imageCompressor.compressImage(is, contentType, maxSize,
 					MAX_CHUNKED_IMAGE_DIMENSION);
 			storedType = MIME_TYPE;

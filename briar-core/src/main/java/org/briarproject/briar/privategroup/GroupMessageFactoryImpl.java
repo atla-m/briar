@@ -146,6 +146,8 @@ class GroupMessageFactoryImpl implements GroupMessageFactory {
 				> MAX_GROUP_POST_ATTACHMENTS) {
 			throw new IllegalArgumentException();
 		}
+		// The validator requires text, if present, to have length
+		if (text != null && text.isEmpty()) text = null;
 		if (text != null && utf8IsTooLong(text, MAX_GROUP_POST_TEXT_LENGTH))
 			throw new IllegalArgumentException();
 		try {

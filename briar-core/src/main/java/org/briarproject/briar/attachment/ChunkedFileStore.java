@@ -11,6 +11,7 @@ import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseConfig;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.MessageDeletedException;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.sync.GroupId;
@@ -435,7 +436,7 @@ public class ChunkedFileStore {
 			if (index != hashes.size()) {
 				throw new IOException("File changed while being stored");
 			}
-		} catch (IOException | RuntimeException e) {
+		} catch (IOException | DbException | RuntimeException e) {
 			// Don't leave an orphaned manifest or chunks behind
 			db.transaction(false, txn -> {
 				for (MessageId id : chunkIds) db.removeMessage(txn, id);
@@ -512,6 +513,23 @@ public class ChunkedFileStore {
 		}
 	}
 
+	/**
+	 * Returns the given manifest message.
+	 *
+	 * @throws NoSuchMessageException If the manifest is not here, or was
+	 * deleted: a deleted message keeps an empty row, and asking for it
+	 * throws a different exception, which the validation manager would
+	 * take as a reason to try again later, for ever
+	 */
+	private Message getManifest(Transaction txn, MessageId manifestId)
+			throws DbException {
+		try {
+			return db.getMessage(txn, manifestId);
+		} catch (MessageDeletedException e) {
+			throw new NoSuchMessageException();
+		}
+	}
+
 	private void deleteIfPresent(Transaction txn, MessageId id)
 			throws DbException {
 		try {
@@ -566,7 +584,7 @@ public class ChunkedFileStore {
 		MessageId manifestId = header.getManifestId();
 		try {
 			long manifestTimestamp =
-					db.getMessage(txn, manifestId).getTimestamp();
+					getManifest(txn, manifestId).getTimestamp();
 			long timestamp = getRequestTimestamp(manifestTimestamp);
 			int type = client.getRequestType();
 			BdfList body = BdfList.of(type, manifestId);
@@ -608,11 +626,11 @@ public class ChunkedFileStore {
 		// request has no dependencies, so it can arrive before its
 		// manifest, and then it is passed on unchecked.
 		try {
-			Message manifest = db.getMessage(txn, manifestId);
+			Message manifest = getManifest(txn, manifestId);
 			if (m.getTimestamp() != manifest.getTimestamp() + 2)
 				throw new FormatException();
 		} catch (NoSuchMessageException e) {
-			// Not our manifest, or not here yet
+			// Not our manifest, not here yet, or deleted
 		}
 		for (MessageId chunkId : getChunkIds(txn, m.getGroupId(),
 				manifestId)) {
@@ -772,7 +790,7 @@ public class ChunkedFileStore {
 	public FileHeader getFileHeader(Transaction txn, GroupId groupId,
 			MessageId manifestId) throws DbException {
 		try {
-			Message m = db.getMessage(txn, manifestId);
+			Message m = getManifest(txn, manifestId);
 			// Don't let a manifest be read in the context of another group
 			if (!m.getGroupId().equals(groupId))
 				throw new NoSuchMessageException();
@@ -1019,7 +1037,12 @@ public class ChunkedFileStore {
 		if (!manifestMeta.containsKey(KEY_FILE_CHUNK_HASHES))
 			throw new InvalidMessageException();
 		// The manifest must be in the same group as the chunk
-		Message manifest = db.getMessage(txn, manifestId);
+		Message manifest;
+		try {
+			manifest = getManifest(txn, manifestId);
+		} catch (NoSuchMessageException e) {
+			throw new InvalidMessageException();
+		}
 		if (!manifest.getGroupId().equals(g))
 			throw new InvalidMessageException();
 		// A file's chunks all take the timestamp after the manifest's,
