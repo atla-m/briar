@@ -1065,8 +1065,7 @@ class ChannelManagerImpl
 			b.addHeader("If-Modified-Since", lastModified);
 		}
 		if (resume) b.addHeader("Range", "bytes=" + state.offset + "-");
-		Response response =
-				httpClient(g).newCall(b.build()).execute();
+		Response response = execute(g, b.build());
 		try (ResponseBody body = response.body()) {
 			int code = response.code();
 			if (code == 304) {
@@ -1140,6 +1139,24 @@ class ChannelManagerImpl
 	 * channel and an RSS feed, see the second connection resume the
 	 * first, which joins up the circuits that were kept apart.
 	 */
+	/**
+	 * Sends a request to a mirror over the channel's own circuits. The
+	 * SOCKS socket refuses an address that has already been resolved, by
+	 * throwing an unchecked exception, and OkHttp resolves an IP address
+	 * written in a URL itself rather than asking the resolver that does no
+	 * lookups. A mirror such as https://192.0.2.1/ would then crash the
+	 * fetch thread, and with it the app, on every fetch; anyone who hands
+	 * out a link can choose its mirrors. Such a mirror is unreachable
+	 * instead, and the next one is asked.
+	 */
+	private Response execute(GroupId g, Request request) throws IOException {
+		try {
+			return httpClient(g).newCall(request).execute();
+		} catch (IllegalArgumentException e) {
+			throw new IOException(e);
+		}
+	}
+
 	private OkHttpClient httpClient(GroupId g) throws IOException {
 		SocketFactory sockets = isolatedSocketFactory.create(
 				"channel-" + toHexString(g.getBytes()),
@@ -1717,7 +1734,7 @@ class ChannelManagerImpl
 		Request.Builder b = new Request.Builder().url(url).get()
 				.header("User-Agent", FETCH_USER_AGENT);
 		if (offset > 0) b.addHeader("Range", "bytes=" + offset + "-");
-		Response response = httpClient(g).newCall(b.build()).execute();
+		Response response = execute(g, b.build());
 		try (ResponseBody body = response.body()) {
 			int code = response.code();
 			if (code == 416 && offset > 0) {
