@@ -5,7 +5,10 @@ public enum MessageType {
 	POST(0),
 	COMMENT(1),
 	WRAPPED_POST(2),
-	WRAPPED_COMMENT(3);
+	WRAPPED_COMMENT(3),
+	ATTACHMENT(4),
+	FILE_MANIFEST(5),
+	FILE_CHUNK(6);
 
 	int value;
 
@@ -23,6 +26,12 @@ public enum MessageType {
 				return WRAPPED_POST;
 			case 3:
 				return WRAPPED_COMMENT;
+			case 4:
+				return ATTACHMENT;
+			case 5:
+				return FILE_MANIFEST;
+			case 6:
+				return FILE_CHUNK;
 			default:
 				throw new IllegalArgumentException();
 		}

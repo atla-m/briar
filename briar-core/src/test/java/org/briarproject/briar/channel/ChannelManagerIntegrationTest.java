@@ -1,6 +1,9 @@
 package org.briarproject.briar.channel;
 
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.sync.Message;
+import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
@@ -31,6 +34,7 @@ import java.util.Collection;
 import java.util.List;
 
 import static java.util.Arrays.asList;
+import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
@@ -39,7 +43,9 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
+import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
+import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -499,6 +505,87 @@ public class ChannelManagerIntegrationTest
 			// Expected
 		}
 		assertEquals(1, channelManager0.getChannels().size());
+	}
+
+	@Test
+	public void testChannelPostCanCarryAnImage() throws Exception {
+		// A post's attachment headers are covered by its signature, so a
+		// mirror or a member can't swap or remove what it carries
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		AttachmentHeader image = new AttachmentHeader(g,
+				new MessageId(getRandomId()), "image/jpeg");
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				c0.getClock().currentTimeMillis(), null,
+				channel.getLocalAuthor(), "Look at this",
+				singletonList(image), emptyList());
+
+		// It parses back as a valid post of this channel
+		BdfList body = c0.getClientHelper()
+				.toList(post.getMessage().getBody());
+		assertEquals(4, body.size());
+		assertEquals(POST.getInt(), body.getInt(0).intValue());
+		assertEquals("Look at this", body.getString(1));
+		assertEquals(1, body.getList(2).size());
+	}
+
+	@Test
+	public void testChannelPostWithAnImageIsAccepted() throws Exception {
+		// The positive half of the pair below: a properly signed post
+		// carrying an image must be delivered, with its header intact
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		AttachmentHeader image = new AttachmentHeader(g,
+				new MessageId(getRandomId()), "image/jpeg");
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				c0.getClock().currentTimeMillis(), null,
+				channel.getLocalAuthor(), "Look at this",
+				singletonList(image), emptyList());
+
+		Blog subscribed = channelManager1.subscribe("Announcements",
+				channel.getLocalAuthor().getPublicKey());
+		assertEquals(1, channelManager1.importChannel(
+				new ByteArrayInputStream(buildStream(subscribed,
+						post.getMessage().getTimestamp(),
+						post.getMessage().getBody()))));
+		awaitPendingMessageDelivery(1);
+
+		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
+		assertEquals(1, headers.size());
+		assertEquals("Look at this", blogManager1
+				.getPostText(headers.iterator().next().getId()));
+	}
+
+	@Test
+	public void testChannelPostSignatureCoversItsAttachments()
+			throws Exception {
+		// Changing a header after signing must invalidate the post
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		AttachmentHeader image = new AttachmentHeader(g,
+				new MessageId(getRandomId()), "image/jpeg");
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				c0.getClock().currentTimeMillis(), null,
+				channel.getLocalAuthor(), "Look at this",
+				singletonList(image), emptyList());
+
+		// Swap the attachment for a different one, keeping the signature
+		BdfList body = c0.getClientHelper()
+				.toList(post.getMessage().getBody());
+		BdfList swapped = BdfList.of(body.get(0), body.get(1),
+				BdfList.of(BdfList.of(new MessageId(getRandomId()),
+						"image/jpeg")), body.get(3));
+		Message tampered = c0.getClientHelper().createMessage(g,
+				post.getMessage().getTimestamp(), swapped);
+
+		Blog subscribed = channelManager1.subscribe("Announcements",
+				channel.getLocalAuthor().getPublicKey());
+		assertEquals(g, subscribed.getId());
+		assertEquals(1, channelManager1.importChannel(
+				new ByteArrayInputStream(buildStream(subscribed,
+						tampered.getTimestamp(), tampered.getBody()))));
+		awaitPendingMessageValidation(1);
+		assertTrue(blogManager1.getPostHeaders(g).isEmpty());
 	}
 
 	private byte[] exportChannel(GroupId g) throws Exception {

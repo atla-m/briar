@@ -14,12 +14,18 @@ public interface BlogConstants {
 	 */
 	int MAX_BLOG_COMMENT_TEXT_LENGTH = MAX_BLOG_POST_TEXT_LENGTH;
 
+	/**
+	 * The maximum number of images and files a blog post can carry.
+	 */
+	int MAX_BLOG_POST_ATTACHMENTS = 10;
+
 	// Metadata keys
 	String KEY_TYPE = "type";
 	String KEY_TIMESTAMP = "timestamp";
 	String KEY_TIME_RECEIVED = "timeReceived";
 	String KEY_AUTHOR = "author";
 	String KEY_RSS_FEED = "rssFeed";
+	String KEY_ATTACHMENT_HEADERS = "attachmentHeaders";
 	String KEY_READ = "read";
 	String KEY_COMMENT = "comment";
 	String KEY_ORIGINAL_MSG_ID = "originalMessageId";
