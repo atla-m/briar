@@ -20,6 +20,7 @@ import javax.inject.Inject;
 import static org.briarproject.bramble.util.StringUtils.utf8IsTooLong;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
+import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_FORWARDED_LINK_LENGTH;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 
@@ -98,6 +99,40 @@ class PrivateMessageFactoryImpl implements PrivateMessageFactory {
 		Message m = clientHelper.createMessage(groupId, timestamp, body);
 		return new PrivateMessage(m, text != null, headers, fileHeaders,
 				autoDeleteTimer);
+	}
+
+	@Override
+	public PrivateMessage createPrivateMessage(GroupId groupId, long timestamp,
+			@Nullable String text, List<AttachmentHeader> headers,
+			List<FileHeader> fileHeaders, long autoDeleteTimer,
+			@Nullable String channelLink) throws FormatException {
+		if (channelLink == null) {
+			// Nothing to forward, so don't spend an element saying so
+			return createPrivateMessage(groupId, timestamp, text, headers,
+					fileHeaders, autoDeleteTimer);
+		}
+		if (text == null && headers.isEmpty() && fileHeaders.isEmpty())
+			throw new IllegalArgumentException();
+		if (text != null &&
+				utf8IsTooLong(text, MAX_PRIVATE_MESSAGE_TEXT_LENGTH))
+			throw new IllegalArgumentException();
+		if (headers.size() + fileHeaders.size() > MAX_ATTACHMENTS_PER_MESSAGE)
+			throw new IllegalArgumentException();
+		if (utf8IsTooLong(channelLink, MAX_FORWARDED_LINK_LENGTH))
+			throw new IllegalArgumentException();
+		BdfList attachmentList = serialiseAttachmentHeaders(headers);
+		for (FileHeader f : fileHeaders) {
+			attachmentList.add(BdfList.of(f.getManifestId(),
+					f.getContentType(), f.getName(), f.getSize()));
+		}
+		// Serialise the message
+		Long timer = autoDeleteTimer == NO_AUTO_DELETE_TIMER ?
+				null : autoDeleteTimer;
+		BdfList body = BdfList.of(PRIVATE_MESSAGE, text, attachmentList, timer,
+				channelLink);
+		Message m = clientHelper.createMessage(groupId, timestamp, body);
+		return new PrivateMessage(m, text != null, headers, fileHeaders,
+				autoDeleteTimer, channelLink);
 	}
 
 	private void validateTextAndAttachmentHeaders(@Nullable String text,

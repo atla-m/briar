@@ -29,7 +29,16 @@ public enum PrivateMessageFormat {
 	 * transferred in chunks, and images larger than a single message.
 	 * Support for this format was added in client version 0.4.
 	 */
-	TEXT_IMAGES_AUTO_DELETE_FILES;
+	TEXT_IMAGES_AUTO_DELETE_FILES,
+
+	/**
+	 * Fifth version of the private message format, which additionally
+	 * supports forwarding a channel post: the message carries the link of
+	 * the channel the text came from, so the recipient can subscribe to it
+	 * rather than take the sender's word for where it came from. Support
+	 * for this format was added in client version 0.5.
+	 */
+	TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
 
 	/**
 	 * Returns true if this format supports image attachments.
@@ -50,6 +59,14 @@ public enum PrivateMessageFormat {
 	 * Returns true if this format supports chunked files.
 	 */
 	public boolean supportsFiles() {
-		return this == TEXT_IMAGES_AUTO_DELETE_FILES;
+		return this == TEXT_IMAGES_AUTO_DELETE_FILES ||
+				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+	}
+
+	/**
+	 * Returns true if this format can carry a forwarded channel post.
+	 */
+	public boolean supportsForwarding() {
+		return this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
 	}
 }

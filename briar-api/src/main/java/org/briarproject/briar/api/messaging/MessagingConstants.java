@@ -14,4 +14,11 @@ public interface MessagingConstants {
 	 */
 	int MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
+	/**
+	 * The maximum length of the channel link carried by a forwarded post,
+	 * in UTF-8 bytes. A link is base32 with a short prefix, so this is the
+	 * longest link the channel client will parse plus room for the prefix.
+	 */
+	int MAX_FORWARDED_LINK_LENGTH = 1024;
+
 }

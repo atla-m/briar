@@ -44,6 +44,7 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCR
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.MAX_AUTO_DELETE_TIMER_MS;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.MIN_AUTO_DELETE_TIMER_MS;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
+import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_FORWARDED_LINK_LENGTH;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
@@ -51,6 +52,7 @@ import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_CHANNEL_LINK;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_HAS_TEXT;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_LOCAL;
@@ -80,6 +82,8 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 			new BdfEntry(MSG_KEY_LOCAL, false),
 			new BdfEntry(MSG_KEY_READ, false)
 	);
+	private final String channelLink = "briar-channel://" +
+			getRandomString(64);
 	private final BdfDictionary noAttachmentsMeta = BdfDictionary.of(
 			new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
 			new BdfEntry(MSG_KEY_LOCAL, false),
@@ -671,6 +675,67 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 
 		MessageContext result = validator.validateMessage(message, group);
 		assertEquals(0, result.getDependencies().size());
+	}
+
+	@Test
+	public void testAcceptsForwardedChannelLink() throws Exception {
+		BdfDictionary meta = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
+				new BdfEntry(MSG_KEY_LOCAL, false),
+				new BdfEntry(MSG_KEY_READ, false),
+				new BdfEntry(MSG_KEY_MSG_TYPE, PRIVATE_MESSAGE),
+				new BdfEntry(MSG_KEY_HAS_TEXT, true),
+				new BdfEntry(MSG_KEY_ATTACHMENT_HEADERS, new BdfList()),
+				new BdfEntry(MSG_KEY_CHANNEL_LINK, channelLink)
+		);
+		testAcceptsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, channelLink), meta);
+	}
+
+	@Test
+	public void testAcceptsMaxLengthForwardedChannelLink() throws Exception {
+		String link = getRandomString(MAX_FORWARDED_LINK_LENGTH);
+		BdfDictionary meta = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
+				new BdfEntry(MSG_KEY_LOCAL, false),
+				new BdfEntry(MSG_KEY_READ, false),
+				new BdfEntry(MSG_KEY_MSG_TYPE, PRIVATE_MESSAGE),
+				new BdfEntry(MSG_KEY_HAS_TEXT, true),
+				new BdfEntry(MSG_KEY_ATTACHMENT_HEADERS, new BdfList()),
+				new BdfEntry(MSG_KEY_CHANNEL_LINK, link)
+		);
+		testAcceptsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, link), meta);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsTooLongForwardedChannelLink() throws Exception {
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null,
+				getRandomString(MAX_FORWARDED_LINK_LENGTH + 1)));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsEmptyForwardedChannelLink() throws Exception {
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, ""));
+	}
+
+	/**
+	 * The link is only encoded when the message is a forward, so a null in
+	 * that position is not a valid encoding: a sender with nothing to
+	 * forward sends the shorter body.
+	 */
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsNullForwardedChannelLink() throws Exception {
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, null));
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsNonStringForwardedChannelLink() throws Exception {
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				new BdfList(), null, 123));
 	}
 
 	private void testRejectsPrivateMessage(BdfList body) throws Exception {
