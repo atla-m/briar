@@ -197,8 +197,11 @@ class PrivateMessageValidator implements MessageValidator {
 		if (body.size() == 6) {
 			channelLink = body.getString(4);
 			checkLength(channelLink, 1, MAX_FORWARDED_LINK_LENGTH);
-			// The text is the post's, so there must be some to check
-			if (text == null) throw new FormatException();
+			// The text is the post's, so there must be some to check, and
+			// nothing else: images or files beside it would be the
+			// sender's, shown under the channel's name
+			if (text == null || !headers.isEmpty())
+				throw new FormatException();
 			verifyForwardedPost(channelLink, text, body.getList(5));
 		}
 		// Return the metadata

@@ -88,44 +88,56 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 	}
 
 	private void setTopNotice(ConversationItem item) {
-		if (item.isTimerNoticeVisible()) {
-			Context ctx = itemView.getContext();
-			topNotice.setVisibility(VISIBLE);
-			boolean enabled = item.getAutoDeleteTimer() != NO_AUTO_DELETE_TIMER;
-			String duration = enabled ?
-					formatDuration(ctx, item.getAutoDeleteTimer()) : "";
-			String tapToLearnMore = ctx.getString(R.string.tap_to_learn_more);
-			String text;
-			if (item.isIncoming()) {
-				String name = item.getContactName().getValue();
-				text = enabled ?
-						ctx.getString(R.string.auto_delete_msg_contact_enabled,
-								name, duration, tapToLearnMore) :
-						ctx.getString(R.string.auto_delete_msg_contact_disabled,
-								name, tapToLearnMore);
-			} else {
-				text = enabled ?
-						ctx.getString(R.string.auto_delete_msg_you_enabled,
-								duration, tapToLearnMore) :
-						ctx.getString(R.string.auto_delete_msg_you_disabled,
-								tapToLearnMore);
-			}
+		Context ctx = itemView.getContext();
+		String link = item.getChannelLink();
+		boolean timer = item.isTimerNoticeVisible();
+		if (!timer && link == null) {
+			topNotice.setVisibility(GONE);
+			return;
+		}
+		topNotice.setVisibility(VISIBLE);
+		String forward = link == null ? null :
+				ctx.getString(R.string.blogs_forwarded_from,
+						ctx.getString(R.string.blogs_forwarded_subscribe));
+		if (!timer) {
+			topNotice.setText(forward);
+			topNotice.setOnClickListener(
+					v -> listener.onForwardedChannelClick(item.getId(), link));
+			return;
+		}
+		// A forward whose message also changes the timer shows both: the
+		// timer is about to delete the message, and without the forward
+		// line a channel's post would look like the contact's own words.
+		// The notice then opens the subscribe dialog, so the timer line
+		// doesn't offer to explain more
+		String more = link == null ?
+				ctx.getString(R.string.tap_to_learn_more) : "";
+		boolean enabled = item.getAutoDeleteTimer() != NO_AUTO_DELETE_TIMER;
+		String duration = enabled ?
+				formatDuration(ctx, item.getAutoDeleteTimer()) : "";
+		String text;
+		if (item.isIncoming()) {
+			String name = item.getContactName().getValue();
+			text = enabled ?
+					ctx.getString(R.string.auto_delete_msg_contact_enabled,
+							name, duration, more) :
+					ctx.getString(R.string.auto_delete_msg_contact_disabled,
+							name, more);
+		} else {
+			text = enabled ?
+					ctx.getString(R.string.auto_delete_msg_you_enabled,
+							duration, more) :
+					ctx.getString(R.string.auto_delete_msg_you_disabled,
+							more);
+		}
+		if (link == null) {
 			topNotice.setText(text);
 			topNotice.setOnClickListener(
 					v -> listener.onAutoDeleteTimerNoticeClicked());
-		} else if (item.getChannelLink() != null) {
-			// A forwarded channel post says so above the bubble, in the
-			// same place as a timer notice. A timer notice wins if both
-			// apply: it is about to delete the message, which matters more
-			String link = item.getChannelLink();
-			Context ctx = itemView.getContext();
-			topNotice.setVisibility(VISIBLE);
-			topNotice.setText(ctx.getString(R.string.blogs_forwarded_from,
-					ctx.getString(R.string.blogs_forwarded_subscribe)));
+		} else {
+			topNotice.setText(text.trim() + "\n\n" + forward);
 			topNotice.setOnClickListener(
 					v -> listener.onForwardedChannelClick(item.getId(), link));
-		} else {
-			topNotice.setVisibility(GONE);
 		}
 	}
 

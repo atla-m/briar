@@ -818,6 +818,17 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 				forwardedPost));
 	}
 
+	/**
+	 * Images or files beside a forward would be the sender's, shown
+	 * under the channel's name, so a forward carries none.
+	 */
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsForwardedPostWithAttachments() throws Exception {
+		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
+				BdfList.of(attachmentHeader), null, channelLink,
+				forwardedPost));
+	}
+
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsForwardedPostWithoutSignature() throws Exception {
 		testRejectsPrivateMessage(BdfList.of(PRIVATE_MESSAGE, text,
