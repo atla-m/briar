@@ -243,6 +243,10 @@ public class BlogFragment extends BaseFragment
 	private void showNearbyState(SwitchMaterial shareNearby, long expiry) {
 		long left = expiry - System.currentTimeMillis();
 		boolean on = expiry > 0 && left > 0;
+		// The countdown has run out: ask again, which ends the session if
+		// its own timer is late, so the switch never shows off while the
+		// phone is still sharing
+		if (expiry > 0 && left <= 0) viewModel.refreshNearby();
 		if (shareNearby.isChecked() != on) {
 			shareNearby.setOnCheckedChangeListener(null);
 			shareNearby.setChecked(on);

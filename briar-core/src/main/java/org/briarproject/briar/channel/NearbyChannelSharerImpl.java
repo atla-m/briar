@@ -115,7 +115,11 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 			eventBus.broadcast(new ChannelNearbyEvent(g, 0));
 			return true;
 		}
-		if (sessions.containsKey(g)) return true;
+		// A session whose hour is up but whose timer is late, which Doze
+		// can make it, is ended and a new one started, rather than left
+		// to end moments after the user turned sharing on again
+		Session old = sessions.get(g);
+		if (old != null && !endIfExpired(old)) return true;
 		DuplexPlugin plugin = getBluetoothPlugin();
 		if (plugin == null) return false;
 		byte[] commitment;
@@ -155,7 +159,8 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 	@Override
 	public long getNearbyExpiry(GroupId g) {
 		Session s = sessions.get(g);
-		return s == null ? 0 : s.expiry;
+		if (s == null || endIfExpired(s)) return 0;
+		return s.expiry;
 	}
 
 	private void expire(GroupId g, Session s) {
@@ -163,6 +168,21 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 			s.close();
 			eventBus.broadcast(new ChannelNearbyEvent(g, 0));
 		}
+	}
+
+	/**
+	 * Ends a session whose hour is up, and returns true if it has ended.
+	 * The timer that ends a session counts time the phone is awake, so
+	 * Doze can make it late, while the switch counts down by the clock.
+	 * A session past its hour is ended whenever it is next looked at, so
+	 * the phone doesn't go on sharing while the switch shows it off.
+	 */
+	private boolean endIfExpired(Session s) {
+		if (s.closed) return true;
+		if (clock.currentTimeMillis() < s.expiry) return false;
+		LOG.info("Nearby sharing outlasted its hour, ending it");
+		expire(s.g, s);
+		return true;
 	}
 
 	@Nullable
@@ -234,6 +254,10 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 					if (!closed) logException(LOG, INFO, e);
 					return;
 				}
+				if (endIfExpired(this)) {
+					dispose(c.getConnection(), false);
+					return;
+				}
 				LOG.info("Serving a nearby reader");
 				exchange(c.getConnection(), true);
 			}
@@ -243,7 +267,7 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 		 * Looks for a nearby phone serving the channel and reads its copy.
 		 */
 		private void scan() {
-			if (closed) return;
+			if (endIfExpired(this)) return;
 			LOG.info("Looking for a nearby copy");
 			// No address in the descriptor: discover nearby devices and
 			// try each for the channel's service

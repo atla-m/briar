@@ -114,6 +114,17 @@ class BlogViewModel extends BaseViewModel {
 		return nearbyUnavailable;
 	}
 
+	/**
+	 * Asks again whether the channel is being shared nearby. A session
+	 * whose hour is up is ended by asking.
+	 */
+	void refreshNearby() {
+		GroupId g = groupId;
+		if (g == null) return;
+		ioExecutor.execute(() ->
+				nearbyExpiry.postValue(nearbyManager.getNearbyExpiry(g)));
+	}
+
 	void setSharingNearby(boolean on) {
 		GroupId g = groupId;
 		if (g == null) return;

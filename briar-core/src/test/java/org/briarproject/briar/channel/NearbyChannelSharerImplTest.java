@@ -40,6 +40,7 @@ import java.io.OutputStream;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.briarproject.bramble.api.plugin.Plugin.State.ACTIVE;
@@ -75,6 +76,7 @@ public class NearbyChannelSharerImplTest extends BrambleTestCase {
 	private final Cancellable scan = context.mock(Cancellable.class, "scan");
 	private final Cancellable timer = context.mock(Cancellable.class, "timer");
 
+	private final AtomicLong now = new AtomicLong(1000);
 	private final Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
 	private final Blog blog = new Blog(group, getAuthor(), false, true);
 	private final Transaction txn = new Transaction(null, true);
@@ -92,6 +94,26 @@ public class NearbyChannelSharerImplTest extends BrambleTestCase {
 			oneOf(eventBus).broadcast(with(any(ChannelNearbyEvent.class)));
 		}});
 		sharer.eventOccurred(new GroupRemovedEvent(group));
+		assertEquals(0, sharer.getNearbyExpiry(group.getId()));
+	}
+
+	@Test
+	public void testASessionPastItsHourEndsWhenLookedAt() throws Exception {
+		// Doze can make the timer that ends a session late, while the
+		// switch counts down by the clock. Asking after the hour is up
+		// ends the session, so the phone doesn't share while it shows off.
+		NearbyChannelSharerImpl sharer = startSharing(r -> {
+		}, new FakeListener(null));
+		long expiry = sharer.getNearbyExpiry(group.getId());
+		now.set(expiry);
+
+		context.checking(new Expectations() {{
+			oneOf(scan).cancel();
+			oneOf(timer).cancel();
+			oneOf(eventBus).broadcast(with(any(ChannelNearbyEvent.class)));
+		}});
+		assertEquals(0, sharer.getNearbyExpiry(group.getId()));
+		// Asking again finds nothing to end
 		assertEquals(0, sharer.getNearbyExpiry(group.getId()));
 	}
 
@@ -158,7 +180,12 @@ public class NearbyChannelSharerImplTest extends BrambleTestCase {
 					with(any(byte[].class)));
 			will(returnValue(listener));
 			allowing(clock).currentTimeMillis();
-			will(returnValue(1000L));
+			will(new CustomAction("read the clock") {
+				@Override
+				public Object invoke(org.jmock.api.Invocation i) {
+					return now.get();
+				}
+			});
 			oneOf(scheduler).scheduleWithFixedDelay(with(any(Runnable.class)),
 					with(ioExecutor), with(any(long.class)),
 					with(any(long.class)), with(any(TimeUnit.class)));
