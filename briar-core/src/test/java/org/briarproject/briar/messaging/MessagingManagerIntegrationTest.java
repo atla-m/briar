@@ -2,10 +2,12 @@ package org.briarproject.briar.messaging;
 
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.MessageDeletedException;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
@@ -29,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import javax.annotation.Nullable;
@@ -41,7 +44,13 @@ import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
-import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
+import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_TIMESTAMP;
+import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_MSG_TYPE;
+import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_LOCAL;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.MIN_AUTO_DELETE_TIMER_MS;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.test.BriarTestUtils.assertGroupCount;
@@ -49,7 +58,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.fail;
 
 public class MessagingManagerIntegrationTest
@@ -326,7 +335,7 @@ public class MessagingManagerIntegrationTest
 		GroupId g = messagingManager0.getConversationId(contactId);
 		FileHeader file = messagingManager0.addLocalFile(g,
 				c0.getClock().currentTimeMillis(), "image.jpg", "image/jpeg",
-				new ByteArrayInputStream(imageBytes));
+				() -> new ByteArrayInputStream(imageBytes));
 		assertEquals(4, file.getChunkCount());
 		AttachmentHeader h = new AttachmentHeader(g, file.getManifestId(),
 				"image/jpeg");
@@ -358,7 +367,7 @@ public class MessagingManagerIntegrationTest
 		GroupId g = messagingManager0.getConversationId(contactId);
 		FileHeader file = messagingManager0.addLocalFile(g,
 				c0.getClock().currentTimeMillis(), "voice.m4a", "audio/mp4",
-				new ByteArrayInputStream(fileBytes));
+				() -> new ByteArrayInputStream(fileBytes));
 		PrivateMessage m = messageFactory.createPrivateMessage(g,
 				c0.getClock().currentTimeMillis(), "Listen to this",
 				emptyList(), singletonList(file), NO_AUTO_DELETE_TIMER);
@@ -389,7 +398,7 @@ public class MessagingManagerIntegrationTest
 		GroupId g = messagingManager0.getConversationId(contactId);
 		FileHeader file = messagingManager0.addLocalFile(g,
 				c0.getClock().currentTimeMillis(), "clip.mp4", "video/mp4",
-				new ByteArrayInputStream(fileBytes));
+				() -> new ByteArrayInputStream(fileBytes));
 		PrivateMessage m = messageFactory.createPrivateMessage(g,
 				c0.getClock().currentTimeMillis(), null, emptyList(),
 				singletonList(file), NO_AUTO_DELETE_TIMER);
@@ -399,12 +408,14 @@ public class MessagingManagerIntegrationTest
 		// Manifest and chunks exist on the recipient's device
 		List<MessageId> chunkIds = db1.transactionWithResult(true, txn -> {
 			db1.getMessage(txn, file.getManifestId());
-			BdfDictionary meta = c1.getClientHelper()
-					.getMessageMetadataAsDictionary(txn, file.getManifestId());
-			BdfList list = meta.getList(KEY_FILE_CHUNK_IDS);
+			// Chunks name the manifest they belong to, so they're found by
+			// querying for that manifest
+			BdfDictionary query = BdfDictionary.of(
+					new BdfEntry(KEY_FILE_MANIFEST_ID, file.getManifestId()));
+			Map<MessageId, BdfDictionary> chunks = c1.getClientHelper()
+					.getMessageMetadataAsDictionary(txn, g, query);
 			List<MessageId> ids = new ArrayList<>();
-			for (int i = 0; i < list.size(); i++) {
-				MessageId id = new MessageId(list.getRaw(i));
+			for (MessageId id : chunks.keySet()) {
 				db1.getMessage(txn, id);
 				ids.add(id);
 			}
@@ -430,6 +441,93 @@ public class MessagingManagerIntegrationTest
 		} catch (MessageDeletedException e) {
 			// expected
 		}
+	}
+
+	@Test
+	public void testChunksBelongToOnlyOneManifest() throws Exception {
+		// Two files with identical bytes have identical chunk hashes, so
+		// their manifests describe the same content. Each manifest must
+		// still own its own chunks: otherwise one manifest could claim
+		// another file's chunks, and deleting it would destroy that file.
+		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 2);
+		GroupId g = messagingManager0.getConversationId(contactId);
+		long time = c0.getClock().currentTimeMillis();
+		FileHeader first = messagingManager0.addLocalFile(g, time, "clip.mp4",
+				"video/mp4", () -> new ByteArrayInputStream(fileBytes));
+		PrivateMessage m1 = messageFactory.createPrivateMessage(g, time, null,
+				emptyList(), singletonList(first), NO_AUTO_DELETE_TIMER);
+		messagingManager0.addLocalMessage(m1);
+		syncMessage(c0, c1, contactId, 4, true);
+
+		// The same bytes again, stored as a second file
+		FileHeader second = messagingManager0.addLocalFile(g, time + 10,
+				"clip.mp4", "video/mp4",
+				() -> new ByteArrayInputStream(fileBytes));
+		assertNotEquals(first.getManifestId(), second.getManifestId());
+		PrivateMessage m2 = messageFactory.createPrivateMessage(g, time + 20,
+				null, emptyList(), singletonList(second),
+				NO_AUTO_DELETE_TIMER);
+		messagingManager0.addLocalMessage(m2);
+		// The second file ships its own manifest and its own two chunks,
+		// rather than reusing the first file's
+		syncMessage(c0, c1, contactId, 4, true);
+		assertTrue(messagingManager1.getFileStatus(first).isComplete());
+		assertTrue(messagingManager1.getFileStatus(second).isComplete());
+
+		// Deleting the second message leaves the first file untouched
+		Set<MessageId> toDelete = singleton(m2.getMessage().getId());
+		assertTrue(db1.transactionWithResult(false, txn ->
+				messagingManager1.deleteMessages(txn, contactId, toDelete))
+				.allDeleted());
+		assertTrue(messagingManager1.getFileStatus(first).isComplete());
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		copyAndClose(messagingManager1.getFile(first), out);
+		assertArrayEquals(fileBytes, out.toByteArray());
+	}
+
+	@Test
+	public void testRejectsChunkThatDoesNotMatchManifest() throws Exception {
+		// A chunk that names a real manifest but carries different bytes
+		// must be rejected, so nobody can put their own data into someone
+		// else's file
+		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 2);
+		GroupId g = messagingManager0.getConversationId(contactId);
+		long time = c0.getClock().currentTimeMillis();
+		FileHeader file = messagingManager0.addLocalFile(g, time, "clip.mp4",
+				"video/mp4", () -> new ByteArrayInputStream(fileBytes));
+		PrivateMessage m = messageFactory.createPrivateMessage(g, time, null,
+				emptyList(), singletonList(file), NO_AUTO_DELETE_TIMER);
+		messagingManager0.addLocalMessage(m);
+		syncMessage(c0, c1, contactId, 4, true);
+		assertTrue(messagingManager1.getFileStatus(file).isComplete());
+
+		// Forge a chunk claiming index 0 of that file
+		byte[] descriptor = c0.getClientHelper().toByteArray(
+				BdfList.of(FILE_CHUNK, file.getManifestId(), 0));
+		byte[] payload = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH);
+		byte[] body = new byte[descriptor.length + payload.length];
+		System.arraycopy(descriptor, 0, body, 0, descriptor.length);
+		System.arraycopy(payload, 0, body, descriptor.length, payload.length);
+		Message forged =
+				c0.getClientHelper().createMessage(g, time + 1, body);
+		BdfDictionary meta = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_TIMESTAMP, time + 1),
+				new BdfEntry(MSG_KEY_LOCAL, true),
+				new BdfEntry(MSG_KEY_MSG_TYPE, FILE_CHUNK),
+				new BdfEntry(KEY_FILE_MANIFEST_ID, file.getManifestId()),
+				new BdfEntry(KEY_FILE_CHUNK_INDEX, 0),
+				new BdfEntry(MSG_KEY_DESCRIPTOR_LENGTH, descriptor.length));
+		db0.transaction(false, txn -> c0.getClientHelper()
+				.addLocalMessage(txn, forged, meta, true, false));
+
+		// The recipient rejects it rather than delivering or forwarding it
+		syncMessage(c0, c1, contactId, 1, 0, 1, 0);
+
+		// The file is untouched and still reads back byte for byte
+		assertTrue(messagingManager1.getFileStatus(file).isComplete());
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		copyAndClose(messagingManager1.getFile(file), out);
+		assertArrayEquals(fileBytes, out.toByteArray());
 	}
 
 	@Test

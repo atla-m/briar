@@ -30,7 +30,7 @@ public interface MediaConstants {
 	 * body length. Every chunk of a file except the last carries exactly
 	 * this many bytes.
 	 */
-	int FILE_CHUNK_PAYLOAD_LENGTH = MAX_MESSAGE_BODY_LENGTH - 16;
+	int FILE_CHUNK_PAYLOAD_LENGTH = MAX_MESSAGE_BODY_LENGTH - 48;
 
 	/**
 	 * The maximum size of a file shared in a private group or a private

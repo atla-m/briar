@@ -6,6 +6,7 @@ import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.client.ContactGroupFactory;
 import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.contact.ContactManager.ContactHook;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
@@ -29,6 +30,7 @@ import org.briarproject.bramble.api.versioning.ClientVersioningManager;
 import org.briarproject.bramble.api.versioning.ClientVersioningManager.ClientVersioningHook;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
@@ -119,7 +121,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			ConversationManager conversationManager,
 			MessageTracker messageTracker,
 			ContactGroupFactory contactGroupFactory,
-			AutoDeleteManager autoDeleteManager) {
+			AutoDeleteManager autoDeleteManager,
+			CryptoComponent crypto) {
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.metadataParser = metadataParser;
@@ -128,7 +131,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		this.clientVersioningManager = clientVersioningManager;
 		this.contactGroupFactory = contactGroupFactory;
 		this.autoDeleteManager = autoDeleteManager;
-		this.fileStore = new ChunkedFileStore(db, clientHelper, this);
+		this.fileStore = new ChunkedFileStore(db, clientHelper, crypto, this);
 	}
 
 	@Override
@@ -386,14 +389,14 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			for (AttachmentHeader a : m.getAttachmentHeaders()) {
 				MessageId id = a.getMessageId();
 				if (fileStore.isManifest(txn, id)) {
-					fileStore.shareFile(txn, id);
+					fileStore.shareFile(txn, a.getGroupId(), id);
 				} else {
 					db.setMessageShared(txn, id);
 					db.setMessagePermanent(txn, id);
 				}
 			}
 			for (FileHeader f : m.getFileHeaders()) {
-				fileStore.shareFile(txn, f.getManifestId());
+				fileStore.shareFile(txn, f.getGroupId(), f.getManifestId());
 			}
 			clientHelper.addLocalMessage(txn, m.getMessage(), meta, true,
 					false);
@@ -492,10 +495,10 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 
 	@Override
 	public FileHeader addLocalFile(GroupId groupId, long timestamp,
-			String name, String contentType, InputStream in)
+			String name, String contentType, StreamSource source)
 			throws DbException, IOException {
 		return fileStore.addLocalFile(groupId, timestamp, name, contentType,
-				in);
+				source);
 	}
 
 	@Override
@@ -711,10 +714,15 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			if (messageType != null && messageType == PRIVATE_MESSAGE) {
 				// Delete the message's attachments and files. A file's
 				// chunks go with its manifest, so a deleted or auto-deleted
-				// message leaves no part of its files behind.
-				for (MessageId id : getReferencedIds(meta)) {
+				// message leaves no part of its files behind. Delete the
+				// message itself first, so that a file it shares is only
+				// kept if some other message still references it.
+				Collection<MessageId> referenced = getReferencedIds(meta);
+				db.deleteMessage(txn, m);
+				db.deleteMessageMetadata(txn, m);
+				for (MessageId id : referenced) {
 					if (fileStore.isManifest(txn, id)) {
-						fileStore.deleteFile(txn, id);
+						fileStore.deleteFile(txn, g, id);
 					} else {
 						try {
 							db.deleteMessage(txn, id);
@@ -724,6 +732,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 						}
 					}
 				}
+				return;
 			}
 			db.deleteMessage(txn, m);
 			db.deleteMessageMetadata(txn, m);

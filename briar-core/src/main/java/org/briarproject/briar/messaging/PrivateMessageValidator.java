@@ -12,6 +12,7 @@ import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.Message;
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.sync.MessageContext;
 import org.briarproject.bramble.api.sync.validation.MessageValidator;
 import org.briarproject.bramble.api.system.Clock;
@@ -25,6 +26,7 @@ import java.io.InputStream;
 
 import javax.annotation.concurrent.Immutable;
 
+import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
@@ -34,6 +36,7 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
@@ -177,7 +180,7 @@ class PrivateMessageValidator implements MessageValidator {
 
 	private BdfMessageContext validateFileManifest(Message m, BdfList body)
 			throws FormatException {
-		// The file's name, type, size and chunk IDs are checked by the
+		// The file's name, type, size and chunk hashes are checked by the
 		// shared file store, which the private group client uses too
 		BdfDictionary meta = ChunkedFileStore.validateManifest(body);
 		// Manifests aren't authenticated on their own. They're wanted only
@@ -190,16 +193,20 @@ class PrivateMessageValidator implements MessageValidator {
 
 	private BdfMessageContext validateFileChunk(Message m, BdfList descriptor,
 			long descriptorLength) throws FormatException {
-		ChunkedFileStore.validateChunk(descriptor,
+		// The descriptor names the chunk's manifest and index, which the
+		// shared file store checks and returns as metadata
+		BdfDictionary meta = ChunkedFileStore.validateChunk(descriptor,
 				m.getBody().length - descriptorLength);
-		// Chunks are authenticated by their message IDs, which are hashes
-		// of their content, listed in a manifest that a message references
-		BdfDictionary meta = new BdfDictionary();
+		MessageId manifestId =
+				new MessageId(meta.getRaw(KEY_FILE_MANIFEST_ID));
 		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
 		meta.put(MSG_KEY_LOCAL, false);
 		meta.put(MSG_KEY_MSG_TYPE, FILE_CHUNK);
 		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptorLength);
-		return new BdfMessageContext(meta);
+		// The chunk depends on its manifest, so it isn't delivered until
+		// the manifest is, and is then checked against it. A chunk that
+		// hasn't been checked is never shared with other devices.
+		return new BdfMessageContext(meta, singletonList(manifestId));
 	}
 
 	private BdfMessageContext validateAttachment(Message m, BdfList descriptor,

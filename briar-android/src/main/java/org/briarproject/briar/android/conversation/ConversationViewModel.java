@@ -42,6 +42,7 @@ import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
 import org.briarproject.briar.api.autodelete.UnexpectedTimerException;
 import org.briarproject.briar.api.autodelete.event.AutoDeleteTimerMirroredEvent;
@@ -453,13 +454,19 @@ public class ConversationViewModel extends DbViewModel
 				name = name.substring(0, MAX_FILE_NAME_LENGTH / 4);
 			}
 			FileHeader header;
-			try (InputStream in = resolver.openInputStream(uri)) {
+			// The file is read twice while it's stored, so the source
+			// opens a fresh stream each time it's asked
+			StreamSource source = () -> {
+				InputStream in = resolver.openInputStream(uri);
 				if (in == null) throw new IOException("Cannot open " + uri);
+				return in;
+			};
+			try {
 				// The manifest and chunks are stored outside the message's
 				// transaction, as they're written in transactions of their
 				// own. They aren't sent until the message references them.
 				header = messagingManager.addLocalFile(groupId,
-						clock.currentTimeMillis(), name, contentType, in);
+						clock.currentTimeMillis(), name, contentType, source);
 			} catch (FileTooBigException e) {
 				fileError.postEvent(R.string.file_too_big);
 				return;

@@ -8,6 +8,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.conversation.ConversationManager.ConversationClient;
@@ -71,7 +72,8 @@ public interface MessagingManager extends ConversationClient {
 	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_FILE_SIZE}
 	 */
 	FileHeader addLocalFile(GroupId groupId, long timestamp, String name,
-			String contentType, InputStream in) throws DbException, IOException;
+			String contentType, StreamSource source)
+			throws DbException, IOException;
 
 	/**
 	 * Removes an unsent file and its chunks.
