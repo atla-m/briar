@@ -18,5 +18,12 @@ public interface BlogSharingManager extends SharingManager<Blog> {
 	/**
 	 * The current minor version of the blog sharing client.
 	 */
-	int MINOR_VERSION = 1;
+	int MINOR_VERSION = 2;
+
+	/**
+	 * The first minor version of this client that can parse a channel's
+	 * group descriptor. Earlier clients reject an invitation to a channel,
+	 * so channels must not be offered to them.
+	 */
+	int MIN_CHANNEL_MINOR_VERSION = 2;
 }

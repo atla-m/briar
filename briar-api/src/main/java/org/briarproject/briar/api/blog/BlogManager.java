@@ -30,7 +30,7 @@ public interface BlogManager {
 	/**
 	 * The current minor version of the blog client.
 	 */
-	int MINOR_VERSION = 0;
+	int MINOR_VERSION = 1;
 
 	/**
 	 * Adds the given {@link Blog}.

@@ -11,6 +11,7 @@ import org.briarproject.briar.autodelete.AutoDeleteModule;
 import org.briarproject.briar.avatar.AvatarModule;
 import org.briarproject.briar.blog.BlogModule;
 import org.briarproject.briar.client.BriarClientModule;
+import org.briarproject.briar.channel.ChannelModule;
 import org.briarproject.briar.conversation.ConversationModule;
 import org.briarproject.briar.forum.ForumModule;
 import org.briarproject.briar.identity.IdentityModule;
@@ -32,6 +33,7 @@ import dagger.Component;
 		AutoDeleteModule.class,
 		AvatarModule.class,
 		BlogModule.class,
+		ChannelModule.class,
 		BriarClientModule.class,
 		ConversationModule.class,
 		ForumModule.class,
