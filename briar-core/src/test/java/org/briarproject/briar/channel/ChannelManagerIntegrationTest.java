@@ -51,7 +51,9 @@ import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PA
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
+import static org.briarproject.briar.api.channel.ChannelConstants.MIN_HONEST_MESSAGE_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -1059,23 +1061,71 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
-	public void testCountsMessagesAcrossFetchesOfTheSameFile()
-			throws Exception {
-		// The limit on how many messages a file may make us store counts
-		// the whole file. A mirror that could spend the limit again on
-		// every fetch could go on filling our database for ever.
+	public void testATextChannelWithManyPostsIsNotCutOff() throws Exception {
+		// The limit on how many messages a file may make us store exists
+		// to stop an untrusted source filling the database with tiny
+		// messages. It must never bind before the byte limit for an honest
+		// channel: a channel of short posts, well under the byte limit,
+		// has to arrive whole, newest post included
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		int posts = 400;
+		String newest = null;
+		for (int i = 0; i < posts; i++) {
+			newest = "Post " + i;
+			channelManager0.post(g, newest);
+		}
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, out);
+		assertTrue(out.size() < MAX_STREAM_BYTES);
+
+		assertEquals(posts, channelManager1.importChannel(
+				new ByteArrayInputStream(out.toByteArray()), true));
+		awaitPendingMessageDelivery(posts);
+
+		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
+		assertEquals(posts, headers.size());
+		boolean foundNewest = false;
+		for (BlogPostHeader h : headers) {
+			if (newest.equals(blogManager1.getPostText(h.getId()))) {
+				foundNewest = true;
+			}
+		}
+		assertTrue(foundNewest);
+	}
+
+	@Test
+	public void testCountsTheWholeFileAcrossFetches() throws Exception {
+		// The limits on how much a file may make us store count the whole
+		// file, not each fetch. A mirror that could spend them again on
+		// every fetch could go on filling our database for ever, since a
+		// message that never becomes deliverable is kept. The byte and
+		// message counts are stored and carried forward together, so this
+		// exercises both; the message limit itself is too large to reach
+		// in a test in reasonable time.
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
 		Blog subscribed = channelManager1.subscribe("Announcements",
 				channel.getLocalAuthor().getPublicKey());
-		byte[] head = buildStream(subscribed, MAX_STREAM_MESSAGES);
-		byte[] tail = c1.getClientHelper()
-				.toByteArray(BdfList.of(1L, getRandomBytes(8)));
+		ByteArrayOutputStream head = new ByteArrayOutputStream();
+		head.write(c1.getClientHelper().toByteArray(BdfList.of(
+				STREAM_FORMAT_VERSION, subscribed.getGroup().getDescriptor())));
+		byte[] entry = c1.getClientHelper().toByteArray(BdfList.of(1L,
+				getRandomBytes(MAX_MESSAGE_BODY_LENGTH)));
+		long timestamp = 1;
+		while (head.size() + entry.length <= MAX_STREAM_BYTES) {
+			head.write(c1.getClientHelper().toByteArray(BdfList.of(
+					timestamp++, getRandomBytes(MAX_MESSAGE_BODY_LENGTH))));
+		}
+		byte[] tail = c1.getClientHelper().toByteArray(BdfList.of(timestamp,
+				getRandomBytes(MAX_MESSAGE_BODY_LENGTH)));
 
 		MockWebServer server = new MockWebServer();
-		// As many messages as a file may carry, which is allowed
-		server.enqueue(new MockResponse().setBody(new Buffer().write(head)));
-		// One more, which is not, however it is spread over fetches
+		// As much as a file may carry, which is allowed
+		server.enqueue(new MockResponse()
+				.setBody(new Buffer().write(head.toByteArray())));
+		// One more message, which is not, however it is spread over
+		// fetches
 		server.enqueue(new MockResponse().setResponseCode(206)
 				.setBody(new Buffer().write(tail)));
 		server.start();
@@ -1090,11 +1140,22 @@ public class ChannelManagerIntegrationTest
 					channelManager1.fetchChannel(g).getOutcome());
 
 			server.takeRequest();
-			assertEquals("bytes=" + head.length + "-",
+			assertEquals("bytes=" + head.size() + "-",
 					server.takeRequest().getHeader("Range"));
 		} finally {
 			server.shutdown();
 		}
+	}
+
+	@Test
+	public void testTheMessageLimitBindsOnlyOnJunk() {
+		// Deriving the message limit from the largest message allowed a
+		// few hundred messages over a channel's life, so a channel of
+		// short posts stopped updating for good long before the byte
+		// limit. It must be derived from the smallest honest message
+		assertEquals(MAX_STREAM_BYTES / MIN_HONEST_MESSAGE_BYTES,
+				MAX_STREAM_MESSAGES);
+		assertTrue(MAX_STREAM_MESSAGES > 10_000);
 	}
 
 	@Test
@@ -1295,17 +1356,6 @@ public class ChannelManagerIntegrationTest
 				STREAM_FORMAT_VERSION, blog.getGroup().getDescriptor())));
 		out.write(c1.getClientHelper()
 				.toByteArray(BdfList.of(timestamp, body)));
-		return out.toByteArray();
-	}
-
-	private byte[] buildStream(Blog blog, int messages) throws Exception {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		out.write(c1.getClientHelper().toByteArray(BdfList.of(
-				STREAM_FORMAT_VERSION, blog.getGroup().getDescriptor())));
-		for (int i = 0; i < messages; i++) {
-			out.write(c1.getClientHelper()
-					.toByteArray(BdfList.of((long) i + 1, getRandomBytes(8))));
-		}
 		return out.toByteArray();
 	}
 

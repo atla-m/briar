@@ -102,6 +102,8 @@ import static org.briarproject.briar.api.channel.ChannelConstants.LINK_REGEX;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_LINK_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRRORS;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRROR_LENGTH;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_IMPORT_BYTES;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_IMPORT_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
@@ -615,7 +617,8 @@ class ChannelManagerImpl
 			int messages, boolean expectHeader, @Nullable String etag,
 			@Nullable String lastModified)
 			throws DbException, IOException, FormatException {
-		Progress p = new Progress(MAX_STREAM_BYTES - offset, messages);
+		Progress p = new Progress(MAX_STREAM_BYTES - offset, messages,
+				MAX_STREAM_MESSAGES);
 		CountingInputStream counted = countUpTo(in, p);
 		try {
 			importEntries(g, counted, expectHeader, false, p);
@@ -653,14 +656,16 @@ class ChannelManagerImpl
 
 		private final long budget;
 		private final int messagesBefore;
+		private final int maxMessages;
 
 		private int messages = 0;
 		private long bytes = 0;
 		private boolean complete = false;
 
-		private Progress(long budget, int messagesBefore) {
+		private Progress(long budget, int messagesBefore, int maxMessages) {
 			this.budget = budget;
 			this.messagesBefore = messagesBefore;
+			this.maxMessages = maxMessages;
 		}
 	}
 
@@ -773,7 +778,9 @@ class ChannelManagerImpl
 	@Override
 	public int importChannel(InputStream in, boolean subscribe)
 			throws DbException, IOException, FormatException {
-		Progress p = new Progress(MAX_STREAM_BYTES, 0);
+		// A file opened by hand is counted on its own: the user chose it,
+		// and reading it again stores nothing new
+		Progress p = new Progress(MAX_IMPORT_BYTES, 0, MAX_IMPORT_MESSAGES);
 		CountingInputStream counted = countUpTo(in, p);
 		importEntries(null, counted, true, subscribe, p);
 		return p.messages;
@@ -783,7 +790,7 @@ class ChannelManagerImpl
 	public Blog readChannelHeader(InputStream in)
 			throws IOException, FormatException {
 		// Bounded like an import, since the file comes from anyone
-		Progress p = new Progress(MAX_STREAM_BYTES, 0);
+		Progress p = new Progress(MAX_IMPORT_BYTES, 0, MAX_IMPORT_MESSAGES);
 		BdfReader r = bdfReaderFactory.createReader(countUpTo(in, p));
 		return readHeader(r);
 	}
@@ -849,7 +856,7 @@ class ChannelManagerImpl
 			// it stored counts against them too. Going over one is not a
 			// malformed stream but a file we will not store, so we give
 			// up on this mirror rather than reading the file again.
-			if (p.messagesBefore + p.messages + 1 > MAX_STREAM_MESSAGES)
+			if (p.messagesBefore + p.messages + 1 > p.maxMessages)
 				throw new IOException("Channel has too many messages");
 			BdfList entry = r.readList();
 			checkSize(entry, 2);
