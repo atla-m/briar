@@ -17,6 +17,7 @@ import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
+import org.briarproject.bramble.api.lifecycle.event.LifecycleEvent;
 import org.briarproject.bramble.api.settings.Settings;
 import org.briarproject.bramble.api.settings.SettingsManager;
 import org.briarproject.bramble.api.sync.Group;
@@ -50,6 +51,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
+import static org.briarproject.bramble.api.lifecycle.LifecycleManager.LifecycleState.RUNNING;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.StringUtils.fromHexString;
 import static org.briarproject.bramble.util.StringUtils.toHexString;
@@ -115,7 +117,19 @@ public class ChannelFolderPublisher implements EventListener {
 
 	@Override
 	public void eventOccurred(Event e) {
-		if (e instanceof BlogPostAddedEvent) {
+		if (e instanceof LifecycleEvent &&
+				((LifecycleEvent) e).getLifecycleState() == RUNNING) {
+			// A post made in the moments before the app last stopped may
+			// not have been written out, so every folder is brought up to
+			// date once the app is running again
+			ioExecutor.execute(() -> {
+				try {
+					for (GroupId g : getPublished()) scheduleExport(g);
+				} catch (DbException ex) {
+					logException(LOG, WARNING, ex);
+				}
+			});
+		} else if (e instanceof BlogPostAddedEvent) {
 			BlogPostAddedEvent b = (BlogPostAddedEvent) e;
 			// Only our own posts change a folder we publish
 			if (b.isLocal()) scheduleExport(b.getGroupId());
@@ -407,14 +421,12 @@ public class ChannelFolderPublisher implements EventListener {
 			String name = channelManager.getFilePath(id)
 					.substring(FILES_DIRECTORY.length());
 			index.append(name).append('\n');
+			// A file is only given its name once it has been written
+			// whole, so one under its name is complete. A write that was
+			// cut off leaves a temporary file, which is written again.
 			if (findChild(resolver, tree, dirId, name) != null) continue;
-			Uri f = DocumentsContract.createDocument(resolver, dir,
-					OCTET_STREAM, name);
-			if (f == null) throw new IOException("Cannot create " + name);
-			try (OutputStream out = resolver.openOutputStream(f)) {
-				if (out == null) throw new IOException("Cannot open");
-				channelManager.exportChannelFile(g, id, out);
-			}
+			writeViaTemp(resolver, tree, dirId, name, OCTET_STREAM,
+					out -> channelManager.exportChannelFile(g, id, out));
 		}
 		byte[] indexBytes = index.toString().getBytes(UTF_8);
 		writeViaTemp(resolver, tree, dirId, INDEX_NAME, TEXT_PLAIN,
