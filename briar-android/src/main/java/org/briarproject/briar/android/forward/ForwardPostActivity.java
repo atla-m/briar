@@ -11,7 +11,7 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.contactselection.ContactSelectorActivity;
-import org.briarproject.briar.android.controller.handler.UiExceptionHandler;
+import org.briarproject.briar.android.controller.handler.UiResultExceptionHandler;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
@@ -68,8 +68,18 @@ public class ForwardPostActivity extends ContactSelectorActivity {
 	@Override
 	public void contactsSelected(Collection<ContactId> contacts) {
 		super.contactsSelected(contacts);
+		// Say the post was forwarded once it has been, not before
 		controller.forward(groupId, postId, contacts,
-				new UiExceptionHandler<DbException>(this) {
+				new UiResultExceptionHandler<Void, DbException>(this) {
+					@Override
+					public void onResultUi(Void result) {
+						Toast.makeText(ForwardPostActivity.this,
+								R.string.blogs_forward_sent, LENGTH_SHORT)
+								.show();
+						setResult(RESULT_OK);
+						supportFinishAfterTransition();
+					}
+
 					@Override
 					public void onExceptionUi(DbException exception) {
 						Toast.makeText(ForwardPostActivity.this,
@@ -78,8 +88,5 @@ public class ForwardPostActivity extends ContactSelectorActivity {
 						handleException(exception);
 					}
 				});
-		Toast.makeText(this, R.string.blogs_forward_sent, LENGTH_SHORT).show();
-		setResult(RESULT_OK);
-		supportFinishAfterTransition();
 	}
 }
