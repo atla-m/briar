@@ -51,7 +51,7 @@ import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_DO_NOT_SHARE;
-import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
+import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHARING;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_CONTACT_IDS;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_WITH_CONTACTS;
 
@@ -228,7 +228,7 @@ class ChannelContactSharing implements OpenDatabaseHook, ContactHook,
 		for (Blog b : blogManager.getBlogs(txn)) {
 			if (!b.isChannel()) continue;
 			GroupId g = b.getId();
-			if (!isOurs(txn, g, c)) continue;
+			if (isSharedByInvitation(txn, g, c)) continue;
 			boolean on = isSharing(txn, g, c.getId()) &&
 					theirs.contains(token(cg, g));
 			Visibility v = on ? SHARED : INVISIBLE;
@@ -239,19 +239,22 @@ class ChannelContactSharing implements OpenDatabaseHook, ContactHook,
 	}
 
 	/**
-	 * Whether the channel's visibility to the contact is ours to set: it
-	 * isn't if the sharing protocol has a session for it, and a session
-	 * in a state the protocol can't report on is left alone too, so one
-	 * contact can't stop the switch working for every other.
+	 * Whether the channel is shared with the contact by an invitation one
+	 * of us sent and the other accepted, which the sharing protocol keeps
+	 * visible itself. In every other state the switch decides, including
+	 * a pending invitation and a contact who says their client can't
+	 * share: the contact can bring either about, so letting either stop
+	 * the switch from hiding the channel would let a contact who was
+	 * ticked keep receiving its posts after being unticked.
 	 */
-	private boolean isOurs(Transaction txn, GroupId g, Contact c)
-			throws DbException {
+	private boolean isSharedByInvitation(Transaction txn, GroupId g,
+			Contact c) throws DbException {
 		try {
 			SharingStatus s = blogSharingManager.getSharingStatus(txn, g, c);
-			return s == SHAREABLE;
+			return s == SHARING;
 		} catch (ProtocolStateException e) {
 			if (LOG.isLoggable(INFO)) {
-				LOG.info("Leaving a channel in a sharing session alone");
+				LOG.info("Channel in a broken sharing session");
 			}
 			return false;
 		}

@@ -373,6 +373,27 @@ public class ChannelManagerIntegrationTest
 		}
 	}
 
+	@Test
+	public void testAPendingInvitationDoesNotStopUnticking()
+			throws Exception {
+		// A ticked contact sends an invitation of their own, which leaves
+		// a session pending, then the owner unticks them: the channel
+		// must still be hidden, or they keep getting every post
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		channelManager0.setSharingWithContacts(g, true);
+		sync0To1(1, true);
+		channelManager1.setSharingWithContacts(g, true);
+		sync1To0(1, true);
+		assertEquals(SHARED, visibility(db0, contactId1From0, g));
+
+		blogSharingManager1.sendInvitation(g, contactId0From1, null);
+		sync1To0(1, true);
+		channelManager0.setSharingContacts(g, singletonList(contactId2From0));
+		assertEquals(INVISIBLE, visibility(db0, contactId1From0, g));
+	}
+
 	private Visibility visibility(DatabaseComponent db, ContactId c,
 			GroupId g) throws DbException {
 		return db.transactionWithResult(true,
