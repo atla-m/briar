@@ -24,6 +24,9 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.AndroidExecutor;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.briar.android.attachment.AttachmentCreator;
+import org.briarproject.briar.android.attachment.UnsupportedMimeTypeException;
+import org.briarproject.briar.android.attachment.media.AttachmentCleaner;
+import org.briarproject.briar.android.attachment.media.AttachmentCleaner.CleanAttachment;
 import org.briarproject.briar.android.attachment.AttachmentCreatorFactory;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.attachment.AttachmentManager;
@@ -43,7 +46,6 @@ import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.briar.api.client.MessageTree;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.attachment.InsufficientStorageException;
-import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.privategroup.GroupMember;
@@ -94,8 +96,6 @@ import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.bramble.util.LogUtils.logDuration;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.LogUtils.now;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 
 @MethodsNotNullByDefault
@@ -111,6 +111,7 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	private final AttachmentCreator attachmentCreator;
 	@IoExecutor
 	private final Executor ioExecutor;
+	private final AttachmentCleaner attachmentCleaner;
 
 	// The ID of a post whose attachments or files have changed state, so
 	// the list can redraw that post
@@ -154,7 +155,8 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 			GroupMessageFactory groupMessageFactory,
 			AttachmentRetriever attachmentRetriever,
 			AttachmentCreatorFactory attachmentCreatorFactory,
-			@IoExecutor Executor ioExecutor) {
+			@IoExecutor Executor ioExecutor,
+			AttachmentCleaner attachmentCleaner) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
 				identityManager, notificationManager, sharingController,
 				cryptoExecutor, clock, messageTracker, eventBus);
@@ -164,6 +166,7 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 		this.attachmentCreator = attachmentCreatorFactory
 				.create(new GroupAttachmentStore(privateGroupManager));
 		this.ioExecutor = ioExecutor;
+		this.attachmentCleaner = attachmentCleaner;
 		canPost.addSource(privateGroup, g -> updateCanPost());
 		canPost.addSource(isCreator, c -> updateCanPost());
 		canPost.addSource(isDissolved, d -> updateCanPost());
@@ -367,43 +370,18 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 		ioExecutor.execute(() -> {
 			ContentResolver resolver =
 					getApplication().getContentResolver();
-			String name = null;
-			long size = -1;
-			try (Cursor c = resolver.query(uri, null, null, null, null)) {
-				if (c != null && c.moveToFirst()) {
-					int nameCol =
-							c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-					if (nameCol != -1) name = c.getString(nameCol);
-					int sizeCol = c.getColumnIndex(OpenableColumns.SIZE);
-					if (sizeCol != -1 && !c.isNull(sizeCol))
-						size = c.getLong(sizeCol);
-				}
-			} catch (Exception e) {
-				logException(LOG, WARNING, e);
-			}
-			if (size > MAX_FILE_SIZE) {
+			if (getFileSize(resolver, uri) > MAX_FILE_SIZE) {
 				fileError.postEvent(R.string.file_too_big);
 				return;
 			}
 			String contentType = resolver.getType(uri);
-			if (contentType == null ||
-					contentType.length() > MAX_CONTENT_TYPE_BYTES) {
-				contentType = "application/octet-stream";
-			}
-			if (name == null || name.isEmpty()) {
-				name = "file." + getExtension(contentType);
-			} else if (name.length() > MAX_FILE_NAME_LENGTH / 4) {
-				// Keep well within the byte limit, whatever the characters
-				name = name.substring(0, MAX_FILE_NAME_LENGTH / 4);
-			}
-			// The file is read twice while it's stored, so the source
-			// opens a fresh stream each time it's asked
-			StreamSource source = () -> {
-				InputStream in = resolver.openInputStream(uri);
-				if (in == null) throw new IOException("Cannot open " + uri);
-				return in;
-			};
+			if (contentType == null) contentType = "application/octet-stream";
+			CleanAttachment clean = null;
 			try {
+				// Only the picture, video or sound itself is kept: no
+				// metadata and not the original file name
+				clean = attachmentCleaner.clean(uri, contentType,
+						MAX_FILE_SIZE);
 				LocalAuthor author = identityManager.getLocalAuthor();
 				MessageId previousMsgId =
 						privateGroupManager.getPreviousMsgId(groupId);
@@ -413,9 +391,12 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 				// The manifest takes this timestamp and the chunks the next
 				// one, so the post that reveals the file comes after both
 				FileHeader header = privateGroupManager.addLocalFile(
-						groupId, timestamp, name, contentType, source);
+						groupId, timestamp, clean.getName(),
+						clean.getContentType(), clean.getSource());
 				createMessage(null, emptyList(), singletonList(header),
 						timestamp + 2, null, author, previousMsgId);
+			} catch (UnsupportedMimeTypeException e) {
+				fileError.postEvent(R.string.file_type_not_supported);
 			} catch (FileTooBigException e) {
 				fileError.postEvent(R.string.file_too_big);
 			} catch (InsufficientStorageException e) {
@@ -423,13 +404,27 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 			} catch (IOException | DbException e) {
 				logException(LOG, WARNING, e);
 				fileError.postEvent(R.string.file_send_failed);
+			} finally {
+				if (clean != null) clean.discard();
 			}
 		});
 	}
 
-	private String getExtension(String contentType) {
-		int slash = contentType.indexOf('/');
-		return slash == -1 ? "bin" : contentType.substring(slash + 1);
+	/**
+	 * Returns the size the content provider reports for the file, or -1 if
+	 * it doesn't know.
+	 */
+	private long getFileSize(ContentResolver resolver, Uri uri) {
+		try (Cursor c = resolver.query(uri, null, null, null, null)) {
+			if (c != null && c.moveToFirst()) {
+				int sizeCol = c.getColumnIndex(OpenableColumns.SIZE);
+				if (sizeCol != -1 && !c.isNull(sizeCol))
+					return c.getLong(sizeCol);
+			}
+		} catch (Exception e) {
+			logException(LOG, WARNING, e);
+		}
+		return -1;
 	}
 
 	LiveEvent<Integer> getFileError() {

@@ -20,6 +20,9 @@ import org.briarproject.bramble.api.system.AndroidExecutor;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.attachment.AttachmentCreator;
+import org.briarproject.briar.android.attachment.UnsupportedMimeTypeException;
+import org.briarproject.briar.android.attachment.media.AttachmentCleaner;
+import org.briarproject.briar.android.attachment.media.AttachmentCleaner.CleanAttachment;
 import org.briarproject.briar.android.attachment.AttachmentCreatorFactory;
 import org.briarproject.briar.android.attachment.AttachmentManager;
 import org.briarproject.briar.android.attachment.AttachmentResult;
@@ -31,7 +34,6 @@ import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.attachment.InsufficientStorageException;
-import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
@@ -40,7 +42,6 @@ import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -59,8 +60,6 @@ import static java.util.Collections.singletonList;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logException;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 
 /**
@@ -84,6 +83,7 @@ class WriteBlogPostViewModel extends DbViewModel
 	private final Clock clock;
 	@IoExecutor
 	private final Executor ioExecutor;
+	private final AttachmentCleaner attachmentCleaner;
 
 	private final MutableLiveData<GroupId> groupId = new MutableLiveData<>();
 	// The files the user has attached so far, already stored in chunks
@@ -115,9 +115,10 @@ class WriteBlogPostViewModel extends DbViewModel
 			BlogPostFactory blogPostFactory,
 			ChannelManager channelManager,
 			AttachmentCreatorFactory attachmentCreatorFactory,
-			Clock clock) {
+			Clock clock, AttachmentCleaner attachmentCleaner) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
 		this.ioExecutor = ioExecutor;
+		this.attachmentCleaner = attachmentCleaner;
 		this.identityManager = identityManager;
 		this.blogManager = blogManager;
 		this.blogPostFactory = blogPostFactory;
@@ -172,45 +173,21 @@ class WriteBlogPostViewModel extends DbViewModel
 		ioExecutor.execute(() -> {
 			ContentResolver resolver =
 					getApplication().getContentResolver();
-			String name = null;
-			long size = -1;
-			try (Cursor c = resolver.query(uri, null, null, null, null)) {
-				if (c != null && c.moveToFirst()) {
-					int nameCol =
-							c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-					if (nameCol != -1) name = c.getString(nameCol);
-					int sizeCol = c.getColumnIndex(OpenableColumns.SIZE);
-					if (sizeCol != -1 && !c.isNull(sizeCol))
-						size = c.getLong(sizeCol);
-				}
-			} catch (Exception e) {
-				logException(LOG, WARNING, e);
-			}
-			if (size > MAX_FILE_SIZE) {
+			if (getFileSize(resolver, uri) > MAX_FILE_SIZE) {
 				fileError.postEvent(R.string.file_too_big);
 				return;
 			}
 			String contentType = resolver.getType(uri);
-			if (contentType == null ||
-					contentType.length() > MAX_CONTENT_TYPE_BYTES) {
-				contentType = "application/octet-stream";
-			}
-			if (name == null || name.isEmpty()) {
-				name = "file." + getExtension(contentType);
-			} else if (name.length() > MAX_FILE_NAME_LENGTH / 4) {
-				// Keep well within the byte limit, whatever the characters
-				name = name.substring(0, MAX_FILE_NAME_LENGTH / 4);
-			}
-			// The file is read twice while it's stored, so the source
-			// opens a fresh stream each time it's asked
-			StreamSource source = () -> {
-				InputStream in = resolver.openInputStream(uri);
-				if (in == null) throw new IOException("Cannot open " + uri);
-				return in;
-			};
+			if (contentType == null) contentType = "application/octet-stream";
+			CleanAttachment clean = null;
 			try {
+				// Only the picture, video or sound itself is kept: no
+				// metadata and not the original file name
+				clean = attachmentCleaner.clean(uri, contentType,
+						MAX_FILE_SIZE);
 				FileHeader header = blogManager.addLocalFile(g,
-						clock.currentTimeMillis(), name, contentType, source);
+						clock.currentTimeMillis(), clean.getName(),
+						clean.getContentType(), clean.getSource());
 				androidExecutor.runOnUiThread(() -> {
 					if (cleared) {
 						// The screen went away while the file was being
@@ -221,6 +198,8 @@ class WriteBlogPostViewModel extends DbViewModel
 					fileHeaders.add(header);
 					attachedFiles.setValue(fileHeaders);
 				});
+			} catch (UnsupportedMimeTypeException e) {
+				fileError.postEvent(R.string.file_type_not_supported);
 			} catch (FileTooBigException e) {
 				fileError.postEvent(R.string.file_too_big);
 			} catch (InsufficientStorageException e) {
@@ -228,13 +207,27 @@ class WriteBlogPostViewModel extends DbViewModel
 			} catch (IOException | DbException e) {
 				logException(LOG, WARNING, e);
 				fileError.postEvent(R.string.file_send_failed);
+			} finally {
+				if (clean != null) clean.discard();
 			}
 		});
 	}
 
-	private String getExtension(String contentType) {
-		int slash = contentType.indexOf('/');
-		return slash == -1 ? "bin" : contentType.substring(slash + 1);
+	/**
+	 * Returns the size the content provider reports for the file, or -1 if
+	 * it doesn't know.
+	 */
+	private long getFileSize(ContentResolver resolver, Uri uri) {
+		try (Cursor c = resolver.query(uri, null, null, null, null)) {
+			if (c != null && c.moveToFirst()) {
+				int sizeCol = c.getColumnIndex(OpenableColumns.SIZE);
+				if (sizeCol != -1 && !c.isNull(sizeCol))
+					return c.getLong(sizeCol);
+			}
+		} catch (Exception e) {
+			logException(LOG, WARNING, e);
+		}
+		return -1;
 	}
 
 	/**

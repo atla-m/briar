@@ -2,6 +2,9 @@ package org.briarproject.briar.android.attachment.media;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Matrix;
+
+import androidx.exifinterface.media.ExifInterface;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
@@ -14,10 +17,14 @@ import javax.inject.Inject;
 
 import static android.graphics.Bitmap.CompressFormat.JPEG;
 import static android.graphics.BitmapFactory.decodeStream;
+import static androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL;
+import static androidx.exifinterface.media.ExifInterface.ORIENTATION_UNDEFINED;
+import static androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.IoUtils.tryToClose;
+import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZE;
 
 class ImageCompressorImpl implements ImageCompressor {
@@ -26,6 +33,12 @@ class ImageCompressorImpl implements ImageCompressor {
 			getLogger(ImageCompressorImpl.class.getName());
 
 	private static final int MAX_ATTACHMENT_DIMENSION = 1000;
+
+	/**
+	 * How far into a JPEG the orientation tag is looked for. The EXIF
+	 * segment comes before the image data, so this is more than enough.
+	 */
+	private static final int EXIF_READ_LIMIT = 1024 * 1024;
 
 	private final ImageSizeCalculator imageSizeCalculator;
 
@@ -80,6 +93,10 @@ class ImageCompressorImpl implements ImageCompressor {
 		is = new BufferedInputStream(is);
 		Size size = imageSizeCalculator.getSize(is, contentType);
 		if (size.hasError()) throw new IOException();
+		// The re-encoded image carries no EXIF, so a rotation recorded
+		// there has to be applied to the pixels or the copy comes out on
+		// its side
+		int orientation = getOrientation(is, contentType);
 		if (LOG.isLoggable(INFO))
 			LOG.info("Original image size: " + size.getWidth() + "x" +
 					size.getHeight());
@@ -97,7 +114,63 @@ class ImageCompressorImpl implements ImageCompressor {
 			options.inPreferredConfig = Bitmap.Config.RGB_565;
 		Bitmap bitmap = decodeStream(is, null, options);
 		if (bitmap == null) throw new IOException();
-		return bitmap;
+		return applyOrientation(bitmap, orientation);
+	}
+
+	private int getOrientation(InputStream is, String contentType) {
+		if (!contentType.equals("image/jpeg")) return ORIENTATION_NORMAL;
+		is.mark(EXIF_READ_LIMIT);
+		try {
+			ExifInterface exif = new ExifInterface(is);
+			return exif.getAttributeInt(TAG_ORIENTATION, ORIENTATION_NORMAL);
+		} catch (IOException e) {
+			logException(LOG, WARNING, e);
+			return ORIENTATION_NORMAL;
+		} finally {
+			try {
+				is.reset();
+			} catch (IOException e) {
+				logException(LOG, WARNING, e);
+			}
+		}
+	}
+
+	private Bitmap applyOrientation(Bitmap bitmap, int orientation) {
+		Matrix m = new Matrix();
+		switch (orientation) {
+			case ORIENTATION_UNDEFINED:
+			case ORIENTATION_NORMAL:
+				return bitmap;
+			case ExifInterface.ORIENTATION_FLIP_HORIZONTAL:
+				m.setScale(-1, 1);
+				break;
+			case ExifInterface.ORIENTATION_ROTATE_180:
+				m.setRotate(180);
+				break;
+			case ExifInterface.ORIENTATION_FLIP_VERTICAL:
+				m.setScale(1, -1);
+				break;
+			case ExifInterface.ORIENTATION_TRANSPOSE:
+				m.setRotate(90);
+				m.postScale(-1, 1);
+				break;
+			case ExifInterface.ORIENTATION_ROTATE_90:
+				m.setRotate(90);
+				break;
+			case ExifInterface.ORIENTATION_TRANSVERSE:
+				m.setRotate(270);
+				m.postScale(-1, 1);
+				break;
+			case ExifInterface.ORIENTATION_ROTATE_270:
+				m.setRotate(270);
+				break;
+			default:
+				return bitmap;
+		}
+		Bitmap rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(),
+				bitmap.getHeight(), m, true);
+		if (rotated != bitmap) bitmap.recycle();
+		return rotated;
 	}
 
 }

@@ -21,4 +21,10 @@ public class MediaModule {
 			ImageCompressorImpl imageCompressor) {
 		return imageCompressor;
 	}
+
+	@Provides
+	AttachmentCleaner provideAttachmentCleaner(
+			AttachmentCleanerImpl attachmentCleaner) {
+		return attachmentCleaner;
+	}
 }

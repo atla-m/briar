@@ -15,6 +15,8 @@ import org.briarproject.briar.android.AndroidExecutorTestImpl;
 import org.briarproject.briar.android.attachment.AttachmentCreator;
 import org.briarproject.briar.android.attachment.AttachmentCreatorFactory;
 import org.briarproject.briar.android.attachment.AttachmentStore;
+import org.briarproject.briar.android.attachment.media.AttachmentCleaner;
+import org.briarproject.briar.android.attachment.media.AttachmentCleaner.CleanAttachment;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.blog.BlogManager;
@@ -67,6 +69,13 @@ public class WriteBlogPostViewModelTest extends BrambleMockTestCase {
 	private final AttachmentCreator attachmentCreator =
 			context.mock(AttachmentCreator.class);
 	private final Clock clock = context.mock(Clock.class);
+	private final AttachmentCleaner attachmentCleaner =
+			context.mock(AttachmentCleaner.class);
+	private final CleanAttachment cleanAttachment =
+			context.mock(CleanAttachment.class);
+	private final StreamSource source = () -> {
+		throw new UnsupportedOperationException();
+	};
 
 	private final GroupId groupId = new GroupId(getRandomId());
 	private final MessageId postId = new MessageId(getRandomId());
@@ -88,12 +97,24 @@ public class WriteBlogPostViewModelTest extends BrambleMockTestCase {
 		viewModel = new WriteBlogPostViewModel(app, executor,
 				lifecycleManager, db, new AndroidExecutorTestImpl(executor),
 				executor, identityManager, blogManager, blogPostFactory,
-				channelManager, attachmentCreatorFactory, clock);
+				channelManager, attachmentCreatorFactory, clock,
+				attachmentCleaner);
 		viewModel.setGroupId(groupId);
 	}
 
 	private void expectAttachFile() throws Exception {
 		context.checking(new Expectations() {{
+			// Whatever was picked, only a cleaned copy is stored
+			oneOf(attachmentCleaner).clean(with(uri), with(any(String.class)),
+					with(any(long.class)));
+			will(returnValue(cleanAttachment));
+			allowing(cleanAttachment).getName();
+			will(returnValue("image.jpg"));
+			allowing(cleanAttachment).getContentType();
+			will(returnValue("image/jpeg"));
+			allowing(cleanAttachment).getSource();
+			will(returnValue(source));
+			oneOf(cleanAttachment).discard();
 			oneOf(clock).currentTimeMillis();
 			will(returnValue(1L));
 			oneOf(blogManager).addLocalFile(with(groupId), with(1L),

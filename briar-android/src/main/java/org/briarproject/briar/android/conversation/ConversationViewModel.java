@@ -28,6 +28,9 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.AndroidExecutor;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.briar.android.attachment.AttachmentCreator;
+import org.briarproject.briar.android.attachment.UnsupportedMimeTypeException;
+import org.briarproject.briar.android.attachment.media.AttachmentCleaner;
+import org.briarproject.briar.android.attachment.media.AttachmentCleaner.CleanAttachment;
 import org.briarproject.briar.android.attachment.AttachmentManager;
 import org.briarproject.briar.android.attachment.AttachmentResult;
 import org.briarproject.briar.android.attachment.AttachmentRetriever;
@@ -43,7 +46,6 @@ import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.attachment.InsufficientStorageException;
-import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
 import org.briarproject.briar.api.autodelete.UnexpectedTimerException;
 import org.briarproject.briar.api.autodelete.event.AutoDeleteTimerMirroredEvent;
@@ -91,8 +93,6 @@ import static org.briarproject.briar.android.util.UiUtils.observeForeverOnce;
 import static org.briarproject.briar.android.view.TextSendController.SendState.ERROR;
 import static org.briarproject.briar.android.view.TextSendController.SendState.SENT;
 import static org.briarproject.briar.android.view.TextSendController.SendState.UNEXPECTED_TIMER;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
@@ -157,6 +157,7 @@ public class ConversationViewModel extends DbViewModel
 	private final Clock clock;
 	@IoExecutor
 	private final Executor ioExecutor;
+	private final AttachmentCleaner attachmentCleaner;
 
 	@Inject
 	ConversationViewModel(Application application,
@@ -174,7 +175,8 @@ public class ConversationViewModel extends DbViewModel
 			AttachmentCreator attachmentCreator,
 			AutoDeleteManager autoDeleteManager,
 			ConversationManager conversationManager,
-			Clock clock, @IoExecutor Executor ioExecutor) {
+			Clock clock, @IoExecutor Executor ioExecutor,
+			AttachmentCleaner attachmentCleaner) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
 		this.db = db;
 		this.eventBus = eventBus;
@@ -189,6 +191,7 @@ public class ConversationViewModel extends DbViewModel
 		this.conversationManager = conversationManager;
 		this.clock = clock;
 		this.ioExecutor = ioExecutor;
+		this.attachmentCleaner = attachmentCleaner;
 		messagingGroupId = map(contactItem, c ->
 				messagingManager.getContactGroup(c.getContact()).getId());
 		eventBus.addListener(this);
@@ -445,55 +448,34 @@ public class ConversationViewModel extends DbViewModel
 		ContactId c = requireNonNull(contactId);
 		ioExecutor.execute(() -> {
 			ContentResolver resolver = getApplication().getContentResolver();
-			String name = null;
-			long size = -1;
-			try (Cursor cursor = resolver.query(uri, null, null, null, null)) {
-				if (cursor != null && cursor.moveToFirst()) {
-					int nameCol =
-							cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-					if (nameCol != -1) name = cursor.getString(nameCol);
-					int sizeCol = cursor.getColumnIndex(OpenableColumns.SIZE);
-					if (sizeCol != -1 && !cursor.isNull(sizeCol))
-						size = cursor.getLong(sizeCol);
-				}
-			} catch (Exception e) {
-				logException(LOG, WARNING, e);
-			}
-			if (size > getMaxFileSize()) {
+			if (getFileSize(resolver, uri) > getMaxFileSize()) {
 				fileError.postEvent(R.string.file_too_big);
 				return;
 			}
 			String contentType = resolver.getType(uri);
-			if (contentType == null ||
-					contentType.length() > MAX_CONTENT_TYPE_BYTES) {
-				contentType = "application/octet-stream";
-			}
-			if (name == null || name.isEmpty()) {
-				name = "file";
-			} else if (name.length() > MAX_FILE_NAME_LENGTH / 4) {
-				// Keep well within the byte limit, whatever the characters
-				name = name.substring(0, MAX_FILE_NAME_LENGTH / 4);
-			}
+			if (contentType == null) contentType = "application/octet-stream";
 			FileHeader header;
-			// The file is read twice while it's stored, so the source
-			// opens a fresh stream each time it's asked
-			StreamSource source = () -> {
-				InputStream in = resolver.openInputStream(uri);
-				if (in == null) throw new IOException("Cannot open " + uri);
-				return in;
-			};
+			CleanAttachment clean = null;
 			try {
+				// Only the picture, video or sound itself is kept: no
+				// metadata and not the original file name
+				clean = attachmentCleaner.clean(uri, contentType,
+						getMaxFileSize());
 				// The manifest and chunks are stored outside the message's
 				// transaction, as they're written in transactions of their
 				// own. They aren't sent until the message references them.
 				header = messagingManager.addLocalFile(groupId,
-						clock.currentTimeMillis(), name, contentType, source);
+						clock.currentTimeMillis(), clean.getName(),
+						clean.getContentType(), clean.getSource());
 				// The provider may not have known the size in advance
 				if (header.getSize() > getMaxFileSize()) {
 					messagingManager.removeFile(header);
 					fileError.postEvent(R.string.file_too_big);
 					return;
 				}
+			} catch (UnsupportedMimeTypeException e) {
+				fileError.postEvent(R.string.file_type_not_supported);
+				return;
 			} catch (FileTooBigException e) {
 				fileError.postEvent(R.string.file_too_big);
 				return;
@@ -504,6 +486,8 @@ public class ConversationViewModel extends DbViewModel
 				logException(LOG, WARNING, e);
 				fileError.postEvent(R.string.file_send_failed);
 				return;
+			} finally {
+				if (clean != null) clean.discard();
 			}
 			runOnDbThread(() -> {
 				try {
@@ -662,6 +646,23 @@ public class ConversationViewModel extends DbViewModel
 	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE},
 	 * so a larger one would look sent and never arrive.
 	 */
+	/**
+	 * Returns the size the content provider reports for the file, or -1 if
+	 * it doesn't know.
+	 */
+	private long getFileSize(ContentResolver resolver, Uri uri) {
+		try (Cursor cursor = resolver.query(uri, null, null, null, null)) {
+			if (cursor != null && cursor.moveToFirst()) {
+				int sizeCol = cursor.getColumnIndex(OpenableColumns.SIZE);
+				if (sizeCol != -1 && !cursor.isNull(sizeCol))
+					return cursor.getLong(sizeCol);
+			}
+		} catch (Exception e) {
+			logException(LOG, WARNING, e);
+		}
+		return -1;
+	}
+
 	long getMaxFileSize() {
 		PrivateMessageFormat format = privateMessageFormat.getValue();
 		return format != null && format.supportsLargeFiles()
