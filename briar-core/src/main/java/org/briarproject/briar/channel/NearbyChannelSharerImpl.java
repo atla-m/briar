@@ -5,7 +5,9 @@ import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
+import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.keyagreement.KeyAgreementConnection;
 import org.briarproject.bramble.api.keyagreement.KeyAgreementListener;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
@@ -15,6 +17,7 @@ import org.briarproject.bramble.api.plugin.PluginManager;
 import org.briarproject.bramble.api.plugin.duplex.DuplexPlugin;
 import org.briarproject.bramble.api.plugin.duplex.DuplexTransportConnection;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.bramble.api.system.TaskScheduler;
 import org.briarproject.briar.api.blog.Blog;
@@ -58,7 +61,7 @@ import static org.briarproject.bramble.util.LogUtils.logException;
  */
 @ThreadSafe
 @NotNullByDefault
-class NearbyChannelSharerImpl implements ChannelNearbyManager {
+class NearbyChannelSharerImpl implements ChannelNearbyManager, EventListener {
 
 	private static final Logger LOG =
 			getLogger(NearbyChannelSharerImpl.class.getName());
@@ -127,6 +130,18 @@ class NearbyChannelSharerImpl implements ChannelNearbyManager {
 				NEARBY_DURATION_MS, MILLISECONDS);
 		eventBus.broadcast(new ChannelNearbyEvent(g, expiry));
 		return true;
+	}
+
+	/**
+	 * Stops sharing a channel nearby when it is deleted or unsubscribed
+	 * from, so the phone stops advertising a channel it no longer holds.
+	 */
+	@Override
+	public void eventOccurred(Event e) {
+		if (e instanceof GroupRemovedEvent) {
+			GroupId g = ((GroupRemovedEvent) e).getGroup().getId();
+			if (sessions.containsKey(g)) setSharingNearby(g, false);
+		}
 	}
 
 	@Override

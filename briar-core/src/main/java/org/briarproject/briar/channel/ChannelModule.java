@@ -51,7 +51,8 @@ public class ChannelModule {
 	@Provides
 	@Singleton
 	ChannelNearbyManager provideChannelNearbyManager(
-			NearbyChannelSharerImpl sharer) {
+			NearbyChannelSharerImpl sharer, EventBus eventBus) {
+		eventBus.addListener(sharer);
 		return sharer;
 	}
 
