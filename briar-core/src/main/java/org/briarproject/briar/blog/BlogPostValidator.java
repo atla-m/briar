@@ -77,7 +77,7 @@ import static org.briarproject.briar.api.blog.MessageType.POST;
 
 @Immutable
 @NotNullByDefault
-class BlogPostValidator extends BdfMessageValidator {
+public class BlogPostValidator extends BdfMessageValidator {
 
 	private final GroupFactory groupFactory;
 	private final MessageFactory messageFactory;
@@ -305,7 +305,7 @@ class BlogPostValidator extends BdfMessageValidator {
 	 * Returns the list a post's signature covers. Shared with the post
 	 * factory so that both sides sign and check the same thing.
 	 */
-	static BdfList getSignedPost(GroupId groupId, long timestamp,
+	public static BdfList getSignedPost(GroupId groupId, long timestamp,
 			@Nullable String text, @Nullable BdfList attachmentHeaders) {
 		if (attachmentHeaders == null) {
 			return BdfList.of(groupId, timestamp, text);

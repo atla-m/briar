@@ -47,6 +47,7 @@ import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.attachment.event.FileRequestedEvent;
 import org.briarproject.briar.api.blog.Blog;
+import org.briarproject.briar.blog.BlogPostValidator;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
@@ -118,6 +119,7 @@ import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.blog.MessageType.POST;
+import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_INITIAL;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_INTERVAL;
 import static org.briarproject.briar.api.channel.ChannelConstants.FILES_DIRECTORY;
@@ -1558,34 +1560,60 @@ class ChannelManagerImpl
 	}
 
 	/**
-	 * Decides whether a stream entry is stored. A post is, and the images
-	 * and files it carries become wanted; an image, manifest or chunk is
-	 * stored only if wanted; a request never is. Anything else is signed
-	 * or otherwise checked by the validator.
+	 * Decides whether a stream entry is stored. A post is if the channel
+	 * signed it, and the images and files it carries become wanted; an
+	 * image, manifest or chunk is stored only if wanted; a request never
+	 * is. Anything else is signed or otherwise checked
+	 * by the validator.
+	 * <p>
+	 * Whoever serves the stream is not trusted, so a field read here is
+	 * checked before it is used: an ID of the wrong length is skipped
+	 * rather than crashing the import, and a post's signature is checked
+	 * before it can make anything wanted.
 	 */
-	private boolean isWanted(byte[] body, MessageId id,
+	private boolean isWanted(Message m, PublicKey channelKey,
 			Set<MessageId> wanted) {
 		try {
 			BdfReader r = bdfReaderFactory.createReader(
-					new ByteArrayInputStream(body));
+					new ByteArrayInputStream(m.getBody()));
 			BdfList list = r.readList();
 			if (list.isEmpty()) return true;
 			long type = list.getLong(0);
 			if (type == FILE_REQUEST.getInt()) return false;
 			if (type == ATTACHMENT.getInt() || type == FILE_MANIFEST.getInt())
-				return wanted.contains(id);
+				return wanted.contains(m.getId());
 			if (type == FILE_CHUNK.getInt()) {
-				return list.size() > 1 &&
-						wanted.contains(new MessageId(list.getRaw(1)));
+				if (list.size() < 2) return false;
+				byte[] manifestId = list.getRaw(1);
+				return manifestId.length == MessageId.LENGTH &&
+						wanted.contains(new MessageId(manifestId));
 			}
 			if (type == POST.getInt() && list.size() == 4) {
 				// [type, text, headers, signature]: each header is
 				// [id, contentType] or [manifestId, contentType, name, size]
+				String text = list.getOptionalString(1);
 				BdfList headers = list.getList(2);
+				byte[] sig = list.getRaw(3);
+				List<MessageId> ids = new ArrayList<>(headers.size());
 				for (int i = 0; i < headers.size(); i++) {
 					BdfList h = headers.getList(i);
-					if (!h.isEmpty()) wanted.add(new MessageId(h.getRaw(0)));
+					if (h.isEmpty()) return false;
+					byte[] id = h.getRaw(0);
+					if (id.length != MessageId.LENGTH) return false;
+					ids.add(new MessageId(id));
 				}
+				// Only the channel's own posts can make an unsigned image
+				// or file wanted. A forged post is skipped now, so it is
+				// never stored.
+				BdfList signed = BlogPostValidator.getSignedPost(
+						m.getGroupId(), m.getTimestamp(), text, headers);
+				try {
+					clientHelper.verifySignature(sig, SIGNING_LABEL_POST,
+							signed, channelKey);
+				} catch (GeneralSecurityException e) {
+					return false;
+				}
+				wanted.addAll(ids);
 			}
 			return true;
 		} catch (IOException e) {
@@ -1816,6 +1844,7 @@ class ChannelManagerImpl
 		}
 		p.started = true;
 		Set<MessageId> wanted = null;
+		PublicKey channelKey = null;
 		while (!r.eof()) {
 			// The limits apply to the file, so what earlier fetches of
 			// it stored counts against them too. Going over one is not a
@@ -1842,8 +1871,12 @@ class ChannelManagerImpl
 			// is not the channel's and is skipped. So is a request, which
 			// the owner's file never carries. Skipped entries still count
 			// against the budget.
-			if (wanted == null) wanted = getWantedIds(g);
-			if (isWanted(body, m.getId(), wanted)) {
+			if (wanted == null) {
+				wanted = getWantedIds(g);
+				channelKey = blogManager.getBlog(g).getAuthor()
+						.getPublicKey();
+			}
+			if (isWanted(m, requireNonNull(channelKey), wanted)) {
 				db.transaction(false, txn -> {
 					if (!db.containsGroup(txn, g))
 						throw new NoSuchChannelException();

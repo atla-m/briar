@@ -114,7 +114,10 @@ public class NearbyChannelProtocol {
 			BdfList next = readList(in);
 			if (next.isEmpty()) return messages;
 			if (next.size() != 1) throw new FormatException();
-			MessageId manifestId = new MessageId(next.getRaw(0));
+			// Sent by a stranger, so checked before it is used
+			byte[] id = next.getRaw(0);
+			if (id.length != MessageId.LENGTH) throw new FormatException();
+			MessageId manifestId = new MessageId(id);
 			long fileLength = readLength(in, MAX_IMPORT_BYTES);
 			CountingInputStream file = new CountingInputStream(in, fileLength);
 			if (wantsFile(g, manifestId)) {

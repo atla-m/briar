@@ -1,8 +1,10 @@
 package org.briarproject.briar.channel;
 
+import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.sync.Group.Visibility;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.BdfReader;
@@ -1053,7 +1055,8 @@ public class ChannelManagerIntegrationTest
 		assertEquals(1, channelManager1.importChannel(
 				new ByteArrayInputStream(buildStream(subscribed,
 						tampered.getTimestamp(), tampered.getBody()))));
-		awaitPendingMessageValidation(1);
+		// Its signature is checked as it is read, so it is never stored
+		assertFalse(isStored(tampered.getId()));
 		assertTrue(blogManager1.getPostHeaders(g).isEmpty());
 	}
 
@@ -2319,6 +2322,100 @@ public class ChannelManagerIntegrationTest
 	 * Builds a channel stream by hand, so a test can put something in it
 	 * that the owner never signed.
 	 */
+	@Test
+	public void testAnIdOfTheWrongLengthInAStreamIsSkipped()
+			throws Exception {
+		// A mirror or a file can put any bytes where an ID belongs. One
+		// of the wrong length must be skipped, not crash the import.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		ClientHelper h = c1.getClientHelper();
+		ByteArrayOutputStream chunk = new ByteArrayOutputStream();
+		chunk.write(h.toByteArray(
+				BdfList.of(FILE_CHUNK.getInt(), getRandomBytes(31), 0)));
+		chunk.write(getRandomBytes(100));
+		byte[] post = h.toByteArray(BdfList.of(POST.getInt(), "Hi",
+				BdfList.of(BdfList.of(getRandomBytes(31), "image/jpeg")),
+				getRandomBytes(64)));
+		Message m1 = messageFactory.createMessage(g, 1234,
+				chunk.toByteArray());
+		Message m2 = messageFactory.createMessage(g, 1235, post);
+		assertEquals(2, channelManager1.importChannel(
+				new ByteArrayInputStream(
+						buildStream(channel.getBlog(), m1, m2))));
+		assertFalse(isStored(m1.getId()));
+		assertFalse(isStored(m2.getId()));
+	}
+
+	@Test(expected = FormatException.class)
+	public void testANearbyFileIdOfTheWrongLengthIsMalformed()
+			throws Exception {
+		// The phone serving a nearby copy is a stranger, so a file ID
+		// of the wrong length is a malformed exchange, not a crash
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		ClientHelper h = c1.getClientHelper();
+		byte[] copy = exportChannel(g);
+		ByteArrayOutputStream served = new ByteArrayOutputStream();
+		served.write(h.toByteArray(BdfList.of((long) copy.length)));
+		served.write(copy);
+		served.write(h.toByteArray(BdfList.of(getRandomBytes(31))));
+		c1.getNearbyChannelProtocol().read(g,
+				new ByteArrayInputStream(served.toByteArray()),
+				new ByteArrayOutputStream());
+	}
+
+	@Test
+	public void testAForgedPostCannotGetAnImageStored() throws Exception {
+		// Images are unsigned, and are stored only if a post carries
+		// them. A post that isn't the owner's must not count, even
+		// though it is rejected later.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		body.write(c1.getClientHelper().toByteArray(
+				BdfList.of(ATTACHMENT.getInt(), "image/jpeg")));
+		body.write(getRandomBytes(1000));
+		Message image = messageFactory.createMessage(g, 1234,
+				body.toByteArray());
+		AttachmentHeader header =
+				new AttachmentHeader(g, image.getId(), "image/jpeg");
+		BlogPost forged = blogPostFactory.createBlogPost(g, 1235, null,
+				author1, "I am not the owner", singletonList(header),
+				emptyList());
+		byte[] stream = buildStream(channel.getBlog(),
+				forged.getMessage(), image);
+		channelManager1.importChannel(new ByteArrayInputStream(stream));
+		assertFalse(isStored(forged.getMessage().getId()));
+		assertFalse(isStored(image.getId()));
+	}
+
+	private boolean isStored(MessageId m) throws Exception {
+		try {
+			db1.transactionWithResult(true,
+					txn -> db1.getMessageState(txn, m));
+			return true;
+		} catch (NoSuchMessageException e) {
+			return false;
+		}
+	}
+
+	private byte[] buildStream(Blog blog, Message... messages)
+			throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		out.write(c1.getClientHelper().toByteArray(BdfList.of(
+				STREAM_FORMAT_VERSION, blog.getGroup().getDescriptor())));
+		for (Message m : messages) {
+			out.write(c1.getClientHelper().toByteArray(
+					BdfList.of(m.getTimestamp(), m.getBody())));
+		}
+		return out.toByteArray();
+	}
+
 	private byte[] buildStream(Blog blog, long timestamp, byte[] body)
 			throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
