@@ -21,26 +21,27 @@ class ChannelItem {
 	private final String title;
 	private final String fingerprint;
 	private final long created;
-	private final boolean owned;
+	private final boolean owned, published;
 
-	static ChannelItem owned(Channel channel) {
+	static ChannelItem owned(Channel channel, boolean published) {
 		return new ChannelItem(channel.getBlogId(), channel.getTitle(),
 				ChannelFingerprint.of(channel.getBlog().getAuthor()),
-				channel.getCreated(), true);
+				channel.getCreated(), true, published);
 	}
 
 	static ChannelItem subscribed(Blog blog) {
 		return new ChannelItem(blog.getId(), blog.getName(),
-				ChannelFingerprint.of(blog.getAuthor()), 0, false);
+				ChannelFingerprint.of(blog.getAuthor()), 0, false, false);
 	}
 
 	private ChannelItem(GroupId id, String title, String fingerprint,
-			long created, boolean owned) {
+			long created, boolean owned, boolean published) {
 		this.id = id;
 		this.title = title;
 		this.fingerprint = fingerprint;
 		this.created = created;
 		this.owned = owned;
+		this.published = published;
 	}
 
 	GroupId getId() {
@@ -61,5 +62,12 @@ class ChannelItem {
 
 	boolean isOwned() {
 		return owned;
+	}
+
+	/**
+	 * Whether the channel is written to a folder after each post.
+	 */
+	boolean isPublished() {
+		return published;
 	}
 }

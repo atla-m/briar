@@ -33,7 +33,10 @@ class ChannelAdapter
 
 			@Override
 			public boolean areContentsTheSame(ChannelItem a, ChannelItem b) {
-				return a.getTitle().equals(b.getTitle());
+				// The menu reads the bound item, so a change to what it
+				// offers must rebind it
+				return a.getTitle().equals(b.getTitle()) &&
+						a.isPublished() == b.isPublished();
 			}
 		});
 		this.listener = listener;
