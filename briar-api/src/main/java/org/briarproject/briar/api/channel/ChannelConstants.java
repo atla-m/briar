@@ -29,6 +29,29 @@ public interface ChannelConstants {
 	int MAX_LINK_BYTES = 512;
 
 	/**
+	 * The largest number of mirrors a channel link may name. A mirror only
+	 * stores a file it can't alter, so several are cheap, but a link has to
+	 * stay short enough to pass around.
+	 */
+	int MAX_MIRRORS = 5;
+
+	/**
+	 * The largest length of a mirror's URL.
+	 */
+	int MAX_MIRROR_LENGTH = 256;
+
+	/**
+	 * How long to wait before fetching channels for the first time after
+	 * Tor becomes active, in minutes.
+	 */
+	int FETCH_DELAY_INITIAL = 1;
+
+	/**
+	 * How often to fetch channels from their mirrors, in minutes.
+	 */
+	int FETCH_INTERVAL = 30;
+
+	/**
 	 * The current version of the channel stream format: the file a channel's
 	 * owner publishes and its subscribers fetch.
 	 */

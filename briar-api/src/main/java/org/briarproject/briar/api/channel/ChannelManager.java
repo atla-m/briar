@@ -86,6 +86,36 @@ public interface ChannelManager {
 	Blog subscribe(String title, PublicKey publicKey) throws DbException;
 
 	/**
+	 * Sets the mirrors a channel is published at, which its link will
+	 * carry and its subscribers will fetch from. A mirror stores a file it
+	 * cannot alter, so a hostile mirror can withhold the channel's posts
+	 * but cannot change or forge them.
+	 */
+	void setMirrors(GroupId g, List<String> mirrors) throws DbException;
+
+	/**
+	 * Returns the mirrors a channel is published at, which may be empty.
+	 */
+	List<String> getMirrors(GroupId g) throws DbException;
+
+	/**
+	 * Fetches a channel from its mirrors, trying each in turn until one
+	 * answers, and stores any posts it carries that we don't have. Does
+	 * nothing if the channel has no mirrors, or if the mirror says the
+	 * file hasn't changed since we last fetched it.
+	 *
+	 * @return the number of messages read from the mirror, which is zero
+	 * if nothing had changed
+	 */
+	int fetchChannel(GroupId g) throws DbException;
+
+	/**
+	 * Fetches every channel that has mirrors. Called on a timer while Tor
+	 * is running, and when the user asks.
+	 */
+	void fetchAllChannels();
+
+	/**
 	 * Returns a link that can be given to anyone, carrying everything
 	 * needed to subscribe to the channel with the given ID: its title and
 	 * public key. The link does not say who created the channel, and

@@ -549,6 +549,14 @@
 	<string name="channels_copy_link">Copy channel link</string>
 	<string name="channels_link_copied">Channel link copied</string>
 	<string name="channels_publish">Publish to a file</string>
+	<string name="channels_mirrors">Where it is published</string>
+	<string name="channels_mirrors_explanation">Web addresses where this channel\'s file is published, one per line. Subscribers fetch from these over Tor. Whoever hosts the file cannot change what the channel says, so several addresses are safe and one of them being blocked is not fatal.</string>
+	<string name="channels_mirrors_hint">https://example.com/channel.briar</string>
+	<string name="channels_mirrors_saved">Saved. The channel link now includes these addresses.</string>
+	<string name="channels_mirrors_invalid">Those addresses could not be saved</string>
+	<string name="channels_fetch">Fetch now</string>
+	<string name="channels_fetch_none">Nothing new</string>
+	<string name="channels_fetch_error">The channel could not be fetched</string>
 	<string name="channels_published">Channel published</string>
 	<string name="channels_publish_error">The channel could not be published</string>
 	<string name="channels_subscribe">Subscribe using a link</string>
@@ -558,6 +566,10 @@
 	<string name="channels_subscribe_error">That is not a valid channel link</string>
 	<string name="channels_import">Read a published channel file</string>
 	<string name="channels_imported">Channel file read</string>
+	<plurals name="channels_fetch_posts">
+		<item quantity="one">%d new item fetched</item>
+		<item quantity="other">%d new items fetched</item>
+	</plurals>
 	<string name="channels_import_error">The file could not be read, or you have not subscribed to that channel</string>
 	<string name="channels_manage_empty_state">You haven\'t created any channels yet. Tap the + button to create one.</string>
 	<string name="channels_manage_error">Your channels could not be loaded</string>

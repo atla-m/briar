@@ -61,6 +61,10 @@ class ChannelViewModel extends DbViewModel {
 			new MutableLiveEvent<>();
 	private final MutableLiveEvent<Integer> message =
 			new MutableLiveEvent<>();
+	private final MutableLiveEvent<Integer> fetched =
+			new MutableLiveEvent<>();
+	private final MutableLiveEvent<List<String>> mirrors =
+			new MutableLiveEvent<>();
 
 	@Inject
 	ChannelViewModel(Application application,
@@ -169,6 +173,47 @@ class ChannelViewModel extends DbViewModel {
 				message.postEvent(R.string.channels_import_error);
 			}
 		});
+	}
+
+	LiveEvent<List<String>> getMirrors() {
+		return mirrors;
+	}
+
+	void loadMirrors(GroupId g) {
+		dbExecutor.execute(() -> {
+			try {
+				mirrors.postEvent(channelManager.getMirrors(g));
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
+	void setMirrors(GroupId g, List<String> urls) {
+		dbExecutor.execute(() -> {
+			try {
+				channelManager.setMirrors(g, urls);
+				message.postEvent(R.string.channels_mirrors_saved);
+			} catch (IllegalArgumentException e) {
+				message.postEvent(R.string.channels_mirrors_invalid);
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
+	void fetch(GroupId g) {
+		ioExecutor.execute(() -> {
+			try {
+				fetched.postEvent(channelManager.fetchChannel(g));
+			} catch (DbException e) {
+				message.postEvent(R.string.channels_fetch_error);
+			}
+		});
+	}
+
+	LiveEvent<Integer> getFetched() {
+		return fetched;
 	}
 
 	void deleteChannel(GroupId g) {

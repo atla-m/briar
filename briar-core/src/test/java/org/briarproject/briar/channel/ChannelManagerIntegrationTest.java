@@ -20,11 +20,18 @@ import org.briarproject.briar.test.DaggerBriarIntegrationTestComponent;
 import org.junit.Before;
 import org.junit.Test;
 
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
+import okio.Buffer;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.Collection;
 import java.util.List;
 
+import static java.util.Arrays.asList;
+import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
@@ -295,6 +302,134 @@ public class ChannelManagerIntegrationTest
 		assertEquals(1, headers.size());
 		assertEquals(text,
 				blogManager1.getPostText(headers.iterator().next().getId()));
+	}
+
+	@Test
+	public void testFetchesAChannelFromAMirror() throws Exception {
+		// The mirror serves a file it cannot alter; the subscriber checks
+		// every post against the channel's key
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		String text = getRandomString(42);
+		channelManager0.post(g, text);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(
+				new Buffer().write(exportChannel(g))));
+		server.start();
+		try {
+			String url = server.url("/announcements.briar").toString();
+			channelManager0.setMirrors(g, singletonList(url));
+			// The link now carries the mirror, so subscribing is enough
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			assertEquals(singletonList(url), channelManager1.getMirrors(g));
+
+			assertEquals(1, channelManager1.fetchChannel(g));
+			awaitPendingMessageDelivery(1);
+
+			Collection<BlogPostHeader> headers =
+					blogManager1.getPostHeaders(g);
+			assertEquals(1, headers.size());
+			assertEquals(text, blogManager1
+					.getPostText(headers.iterator().next().getId()));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testDoesNotRefetchAnUnchangedChannel() throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse()
+				.setHeader("ETag", "\"v1\"")
+				.setBody(new Buffer().write(exportChannel(g))));
+		server.enqueue(new MockResponse().setResponseCode(304));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(1, channelManager1.fetchChannel(g));
+			awaitPendingMessageDelivery(1);
+
+			// The second fetch sends the tag the mirror gave us, and the
+			// mirror says nothing has changed, so nothing is downloaded
+			assertEquals(0, channelManager1.fetchChannel(g));
+			server.takeRequest();
+			RecordedRequest second = server.takeRequest();
+			assertEquals("\"v1\"", second.getHeader("If-None-Match"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testTriesTheNextMirrorWhenOneFails() throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+
+		MockWebServer broken = new MockWebServer();
+		broken.enqueue(new MockResponse().setResponseCode(503));
+		broken.start();
+		MockWebServer working = new MockWebServer();
+		working.enqueue(new MockResponse().setBody(
+				new Buffer().write(exportChannel(g))));
+		working.start();
+		try {
+			channelManager0.setMirrors(g, asList(
+					broken.url("/c.briar").toString(),
+					working.url("/c.briar").toString()));
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			assertEquals(1, channelManager1.fetchChannel(g));
+			awaitPendingMessageDelivery(1);
+			assertEquals(1, blogManager1.getPostHeaders(g).size());
+		} finally {
+			broken.shutdown();
+			working.shutdown();
+		}
+	}
+
+	@Test
+	public void testRejectsAForgedPostServedByAMirror() throws Exception {
+		// A mirror that tries to put words in the channel's mouth
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		Blog subscribed = channelManager1.subscribe("Announcements",
+				channel.getLocalAuthor().getPublicKey());
+		BlogPost forged = blogPostFactory.createBlogPost(g,
+				c1.getClock().currentTimeMillis(), null, author1,
+				"I am not the owner");
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(
+				buildStream(subscribed, forged.getMessage().getTimestamp(),
+						forged.getMessage().getBody()))));
+		server.start();
+		try {
+			channelManager1.setMirrors(g,
+					singletonList(server.url("/c.briar").toString()));
+			assertEquals(1, channelManager1.fetchChannel(g));
+			awaitPendingMessageValidation(1);
+			assertTrue(blogManager1.getPostHeaders(g).isEmpty());
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	private byte[] exportChannel(GroupId g) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, out);
+		return out.toByteArray();
+	}
+
+	private void subscribeWithMirror(GroupId g, String url) throws Exception {
+		channelManager0.setMirrors(g, singletonList(url));
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
 	}
 
 	@Test
