@@ -133,6 +133,10 @@ public class FeedFragment extends BaseFragment
 			i.putExtra(GROUP_ID, personalBlog.getId().getBytes());
 			startActivity(i);
 			return true;
+		} else if (itemId == R.id.action_channels) {
+			Intent i = new Intent(getActivity(), ChannelActivity.class);
+			startActivity(i);
+			return true;
 		} else if (itemId == R.id.action_rss_feeds) {
 			Intent i = new Intent(getActivity(), RssFeedActivity.class);
 			startActivity(i);

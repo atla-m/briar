@@ -24,6 +24,7 @@ import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
+import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
@@ -71,6 +72,8 @@ public class WriteBlogPostActivity extends BriarActivity
 	private volatile GroupId groupId;
 	@Inject
 	volatile IdentityManager identityManager;
+	@Inject
+	volatile ChannelManager channelManager;
 	@Inject
 	volatile BlogPostFactory blogPostFactory;
 	@Inject
@@ -152,10 +155,16 @@ public class WriteBlogPostActivity extends BriarActivity
 		runOnDbThread(() -> {
 			long timestamp = System.currentTimeMillis();
 			try {
-				LocalAuthor author = identityManager.getLocalAuthor();
-				BlogPost p = blogPostFactory
-						.createBlogPost(groupId, timestamp, null, author, text);
-				blogManager.addLocalPost(p);
+				// A channel's posts are signed by the channel's own key
+				// pair rather than by our identity
+				if (channelManager.getChannel(groupId) != null) {
+					channelManager.post(groupId, text);
+				} else {
+					LocalAuthor author = identityManager.getLocalAuthor();
+					BlogPost p = blogPostFactory.createBlogPost(groupId,
+							timestamp, null, author, text);
+					blogManager.addLocalPost(p);
+				}
 				postPublished();
 			} catch (DbException | GeneralSecurityException
 					| FormatException e) {

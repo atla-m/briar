@@ -24,4 +24,9 @@ public interface BlogModule {
 	@IntoMap
 	@ViewModelKey(RssFeedViewModel.class)
 	ViewModel bindRssFeedViewModel(RssFeedViewModel rssFeedViewModel);
+
+	@Binds
+	@IntoMap
+	@ViewModelKey(ChannelViewModel.class)
+	ViewModel bindChannelViewModel(ChannelViewModel channelViewModel);
 }
