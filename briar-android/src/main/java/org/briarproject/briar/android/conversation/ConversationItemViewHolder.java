@@ -64,7 +64,7 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 			// HTML like any blog post's, since it is shown as the channel
 			// signed it
 			if (item.getChannelLink() == null) text.setText(trim(item.getText()));
-			else text.setText(getSpanned(item.getText()));
+			else text.setText(trimEnd(getSpanned(item.getText())));
 			Linkify.addLinks(text, Linkify.WEB_URLS);
 			makeLinksClickable(text, listener::onLinkClick);
 		}
@@ -139,6 +139,15 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 			topNotice.setOnClickListener(
 					v -> listener.onForwardedChannelClick(item.getId(), link));
 		}
+	}
+
+	/**
+	 * Removes the blank lines HTML leaves after its last paragraph.
+	 */
+	private static CharSequence trimEnd(CharSequence s) {
+		int end = s.length();
+		while (end > 0 && Character.isWhitespace(s.charAt(end - 1))) end--;
+		return s.subSequence(0, end);
 	}
 
 }
