@@ -314,7 +314,7 @@ public class BlogFragment extends BaseFragment
 	}
 
 	/**
-	 * Shows the contacts with a box each, all ticked unless the user
+	 * Shows the contacts with a box each, none ticked unless the user
 	 * chose before, and turns sharing on for the ticked ones. If a
 	 * switch is given, cancelling puts it back to off.
 	 */

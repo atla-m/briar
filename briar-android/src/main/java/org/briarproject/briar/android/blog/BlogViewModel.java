@@ -283,8 +283,9 @@ class BlogViewModel extends BaseViewModel {
 	}
 
 	/**
-	 * Loads the contacts and which of them are chosen to get the posts;
-	 * every contact is chosen if none were chosen yet.
+	 * Loads the contacts and which of them are chosen to get the posts.
+	 * None is chosen if none were chosen yet: each contact ticked can
+	 * tell we have the channel, so the user ticks each one on purpose.
 	 */
 	LiveData<List<Pair<Contact, Boolean>>> loadSharingContacts() {
 		MutableLiveData<List<Pair<Contact, Boolean>>> result =
@@ -297,7 +298,7 @@ class BlogViewModel extends BaseViewModel {
 						channelManager.getSharingContacts(g);
 				List<Pair<Contact, Boolean>> list = new ArrayList<>();
 				for (Contact c : contactManager.getContacts()) {
-					boolean on = chosen == null || chosen.contains(c.getId());
+					boolean on = chosen != null && chosen.contains(c.getId());
 					list.add(new Pair<>(c, on));
 				}
 				result.postValue(list);
