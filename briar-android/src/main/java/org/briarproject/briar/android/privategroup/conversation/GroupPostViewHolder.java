@@ -1,47 +1,156 @@
 package org.briarproject.briar.android.privategroup.conversation;
 
+import android.text.format.DateFormat;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
+import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.threaded.BaseThreadItemViewHolder;
 import org.briarproject.briar.android.threaded.ThreadItemAdapter.ThreadItemListener;
-import org.briarproject.briar.android.threaded.ThreadPostViewHolder;
+import org.briarproject.briar.android.view.AuthorView;
 import org.briarproject.nullsafety.NotNullByDefault;
+
+import java.util.Date;
+
+import javax.annotation.Nullable;
 
 import androidx.annotation.UiThread;
 import androidx.recyclerview.widget.RecyclerView;
 
 import static android.view.View.GONE;
 import static android.view.View.VISIBLE;
+import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
+import static androidx.core.content.ContextCompat.getColor;
+import static org.briarproject.briar.api.identity.AuthorInfo.Status.OURSELVES;
 
 /**
- * A view holder for private group posts, which may have image attachments.
+ * A private group post shown as a chat bubble: own posts on the end side,
+ * other members' posts on the start side with the author's name, and a
+ * quoted excerpt of the parent post for replies.
  */
 @UiThread
 @NotNullByDefault
-class GroupPostViewHolder extends ThreadPostViewHolder<GroupMessageItem> {
+class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 
+	interface Listener extends GroupImageAdapter.Listener {
+
+		/**
+		 * Returns the post with the given ID if it's in the list, so a
+		 * reply can quote it.
+		 */
+		@Nullable
+		GroupMessageItem findItem(MessageId id);
+
+		/**
+		 * Called when the quoted parent of a reply is tapped.
+		 */
+		void onQuoteClick(MessageId parentId);
+	}
+
+	private final LinearLayout bubble;
+	private final AuthorView author;
+	private final View quote, quoteBar;
+	private final TextView quoteAuthor, quoteText, time;
 	private final RecyclerView imageList;
 	private final GroupImageAdapter imageAdapter;
+	private final Listener listener;
+	private final int marginTail, marginNonTail;
 
-	GroupPostViewHolder(View v, GroupImageAdapter.Listener imageListener) {
+	GroupPostViewHolder(View v, Listener listener) {
 		super(v);
+		this.listener = listener;
+		bubble = v.findViewById(R.id.bubble);
+		author = v.findViewById(R.id.author);
+		quote = v.findViewById(R.id.quote);
+		quoteBar = v.findViewById(R.id.quoteBar);
+		quoteAuthor = v.findViewById(R.id.quoteAuthor);
+		// The bubble shows the time at the bottom, like a chat, so the date
+		// in the author line would be redundant
+		author.findViewById(R.id.dateView).setVisibility(GONE);
+		quoteText = v.findViewById(R.id.quoteText);
+		time = v.findViewById(R.id.time);
 		imageList = v.findViewById(R.id.imageList);
-		imageAdapter = new GroupImageAdapter(v.getContext(), imageListener);
+		imageAdapter = new GroupImageAdapter(v.getContext(), listener);
 		imageList.setAdapter(imageAdapter);
+		marginTail = v.getResources()
+				.getDimensionPixelSize(R.dimen.message_bubble_margin_tail);
+		marginNonTail = v.getResources()
+				.getDimensionPixelSize(R.dimen.message_bubble_margin_non_tail);
 	}
 
 	@Override
 	public void bind(GroupMessageItem item,
-			ThreadItemListener<GroupMessageItem> listener) {
-		super.bind(item, listener);
+			ThreadItemListener<GroupMessageItem> threadListener) {
+		super.bind(item, threadListener);
+
+		// Own posts on the end side, others' on the start side
+		boolean own = item.getAuthorInfo().getStatus() == OURSELVES;
+		FrameLayout.LayoutParams params =
+				(FrameLayout.LayoutParams) bubble.getLayoutParams();
+		params.gravity = own ? Gravity.END : Gravity.START;
+		params.setMarginStart(own ? marginNonTail : marginTail);
+		params.setMarginEnd(own ? marginTail : marginNonTail);
+		bubble.setLayoutParams(params);
+		bubble.setBackgroundResource(own ? R.drawable.msg_out
+				: R.drawable.msg_in);
+		// The author's name is only needed for other members' posts
+		author.setVisibility(own ? GONE : VISIBLE);
+		time.setText(DateFormat.getTimeFormat(getContext())
+				.format(new Date(item.getTimestamp())));
+		// The quote's accent must stay visible on the coloured own bubble
+		int accent = getColor(getContext(), own ? android.R.color.white
+				: R.color.briar_primary);
+		quoteBar.setBackgroundColor(accent);
+		quoteAuthor.setTextColor(accent);
+
+		// Quote the parent post, if this is a reply and the parent is known
+		MessageId parentId = item.getParentId();
+		GroupMessageItem parent =
+				parentId == null ? null : listener.findItem(parentId);
+		if (parent == null) {
+			quote.setVisibility(GONE);
+			quote.setOnClickListener(null);
+		} else {
+			quote.setVisibility(VISIBLE);
+			quoteAuthor.setText(parent.getAuthorName());
+			String excerpt = parent.hasText() ? parent.getText()
+					: getContext().getString(R.string.groups_quote_photo);
+			quoteText.setText(excerpt);
+			quote.setOnClickListener(v -> listener.onQuoteClick(parent.getId()));
+		}
+
 		textView.setVisibility(item.hasText() ? VISIBLE : GONE);
 		if (item.getAttachmentHeaders().isEmpty()) {
 			imageList.setVisibility(GONE);
 			imageAdapter.clear();
 		} else {
 			imageList.setVisibility(VISIBLE);
+			// A single image is shown at its thumbnail size so the bubble
+			// hugs it; a grid of several images sizes itself
+			ViewGroup.LayoutParams lp = imageList.getLayoutParams();
+			if (item.getAttachments().size() == 1) {
+				AttachmentItem a = item.getAttachments().get(0);
+				lp.width = a.getThumbnailWidth();
+				lp.height = a.getThumbnailHeight();
+			} else {
+				lp.width = WRAP_CONTENT;
+				lp.height = WRAP_CONTENT;
+			}
+			imageList.setLayoutParams(lp);
 			imageAdapter.setMessageItem(item);
 		}
+
+		// Tapping the bubble starts a reply to this post. The text view has
+		// a movement method for links, which consumes its taps, so it needs
+		// its own listener; taps on links still open the link instead.
+		bubble.setOnClickListener(v -> threadListener.onReplyClick(item));
+		textView.setOnClickListener(v -> threadListener.onReplyClick(item));
 	}
 
 }

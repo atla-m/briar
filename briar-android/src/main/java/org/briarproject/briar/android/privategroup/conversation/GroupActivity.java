@@ -66,7 +66,8 @@ import static org.briarproject.nullsafety.NullSafety.requireNonNull;
 @ParametersNotNullByDefault
 public class GroupActivity extends
 		ThreadListActivity<GroupMessageItem, GroupMessageAdapter>
-		implements AttachmentListener, GroupImageAdapter.Listener {
+		implements AttachmentListener, GroupImageAdapter.Listener,
+		GroupMessageAdapter.QuoteListener {
 
 	@Inject
 	ViewModelProvider.Factory viewModelFactory;
@@ -96,7 +97,13 @@ public class GroupActivity extends
 
 	@Override
 	protected GroupMessageAdapter createAdapter() {
-		return new GroupMessageAdapter(this, this);
+		return new GroupMessageAdapter(this, this, this);
+	}
+
+	@Override
+	public void onQuoteClick(MessageId parentId) {
+		// Jump to the post being replied to
+		scrollToItemAtTop(parentId);
 	}
 
 	@Override

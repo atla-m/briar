@@ -33,6 +33,7 @@ import org.briarproject.briar.api.android.AndroidNotificationManager;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
+import org.briarproject.briar.api.client.MessageTree;
 import org.briarproject.briar.api.privategroup.GroupMember;
 import org.briarproject.briar.api.privategroup.GroupMessage;
 import org.briarproject.briar.api.privategroup.GroupMessageFactory;
@@ -52,6 +53,7 @@ import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
@@ -129,6 +131,17 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 		super.onCleared();
 		attachmentCreator.cancel(); // also deletes unsent attachments
 		clearAttachmentSubscriptions();
+	}
+
+	@Override
+	protected List<GroupMessageItem> orderItems(
+			MessageTree<GroupMessageItem> tree) {
+		// Groups are shown as a flat chat in chronological order, with
+		// replies quoting their parent, rather than as a nested thread
+		List<GroupMessageItem> items = new ArrayList<>(tree.depthFirstOrder());
+		Collections.sort(items, (a, b) ->
+				Long.compare(a.getTimestamp(), b.getTimestamp()));
+		return items;
 	}
 
 	@Override

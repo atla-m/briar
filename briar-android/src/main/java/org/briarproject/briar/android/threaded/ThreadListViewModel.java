@@ -184,7 +184,7 @@ public abstract class ThreadListViewModel<I extends ThreadItem>
 			// not null, because hasError() is false
 			messageTree.add(requireNonNull(items.getResultOrNull()));
 			LiveResult<List<I>> result =
-					new LiveResult<>(messageTree.depthFirstOrder());
+					new LiveResult<>(orderItems(messageTree));
 			this.items.setValue(result);
 		}
 	}
@@ -202,7 +202,16 @@ public abstract class ThreadListViewModel<I extends ThreadItem>
 
 		messageTree.add(item);
 		if (scrollToItem) this.scrollToItem.set(item.getId());
-		items.setValue(new LiveResult<>(messageTree.depthFirstOrder()));
+		items.setValue(new LiveResult<>(orderItems(messageTree)));
+	}
+
+	/**
+	 * Returns the items in the order they should be displayed. The default
+	 * is a threaded, depth-first order with replies nested under their
+	 * parents. Subclasses can override this for a flat chronological list.
+	 */
+	protected List<I> orderItems(MessageTree<I> tree) {
+		return tree.depthFirstOrder();
 	}
 
 	@UiThread
