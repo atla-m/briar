@@ -26,6 +26,7 @@ import javax.annotation.Nullable;
 import androidx.annotation.UiThread;
 import androidx.recyclerview.widget.RecyclerView;
 
+import static org.briarproject.briar.api.identity.AuthorInfo.Status.OURSELVES;
 import static android.view.View.GONE;
 import static android.view.View.VISIBLE;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
@@ -170,7 +171,8 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 
 	private void bindFiles(GroupMessageItem item) {
 		FileRowBinder.bind(fileList, item.getFileHeaders(), item::getFileStatus,
-				h -> listener.onFileClick(item, h));
+				h -> listener.onFileClick(item, h),
+				item.getAuthorInfo().getStatus() == OURSELVES);
 	}
 
 }

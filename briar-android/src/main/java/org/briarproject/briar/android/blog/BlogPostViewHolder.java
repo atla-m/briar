@@ -25,6 +25,7 @@ import androidx.annotation.UiThread;
 import androidx.core.view.ViewCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
+import static org.briarproject.briar.api.identity.AuthorInfo.Status.OURSELVES;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
 import static android.view.View.GONE;
@@ -136,7 +137,8 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 		// the images and files the post carries
 		bindAttachments(item);
 		FileRowBinder.bind(fileList, item.getFileHeaders(),
-				item::getFileStatus, h -> listener.onFileClick(item, h));
+				item::getFileStatus, h -> listener.onFileClick(item, h),
+				item.getAuthorInfo().getStatus() == OURSELVES);
 		// A reblogged post is a signed copy of the original, so it names
 		// the images and files the original carried, but they live in the
 		// blog it came from and can't be shown here
