@@ -34,6 +34,12 @@ import static org.briarproject.bramble.util.LogUtils.logFileOrDir;
 @NotNullByDefault
 class H2Database extends JdbcDatabase {
 
+	/**
+	 * The least free space, in bytes, in which we will try to compact the
+	 * database, however small it is.
+	 */
+	private static final long MIN_FREE_SPACE_TO_COMPACT = 32L * 1024 * 1024;
+
 	private static final Logger LOG = getLogger(H2Database.class.getName());
 
 	private static final String HASH_TYPE = "BINARY(32)";
@@ -89,10 +95,17 @@ class H2Database extends JdbcDatabase {
 		try {
 			c = createConnection();
 			closeAllConnections();
-			LOG.info("Compacting DB");
 			s = c.createStatement();
-			s.execute("SHUTDOWN COMPACT");
-			LOG.info("Finished compacting DB");
+			// Compacting needs room beside the file; without it a clean
+			// shutdown would fail and leave the database marked dirty
+			if (hasRoomToCompact()) {
+				LOG.info("Compacting DB");
+				s.execute("SHUTDOWN COMPACT");
+				LOG.info("Finished compacting DB");
+			} else {
+				LOG.warning("Not compacting DB, too little free space");
+				s.execute("SHUTDOWN");
+			}
 			s.close();
 			c.close();
 			// Reopen the DB to mark it as clean after compacting
@@ -121,6 +134,22 @@ class H2Database extends JdbcDatabase {
 
 	String getUrl() {
 		return url;
+	}
+
+	/**
+	 * Compacting rewrites the live parts of the file after its end before
+	 * releasing the old ones, so it needs free space in proportion to the
+	 * file. On a device measured with a 134 MB database it failed with
+	 * 9 MB free and grew the file by about 25 MB when it succeeded.
+	 */
+	@Override
+	protected boolean hasRoomToCompact() {
+		File dir = config.getDatabaseDirectory();
+		long size = 0;
+		File[] files = dir.listFiles();
+		if (files != null) for (File f : files) size += f.length();
+		long needed = Math.max(MIN_FREE_SPACE_TO_COMPACT, size / 2);
+		return dir.getUsableSpace() >= needed;
 	}
 
 	@Override

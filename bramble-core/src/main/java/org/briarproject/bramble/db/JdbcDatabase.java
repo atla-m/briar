@@ -406,6 +406,14 @@ abstract class JdbcDatabase implements Database<Connection> {
 	// migrations or if the database was not shut down cleanly
 	protected abstract void compactAndClose() throws DbException;
 
+	/**
+	 * Returns true if there is enough free space to compact the database,
+	 * which rewrites much of the file and so needs room beside it.
+	 */
+	protected boolean hasRoomToCompact() {
+		return true;
+	}
+
 	JdbcDatabase(DatabaseTypes databaseTypes, MessageFactory messageFactory,
 			Clock clock) {
 		this.dbTypes = databaseTypes;
@@ -447,12 +455,25 @@ abstract class JdbcDatabase implements Database<Connection> {
 			abortTransaction(txn);
 			throw e;
 		}
-		// Compact the database if necessary
-		if (compact) {
+		// Compact the database if necessary. Compacting is an optimisation
+		// that needs room to rewrite the file, and it is due after every
+		// shutdown that wasn't clean, which on Android includes the app
+		// being killed. It must never stop the database opening: on a
+		// phone that has run out of space, failing here locks the user
+		// out of every message they have. A failed compaction leaves the
+		// data as it was, and the database stays marked dirty, so it is
+		// tried again on a later open.
+		if (compact && !hasRoomToCompact()) {
+			LOG.warning("Not compacting database, too little free space");
+		} else if (compact) {
 			if (listener != null) listener.onDatabaseCompaction();
 			long start = now();
-			compactAndClose();
-			logDuration(LOG, "Compacting database", start);
+			try {
+				compactAndClose();
+				logDuration(LOG, "Compacting database", start);
+			} catch (DbException e) {
+				logException(LOG, WARNING, e);
+			}
 			// Allow the next transaction to reopen the DB
 			connectionsLock.lock();
 			try {
