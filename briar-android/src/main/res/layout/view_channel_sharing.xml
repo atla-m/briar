@@ -5,9 +5,7 @@
 	android:background="?attr/colorSurface"
 	android:orientation="vertical"
 	android:paddingStart="@dimen/margin_medium"
-	android:paddingTop="@dimen/margin_small"
-	android:paddingEnd="@dimen/margin_medium"
-	android:paddingBottom="@dimen/margin_small">
+	android:paddingEnd="@dimen/margin_medium">
 
 	<com.google.android.material.switchmaterial.SwitchMaterial
 		android:id="@+id/shareWithContacts"
@@ -15,35 +13,10 @@
 		android:layout_height="wrap_content"
 		android:text="@string/channels_share_with_contacts" />
 
-	<TextView
-		android:id="@+id/shareWithContactsExplanation"
-		android:layout_width="match_parent"
-		android:layout_height="wrap_content"
-		android:text="@string/channels_share_with_contacts_explanation"
-		android:textColor="?android:attr/textColorSecondary"
-		android:textSize="@dimen/text_size_small" />
-
 	<com.google.android.material.switchmaterial.SwitchMaterial
 		android:id="@+id/shareNearby"
 		android:layout_width="match_parent"
 		android:layout_height="wrap_content"
-		android:layout_marginTop="@dimen/margin_small"
 		android:text="@string/channels_share_nearby" />
-
-	<TextView
-		android:id="@+id/shareNearbyExplanation"
-		android:layout_width="match_parent"
-		android:layout_height="wrap_content"
-		android:text="@string/channels_share_nearby_explanation"
-		android:textColor="?android:attr/textColorSecondary"
-		android:textSize="@dimen/text_size_small" />
-
-	<TextView
-		android:layout_width="match_parent"
-		android:layout_height="wrap_content"
-		android:layout_marginTop="@dimen/margin_small"
-		android:text="@string/channels_where_posts_come_from"
-		android:textColor="?android:attr/textColorSecondary"
-		android:textSize="@dimen/text_size_small" />
 
 </LinearLayout>

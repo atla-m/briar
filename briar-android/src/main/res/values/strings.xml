@@ -606,19 +606,17 @@
 	<string name="channels_subscribe_explanation">Paste a channel link to subscribe. You will be able to read the channel\'s posts. Nobody is told that you subscribed.</string>
 	<string name="channels_link_hint">Channel link</string>
 	<string name="channels_subscribe_button">Subscribe</string>
-	<string name="channels_share_with_contacts">Share with my contacts</string>
-	<string name="channels_share_with_contacts_explanation">Your contacts will know you follow this channel. Its posts then pass between you and any contact who also shares it, over any connection, including Bluetooth.</string>
+	<string name="channels_share_with_contacts">Share this channel with all my contacts</string>
+	<string name="channels_share_with_contacts_explanation">Briar will invite each of your contacts to this channel, now and whenever you add a contact. The invitation appears in your chat with them, so every contact will know you follow it. Once a contact accepts, or invites you, the channel\'s posts pass between your phones whenever you are connected: over the internet, or nearby over Bluetooth and Wi-Fi. Invitations to this channel from contacts are accepted without asking. Turning this off stops new invitations; sharing already set up continues.</string>
 	<string name="channels_share_with_contacts_confirm">Share</string>
-	<string name="channels_share_nearby">Share with anyone nearby who has it</string>
-	<string name="channels_share_nearby_explanation">For one hour, anyone nearby with this channel\'s link can read its posts from your phone over Bluetooth, and your phone reads theirs. They can see your phone has the channel.</string>
-	<string name="channels_share_nearby_dialog">Anyone nearby with this channel\'s link, including people you would rather not tell, can see that your phone has it, for one hour. Posts pass over Bluetooth between every phone nearby that turns this on. It turns itself off after an hour.</string>
+	<string name="channels_share_nearby">Share nearby over Bluetooth for one hour</string>
+	<string name="channels_share_nearby_dialog">For one hour, your phone will exchange this channel\'s posts over Bluetooth with any phone nearby that has this switch on for the same channel, whether or not it belongs to a contact. Nothing about you is sent: no name, no contact details, only the posts. But anyone within Bluetooth range who has this channel\'s link can tell that a phone near them has it. It turns itself off after an hour.</string>
 	<string name="channels_share_nearby_confirm">Share for an hour</string>
 	<string name="channels_share_nearby_no_bluetooth">Bluetooth must be on to share nearby</string>
 	<plurals name="channels_share_nearby_on">
-		<item quantity="one">On. Turns itself off in %d minute.</item>
-		<item quantity="other">On. Turns itself off in %d minutes.</item>
+		<item quantity="one">Sharing nearby, %d minute left</item>
+		<item quantity="other">Sharing nearby, %d minutes left</item>
 	</plurals>
-	<string name="channels_where_posts_come_from">Posts arrive from the channel\'s addresses over the internet, or from contacts you share it with.</string>
 	<string name="channels_subscribe_error">That is not a valid channel link</string>
 	<string name="channels_import">Read a published channel file</string>
 	<string name="channels_imported">Channel file read</string>
