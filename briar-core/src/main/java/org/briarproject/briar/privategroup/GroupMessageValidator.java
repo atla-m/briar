@@ -361,8 +361,11 @@ class GroupMessageValidator extends BdfMessageValidator {
 
 	private BdfMessageContext validateFileChunk(Message m, BdfList descriptor,
 			long descriptorLength) throws FormatException {
-		// Message type only, followed by the chunk's bytes
-		checkSize(descriptor, 1);
+		// Message type, chunk index, followed by the chunk's bytes. The
+		// index makes chunks with identical content distinct messages.
+		checkSize(descriptor, 2);
+		int index = descriptor.getInt(1);
+		if (index < 0 || index >= MAX_FILE_CHUNKS) throw new FormatException();
 		long payload = m.getBody().length - descriptorLength;
 		if (payload < 1 || payload > FILE_CHUNK_PAYLOAD_LENGTH)
 			throw new FormatException();

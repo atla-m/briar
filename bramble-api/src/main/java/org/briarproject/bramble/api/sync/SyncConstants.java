@@ -41,6 +41,13 @@ public interface SyncConstants {
 	int MAX_MESSAGE_LENGTH = MESSAGE_HEADER_LENGTH + MAX_MESSAGE_BODY_LENGTH;
 
 	/**
+	 * Messages up to this length in bytes are offered and sent before longer
+	 * messages, so that text and control messages aren't held up behind
+	 * images and file chunks on slow or short-lived connections.
+	 */
+	int SMALL_MESSAGE_LENGTH = 8 * 1024; // 8 KiB
+
+	/**
 	 * The maximum number of message IDs in an ack, offer or request record.
 	 */
 	int MAX_MESSAGE_IDS = MAX_RECORD_PAYLOAD_BYTES / UniqueId.LENGTH;

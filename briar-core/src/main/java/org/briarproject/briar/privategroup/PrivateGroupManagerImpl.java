@@ -407,9 +407,10 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 		}
 		// Read the file in chunk-sized pieces and store each chunk as a
 		// temporary, unshared message. The manifest gets the given timestamp
-		// and the chunks the following ones, so they're sent in order.
-		byte[] descriptor = clientHelper.toByteArray(
-				BdfList.of(FILE_CHUNK.getInt()));
+		// so it's sent first. All chunks share the next timestamp, so the
+		// sync layer sends them in a random order: contacts who each receive
+		// part of the file then hold different pieces and can complete each
+		// other's copy, rather than all holding the same prefix.
 		List<MessageId> chunkIds = new ArrayList<>();
 		long size = 0;
 		try {
@@ -419,10 +420,15 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				if (read <= 0) break;
 				size += read;
 				if (size > MAX_GROUP_FILE_SIZE) throw new FileTooBigException();
+				// The descriptor includes the chunk's index, so chunks with
+				// identical content at different positions in the file (or
+				// in different files) still have distinct message IDs
+				byte[] descriptor = clientHelper.toByteArray(
+						BdfList.of(FILE_CHUNK.getInt(), chunkIds.size()));
 				byte[] body = new byte[descriptor.length + read];
 				System.arraycopy(descriptor, 0, body, 0, descriptor.length);
 				System.arraycopy(buf, 0, body, descriptor.length, read);
-				long chunkTimestamp = timestamp + 1 + chunkIds.size();
+				long chunkTimestamp = timestamp + 1;
 				Message m = clientHelper.createMessage(groupId, chunkTimestamp,
 						body);
 				BdfDictionary meta = new BdfDictionary();
@@ -540,7 +546,7 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				Boolean valid = manifestMeta.getOptionalBoolean(KEY_FILE_VALID);
 				if (valid == null) {
 					valid = chunksAddUpToSize(txn, chunkIds,
-							manifestMeta.getLong(KEY_FILE_SIZE), null);
+							manifestMeta.getLong(KEY_FILE_SIZE), null, 0);
 				}
 				if (!valid) received--;
 			}
@@ -1010,7 +1016,7 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				handleAttachment(txn, m);
 				return ACCEPT_SHARE;
 			} else if (type == FILE_CHUNK.getInt()) {
-				handleFileChunk(txn, m);
+				handleFileChunk(txn, m, metaDict);
 				return ACCEPT_SHARE;
 			}
 		} catch (FormatException e) {
@@ -1079,12 +1085,13 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 					MISSING_ATTACHMENT_CLEANUP_DURATION_MS);
 			db.startCleanupTimer(txn, m.getId());
 		}
-		reportFileProgress(txn, g, m.getId(), meta, present, null);
+		reportFileProgress(txn, g, m.getId(), meta, present, null, 0);
 	}
 
-	private void handleFileChunk(Transaction txn, Message m)
-			throws DbException, FormatException {
+	private void handleFileChunk(Transaction txn, Message m,
+			BdfDictionary chunkMeta) throws DbException, FormatException {
 		GroupId g = m.getGroupId();
+		int descriptorLength = chunkMeta.getInt(MSG_KEY_DESCRIPTOR_LENGTH);
 		// Find the manifests, if any, that list this chunk
 		BdfDictionary query = BdfDictionary.of(
 				new BdfEntry(KEY_TYPE, FILE_MANIFEST.getInt()));
@@ -1101,7 +1108,8 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				// returns, so the query above doesn't include it
 				present.add(m.getId());
 			}
-			reportFileProgress(txn, g, e.getKey(), e.getValue(), present, m);
+			reportFileProgress(txn, g, e.getKey(), e.getValue(), present, m,
+					descriptorLength);
 		}
 		// If no manifest lists this chunk yet, it may arrive later. Keep the
 		// chunk for a while, then give up on it.
@@ -1130,15 +1138,16 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 	 */
 	private void reportFileProgress(Transaction txn, GroupId g,
 			MessageId manifestId, BdfDictionary manifestMeta,
-			Set<MessageId> presentChunks, @Nullable Message arriving)
-			throws DbException, FormatException {
+			Set<MessageId> presentChunks, @Nullable Message arriving,
+			int arrivingDescriptorLength) throws DbException, FormatException {
 		List<MessageId> chunkIds = parseChunkIds(manifestMeta);
 		int received = 0;
 		for (MessageId id : chunkIds) if (presentChunks.contains(id)) received++;
 		if (received == chunkIds.size() &&
 				!manifestMeta.containsKey(KEY_FILE_VALID)) {
 			boolean valid = chunksAddUpToSize(txn, chunkIds,
-					manifestMeta.getLong(KEY_FILE_SIZE), arriving);
+					manifestMeta.getLong(KEY_FILE_SIZE), arriving,
+					arrivingDescriptorLength);
 			BdfDictionary update = BdfDictionary.of(
 					new BdfEntry(KEY_FILE_VALID, valid));
 			clientHelper.mergeMessageMetadata(txn, manifestId, update);
@@ -1152,19 +1161,18 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 	 * Returns true if the payloads of the given chunks add up to the
 	 * expected file size. The chunk that is currently being delivered, if
 	 * any, may not have its metadata stored yet, so its descriptor length is
-	 * read from its body.
+	 * passed in from the metadata the validator produced for it.
 	 */
 	private boolean chunksAddUpToSize(Transaction txn, List<MessageId> chunkIds,
-			long expected, @Nullable Message arriving)
-			throws DbException, FormatException {
+			long expected, @Nullable Message arriving,
+			int arrivingDescriptorLength) throws DbException, FormatException {
 		long actual = 0;
 		for (MessageId id : chunkIds) {
 			Message chunk = arriving != null && arriving.getId().equals(id)
 					? arriving : db.getMessage(txn, id);
 			int offset;
 			if (chunk == arriving) {
-				offset = clientHelper.toByteArray(
-						BdfList.of(FILE_CHUNK.getInt())).length;
+				offset = arrivingDescriptorLength;
 			} else {
 				BdfDictionary chunkMeta =
 						clientHelper.getMessageMetadataAsDictionary(txn, id);
