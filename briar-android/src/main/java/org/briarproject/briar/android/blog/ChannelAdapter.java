@@ -8,30 +8,31 @@ import android.widget.ImageButton;
 import android.widget.TextView;
 
 import org.briarproject.briar.R;
-import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.ListAdapter;
 import androidx.recyclerview.widget.RecyclerView;
 
+import static android.view.View.GONE;
+import static android.view.View.VISIBLE;
 import static org.briarproject.briar.android.util.UiUtils.formatDate;
 
 @NotNullByDefault
 class ChannelAdapter
-		extends ListAdapter<Channel, ChannelAdapter.ChannelViewHolder> {
+		extends ListAdapter<ChannelItem, ChannelAdapter.ChannelViewHolder> {
 
 	private final ChannelListener listener;
 
 	ChannelAdapter(ChannelListener listener) {
-		super(new DiffUtil.ItemCallback<Channel>() {
+		super(new DiffUtil.ItemCallback<ChannelItem>() {
 			@Override
-			public boolean areItemsTheSame(Channel a, Channel b) {
-				return a.getBlogId().equals(b.getBlogId());
+			public boolean areItemsTheSame(ChannelItem a, ChannelItem b) {
+				return a.getId().equals(b.getId());
 			}
 
 			@Override
-			public boolean areContentsTheSame(Channel a, Channel b) {
+			public boolean areContentsTheSame(ChannelItem a, ChannelItem b) {
 				return a.getTitle().equals(b.getTitle());
 			}
 		});
@@ -55,7 +56,7 @@ class ChannelAdapter
 
 		private final Context ctx;
 		private final View layout;
-		private final TextView title, created;
+		private final TextView title, created, createdLabel;
 		private final ImageButton overflow;
 
 		private ChannelViewHolder(View v) {
@@ -64,12 +65,21 @@ class ChannelAdapter
 			layout = v;
 			title = v.findViewById(R.id.titleView);
 			created = v.findViewById(R.id.createdView);
+			createdLabel = v.findViewById(R.id.created);
 			overflow = v.findViewById(R.id.overflowButton);
 		}
 
-		private void bindItem(Channel item) {
+		private void bindItem(ChannelItem item) {
 			title.setText(item.getTitle());
-			created.setText(formatDate(ctx, item.getCreated()));
+			if (item.isOwned()) {
+				created.setText(formatDate(ctx, item.getCreated()));
+				created.setVisibility(VISIBLE);
+				createdLabel.setVisibility(VISIBLE);
+			} else {
+				// We don't know when someone else made their channel
+				created.setVisibility(GONE);
+				createdLabel.setVisibility(GONE);
+			}
 			overflow.setOnClickListener(
 					v -> listener.onActionsClick(item, v));
 			layout.setOnClickListener(v -> listener.onChannelClick(item));
@@ -78,8 +88,8 @@ class ChannelAdapter
 
 	interface ChannelListener {
 
-		void onChannelClick(Channel channel);
+		void onChannelClick(ChannelItem channel);
 
-		void onActionsClick(Channel channel, View anchor);
+		void onActionsClick(ChannelItem channel, View anchor);
 	}
 }

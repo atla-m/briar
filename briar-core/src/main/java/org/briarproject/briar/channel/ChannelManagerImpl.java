@@ -43,6 +43,7 @@ import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
+import org.briarproject.briar.api.channel.FetchResult;
 import org.briarproject.briar.api.channel.NoSuchChannelException;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -57,6 +58,8 @@ import java.security.GeneralSecurityException;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
@@ -67,6 +70,10 @@ import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
 import static java.util.Collections.emptyList;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
@@ -368,9 +375,38 @@ class ChannelManagerImpl
 	}
 
 	@Override
-	public int fetchChannel(GroupId g) throws DbException {
+	public List<Blog> getSubscriptions() throws DbException {
+		return db.transactionWithResult(true, this::getSubscriptions);
+	}
+
+	@Override
+	public List<Blog> getSubscriptions(Transaction txn) throws DbException {
+		Set<GroupId> owned = new HashSet<>();
+		for (Channel c : getChannels(txn)) owned.add(c.getBlogId());
+		List<Blog> subscriptions = new ArrayList<>();
+		for (Blog b : blogManager.getBlogs(txn)) {
+			if (b.isChannel() && !owned.contains(b.getId())) {
+				subscriptions.add(b);
+			}
+		}
+		return subscriptions;
+	}
+
+	@Override
+	public void unsubscribe(GroupId g) throws DbException {
+		db.transaction(false, txn -> {
+			if (getChannel(txn, g) != null) {
+				// We created this one, so it has a key pair to delete too
+				throw new IllegalArgumentException();
+			}
+			blogManager.removeBlog(txn, blogManager.getBlog(txn, g));
+		});
+	}
+
+	@Override
+	public FetchResult fetchChannel(GroupId g) throws DbException {
 		List<String> mirrors = getMirrors(g);
-		if (mirrors.isEmpty()) return 0;
+		if (mirrors.isEmpty()) return new FetchResult(NO_MIRRORS, 0);
 		BdfDictionary meta = db.transactionWithResult(true, txn -> {
 			try {
 				return clientHelper.getGroupMetadataAsDictionary(txn, g);
@@ -394,12 +430,14 @@ class ChannelManagerImpl
 				logException(LOG, INFO, e);
 			}
 		}
+		// Not the same as being up to date: we may be missing everything
+		// published since we last fetched
 		if (LOG.isLoggable(INFO)) LOG.info("No mirror answered for channel");
-		return 0;
+		return new FetchResult(UNREACHABLE, 0);
 	}
 
-	private int fetchFrom(GroupId g, String mirror, @Nullable String etag,
-			@Nullable String lastModified)
+	private FetchResult fetchFrom(GroupId g, String mirror,
+			@Nullable String etag, @Nullable String lastModified)
 			throws DbException, IOException {
 		Request.Builder b = new Request.Builder().url(mirror).get();
 		// Ask the mirror to send the file only if it has changed
@@ -411,14 +449,14 @@ class ChannelManagerImpl
 		try (ResponseBody body = response.body()) {
 			if (response.code() == 304) {
 				if (LOG.isLoggable(INFO)) LOG.info("Channel unchanged");
-				return 0;
+				return new FetchResult(UNCHANGED, 0);
 			}
 			if (!response.isSuccessful() || body == null)
 				throw new IOException("Response " + response.code());
 			int count = importChannel(body.byteStream());
 			storeFetchState(g, response.header("ETag"),
 					response.header("Last-Modified"));
-			return count;
+			return new FetchResult(FETCHED, count);
 		} catch (FormatException e) {
 			// The mirror served something that isn't this channel
 			throw new IOException(e);

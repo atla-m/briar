@@ -556,6 +556,11 @@
 	<string name="channels_mirrors_invalid">Those addresses could not be saved</string>
 	<string name="channels_fetch">Fetch now</string>
 	<string name="channels_fetch_none">Nothing new</string>
+	<string name="channels_fetch_no_mirrors">This channel has no addresses to fetch from</string>
+	<string name="channels_fetch_unreachable">Could not reach any of this channel\'s addresses. You may be missing recent posts.</string>
+	<string name="channels_unsubscribe">Unsubscribe</string>
+	<string name="channels_unsubscribe_title">Unsubscribe from channel?</string>
+	<string name="channels_unsubscribe_message">You will stop receiving this channel\'s posts, and the posts you already have will be deleted. You can subscribe again with its link.</string>
 	<string name="channels_fetch_error">The channel could not be fetched</string>
 	<string name="channels_published">Channel published</string>
 	<string name="channels_publish_error">The channel could not be published</string>
@@ -571,7 +576,7 @@
 		<item quantity="other">%d new items fetched</item>
 	</plurals>
 	<string name="channels_import_error">The file could not be read, or you have not subscribed to that channel</string>
-	<string name="channels_manage_empty_state">You haven\'t created any channels yet. Tap the + button to create one.</string>
+	<string name="channels_manage_empty_state">No channels yet. Tap + to create one, or use the menu to subscribe to one with a link.</string>
 	<string name="channels_manage_error">Your channels could not be loaded</string>
 	<string name="channels_delete_title">Delete channel?</string>
 	<string name="channels_delete_message">The channel\'s key will be deleted, so you will never be able to post to it again. People who already have your posts will keep them.</string>
