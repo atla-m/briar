@@ -598,6 +598,8 @@
 	<string name="channels_unsubscribe_title">Unsubscribe from channel?</string>
 	<string name="channels_unsubscribe_message">You will stop receiving this channel\'s posts, and the posts you already have will be deleted. You can subscribe again with its link.</string>
 	<string name="channels_fetch_error">The channel could not be fetched</string>
+	<string name="channels_fetch_too_large">This channel has grown too large to follow from its addresses. Ask someone who has it for a file.</string>
+	<string name="channels_fetch_in_progress">Already fetching</string>
 	<string name="channels_published">Channel published</string>
 	<string name="channels_publish_error">The channel could not be published</string>
 	<string name="channels_subscribe">Subscribe using a link</string>

@@ -32,7 +32,17 @@ public class FetchResult {
 		/**
 		 * A mirror served the channel and we read it.
 		 */
-		FETCHED
+		FETCHED,
+		/**
+		 * The channel's file has grown past what we will store from a
+		 * mirror, so it can no longer be followed this way.
+		 */
+		TOO_LARGE,
+		/**
+		 * A fetch of the same channel or file was already under way, so
+		 * nothing was done.
+		 */
+		IN_PROGRESS
 	}
 
 	private final Outcome outcome;

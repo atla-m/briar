@@ -242,12 +242,22 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 				ContentResolver resolver =
 						getApplication().getContentResolver();
 				String rootId = DocumentsContract.getTreeDocumentId(tree);
-				Uri main = findOrCreate(resolver, tree, rootId,
-						fileName(title), OCTET_STREAM);
+				// Written under a temporary name and renamed, so a copy
+				// tool or an upload never picks up a half-written file,
+				// and a failure leaves the last good one in place
+				String mainName = fileName(title);
+				Uri tmp = findOrCreate(resolver, tree, rootId,
+						mainName + ".tmp", OCTET_STREAM);
 				try (OutputStream out =
-						resolver.openOutputStream(main, "wt")) {
+						resolver.openOutputStream(tmp, "wt")) {
 					if (out == null) throw new IOException("Cannot open");
 					channelManager.exportChannel(g, out);
+				}
+				Uri old = findChild(resolver, tree, rootId, mainName);
+				if (old != null) DocumentsContract.deleteDocument(resolver, old);
+				if (DocumentsContract.renameDocument(resolver, tmp, mainName)
+						== null) {
+					throw new IOException("Cannot rename");
 				}
 				Collection<MessageId> files =
 						channelManager.getCompleteFiles(g);

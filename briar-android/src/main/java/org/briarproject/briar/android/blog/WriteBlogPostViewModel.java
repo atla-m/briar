@@ -244,6 +244,9 @@ class WriteBlogPostViewModel extends DbViewModel
 		GroupId g = groupId.getValue();
 		if (g == null) throw new IllegalStateException();
 		List<FileHeader> files = new ArrayList<>(fileHeaders);
+		// From here the files are the post's, so leaving this screen
+		// before the post is stored must not delete them under it
+		filesPublished = true;
 		runOnDbThread(() -> {
 			try {
 				MessageId postId;
@@ -270,10 +273,8 @@ class WriteBlogPostViewModel extends DbViewModel
 				}
 				// The images and files have been published, so they are no
 				// longer deleted when this screen goes away
-				androidExecutor.runOnUiThread(() -> {
-					attachmentCreator.onAttachmentsSent(postId);
-					filesPublished = true;
-				});
+				androidExecutor.runOnUiThread(() ->
+						attachmentCreator.onAttachmentsSent(postId));
 				published.postEvent(true);
 			} catch (DbException | GeneralSecurityException
 					| FormatException e) {
