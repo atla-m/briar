@@ -55,6 +55,8 @@ import java.util.Collection;
 import java.util.Locale;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -1527,7 +1529,9 @@ public class ChannelManagerIntegrationTest
 		lastPostTime = pickTime + 100;
 		channelManager0.post(g, getRandomString(42));
 		byte[] before = exportChannel(g);
-		BlogPost post = blogPostFactory.createBlogPost(g, pickTime + 200,
+		// Timestamped as the app does, after everything in the channel
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				blogManager0.getNextTimestamp(g, pickTime + 200),
 				null, channel.getLocalAuthor(), "The file", emptyList(),
 				singletonList(picked));
 		blogManager0.addLocalPost(post);
@@ -1734,26 +1738,35 @@ public class ChannelManagerIntegrationTest
 		// what lets a reader ask a mirror for just the part it is
 		// missing. Two messages written in the same millisecond would
 		// otherwise be ordered by their IDs, which are hashes.
+		// A channel's timestamps say only which minute, so each is
+		// somewhere in the minute of the moment asked for
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
 		long moment = c0.getClock().currentTimeMillis();
-		assertEquals(moment, blogManager0.getNextTimestamp(g, moment));
+		long minute = moment - moment % 60_000;
+		long first = blogManager0.getNextTimestamp(g, moment);
+		assertTrue(first >= minute && first < minute + 60_000);
 
-		// Something written at that moment takes it, so the next message
-		// asking for the same moment is put after it
-		blogManager0.addLocalAttachment(g, moment, "image/jpeg",
-				new ByteArrayInputStream(getRandomBytes(123)));
+		// Something written takes its timestamp, so the next message is
+		// put after it, however many are written in the same minute
+		AttachmentHeader a = blogManager0.addLocalAttachment(g, moment,
+				"image/jpeg", new ByteArrayInputStream(getRandomBytes(123)));
+		long taken = db0.transactionWithResult(true,
+				txn -> db0.getMessage(txn, a.getMessageId())).getTimestamp();
 		long next = blogManager0.getNextTimestamp(g, moment);
-		assertTrue(next > moment);
+		assertTrue(next > taken);
+		AttachmentHeader b = blogManager0.addLocalAttachment(g, moment,
+				"image/jpeg", new ByteArrayInputStream(getRandomBytes(123)));
+		long taken2 = db0.transactionWithResult(true,
+				txn -> db0.getMessage(txn, b.getMessageId())).getTimestamp();
+		assertTrue(taken2 > taken);
+		assertTrue(blogManager0.getNextTimestamp(g, moment) > taken2);
 
-		// and so on, however many are written in the same millisecond
-		blogManager0.addLocalAttachment(g, moment, "image/jpeg",
-				new ByteArrayInputStream(getRandomBytes(123)));
-		assertTrue(blogManager0.getNextTimestamp(g, moment) > next);
-
-		// A moment later than everything in the blog is left alone
-		assertEquals(moment + 1000,
-				blogManager0.getNextTimestamp(g, moment + 1000));
+		// A moment minutes after everything in the channel is in its own
+		// minute
+		long later = moment + 5 * 60_000;
+		long inLater = blogManager0.getNextTimestamp(g, later);
+		assertEquals(later - later % 60_000, inLater - inLater % 60_000);
 
 		// A personal blog is not published as a file, so its messages
 		// keep whatever timestamp they were given
@@ -2758,6 +2771,33 @@ public class ChannelManagerIntegrationTest
 		c1.getNearbyChannelProtocol().read(g,
 				new ByteArrayInputStream(served.toByteArray()),
 				new ByteArrayOutputStream());
+	}
+
+	@Test
+	public void testAChannelsTimestampsAreKeptToTheMinute() throws Exception {
+		// A post's timestamp is published and signed. To the millisecond
+		// it would show how far the owner's clock is off, so it says only
+		// which minute, at a random point in it, and still after every
+		// message already in the channel.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		long before = c0.getClock().currentTimeMillis();
+		long last = 0;
+		Set<Long> withinMinute = new HashSet<>();
+		for (int i = 0; i < 5; i++) {
+			MessageId id = channelManager0.post(g, getRandomString(42));
+			long t = db0.transactionWithResult(true,
+					txn -> db0.getMessage(txn, id)).getTimestamp();
+			long after = c0.getClock().currentTimeMillis();
+			assertTrue(t > last);
+			assertTrue(t >= before - before % 60_000);
+			assertTrue(t < after - after % 60_000 + 60_000 + 5);
+			withinMinute.add(t % 60_000);
+			last = t;
+		}
+		// Not the clock's milliseconds: the posts were made within
+		// milliseconds of each other, but land across the minute
+		assertTrue(withinMinute.size() > 1);
 	}
 
 	@Test

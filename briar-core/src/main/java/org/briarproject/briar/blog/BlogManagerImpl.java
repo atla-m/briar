@@ -105,6 +105,12 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	private final AuthorManager authorManager;
 	private final BlogFactory blogFactory;
 	private final BlogPostFactory blogPostFactory;
+	private final CryptoComponent crypto;
+
+	/**
+	 * How precisely a channel's timestamps say when its messages were made.
+	 */
+	private static final long TIMESTAMP_PRECISION_MS = 60_000;
 	private final BlogFileClient fileClient;
 	private final ChunkedFileStore fileStore;
 	private final List<RemoveBlogHook> removeHooks;
@@ -120,6 +126,7 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 		this.authorManager = authorManager;
 		this.blogFactory = blogFactory;
 		this.blogPostFactory = blogPostFactory;
+		this.crypto = crypto;
 		fileClient = new BlogFileClient(clientHelper);
 		fileStore = new ChunkedFileStore(db, clientHelper, crypto, fileClient,
 				databaseConfig);
@@ -327,11 +334,19 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 		// personal blog syncs message by message, and an RSS post keeps
 		// the date its feed gave it.
 		if (!getBlog(txn, g).isChannel()) return earliest;
+		// A channel's timestamps are published, and signed, so to the
+		// millisecond they would show how far the owner's clock is off,
+		// which in a blackout drifts in a way of its own on each phone and
+		// can be matched with the owner's private messages. They are kept
+		// to the minute, at a random point in it.
+		long minute = earliest - earliest % TIMESTAMP_PRECISION_MS;
+		long coarse = minute +
+				crypto.getSecureRandom().nextInt((int) TIMESTAMP_PRECISION_MS);
 		try {
 			BdfDictionary meta =
 					clientHelper.getGroupMetadataAsDictionary(txn, g);
 			long latest = meta.getLong(GROUP_KEY_LATEST_TIMESTAMP, 0L);
-			return Math.max(earliest, latest + 1);
+			return Math.max(coarse, latest + 1);
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
