@@ -9,6 +9,15 @@ import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
+import java.util.List;
+import java.util.ArrayList;
+import org.briarproject.briar.android.util.UiUtils;
+import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.contact.Contact;
+import org.briarproject.bramble.api.Pair;
+import android.widget.TextView;
+import android.widget.LinearLayout;
+import android.widget.CheckBox;
 import android.view.ViewGroup;
 import android.widget.Toast;
 import com.google.android.material.switchmaterial.SwitchMaterial;
@@ -98,8 +107,7 @@ public class BlogFragment extends BaseFragment
 
 		list = v.findViewById(R.id.postList);
 		View sharing = v.findViewById(R.id.channelSharing);
-		SwitchMaterial shareWithContacts =
-				v.findViewById(R.id.shareWithContacts);
+		shareWithContacts = v.findViewById(R.id.shareWithContacts);
 		viewModel.getBlog().observe(getViewLifecycleOwner(), blog -> {
 			// The two switches are shown on a channel, and only there
 			sharing.setVisibility(
@@ -168,10 +176,22 @@ public class BlogFragment extends BaseFragment
 		inflater.inflate(R.menu.blogs_blog_actions, menu);
 		MenuItem writeButton = menu.findItem(R.id.action_write_blog_post);
 		MenuItem deleteButton = menu.findItem(R.id.action_blog_delete);
+		MenuItem chooseContacts =
+				menu.findItem(R.id.action_blog_choose_contacts);
 		viewModel.getBlog().observe(getViewLifecycleOwner(), blog -> {
 			if (blog.isOurs()) writeButton.setVisible(true);
 			if (blog.canBeRemoved()) deleteButton.setEnabled(true);
+			// A channel is unsubscribed from, or deleted by its owner
+			if (blog.getBlog().isChannel()) {
+				deleteButton.setTitle(blog.isOurs() ?
+						R.string.channels_delete_channel :
+						R.string.channels_unsubscribe_channel);
+			}
 		});
+		// Only a channel that is passing posts to contacts has contacts
+		// to choose
+		viewModel.getSharingWithContacts().observe(getViewLifecycleOwner(),
+				chooseContacts::setVisible);
 		super.onCreateOptionsMenu(menu, inflater);
 	}
 
@@ -198,6 +218,9 @@ public class BlogFragment extends BaseFragment
 			return true;
 		} else if (itemId == R.id.action_blog_delete) {
 			showDeleteDialog();
+			return true;
+		} else if (itemId == R.id.action_blog_choose_contacts) {
+			showChooseContactsDialog(null);
 			return true;
 		}
 		return super.onOptionsItemSelected(item);
@@ -263,23 +286,67 @@ public class BlogFragment extends BaseFragment
 		super.onDestroyView();
 	}
 
+	private SwitchMaterial shareWithContacts;
+
 	private void onShareWithContactsChanged(boolean on) {
 		if (!on) {
 			viewModel.setSharingWithContacts(false);
 			return;
 		}
-		// Say what it reveals before it is revealed
-		MaterialAlertDialogBuilder builder =
-				new MaterialAlertDialogBuilder(requireContext(),
-						R.style.BriarDialogTheme);
-		builder.setTitle(R.string.channels_share_with_contacts);
-		builder.setMessage(R.string.channels_share_with_contacts_explanation);
-		builder.setPositiveButton(R.string.channels_share_with_contacts_confirm,
-				(d, w) -> viewModel.setSharingWithContacts(true));
-		builder.setNegativeButton(R.string.cancel, (d, w) ->
-				viewModel.setSharingWithContacts(false));
-		builder.setOnCancelListener(d -> viewModel.setSharingWithContacts(false));
-		builder.show();
+		// Say what it reveals, and to whom, before it is revealed
+		showChooseContactsDialog(shareWithContacts);
+	}
+
+	/**
+	 * Shows the contacts with a box each, all ticked unless the user
+	 * chose before, and turns sharing on for the ticked ones. If a
+	 * switch is given, cancelling puts it back to off.
+	 */
+	private void showChooseContactsDialog(@Nullable SwitchMaterial sw) {
+		viewModel.loadSharingContacts().observe(getViewLifecycleOwner(),
+				contacts -> {
+					View v = getLayoutInflater()
+							.inflate(R.layout.dialog_channel_contacts, null);
+					TextView explanation = v.findViewById(R.id.explanation);
+					explanation.setText(sw == null ?
+							R.string.channels_share_choose_contacts_explanation :
+							R.string.channels_share_with_contacts_explanation);
+					LinearLayout boxes = v.findViewById(R.id.contacts);
+					TextView none = v.findViewById(R.id.noContacts);
+					List<CheckBox> checks = new ArrayList<>();
+					for (Pair<Contact, Boolean> p : contacts) {
+						CheckBox box = new CheckBox(requireContext());
+						box.setText(UiUtils.getContactDisplayName(p.getFirst()));
+						box.setChecked(p.getSecond());
+						box.setTag(p.getFirst().getId());
+						boxes.addView(box);
+						checks.add(box);
+					}
+					none.setVisibility(contacts.isEmpty() ? VISIBLE : GONE);
+					Runnable cancel = () -> {
+						if (sw != null) viewModel.setSharingWithContacts(false);
+					};
+					MaterialAlertDialogBuilder builder =
+							new MaterialAlertDialogBuilder(requireContext(),
+									R.style.BriarDialogTheme);
+					builder.setTitle(R.string.channels_share_with_contacts);
+					builder.setView(v);
+					builder.setPositiveButton(
+							R.string.channels_share_with_contacts_confirm,
+							(d, w) -> {
+								List<ContactId> chosen = new ArrayList<>();
+								for (CheckBox box : checks) {
+									if (box.isChecked()) {
+										chosen.add((ContactId) box.getTag());
+									}
+								}
+								viewModel.setSharingWithContacts(chosen);
+							});
+					builder.setNegativeButton(R.string.cancel,
+							(d, w) -> cancel.run());
+					builder.setOnCancelListener(d -> cancel.run());
+					builder.show();
+				});
 	}
 
 	@Override

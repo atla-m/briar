@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Collection;
+import org.briarproject.bramble.api.contact.ContactId;
 import java.util.List;
 
 import javax.annotation.Nullable;
@@ -168,6 +169,21 @@ public interface ChannelManager {
 	 * the sharing protocol.
 	 */
 	void setSharingWithContacts(GroupId g, boolean on) throws DbException;
+
+	/**
+	 * Chooses which contacts get the channel's posts while sharing with
+	 * contacts is on. Contacts added later are not included until they
+	 * are chosen here.
+	 */
+	void setSharingContacts(GroupId g, Collection<ContactId> contacts)
+			throws DbException;
+
+	/**
+	 * Returns the contacts chosen to get the channel's posts, or null if
+	 * none were chosen, which means every contact.
+	 */
+	@Nullable
+	Collection<ContactId> getSharingContacts(GroupId g) throws DbException;
 
 	boolean isSharingWithContacts(GroupId g) throws DbException;
 

@@ -52,6 +52,7 @@ import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_DO_NOT_SHARE;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
+import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_CONTACT_IDS;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_WITH_CONTACTS;
 
 /**
@@ -214,7 +215,7 @@ class ChannelContactSharing implements OpenDatabaseHook, ContactHook,
 
 	private void update(Transaction txn, Contact c) throws DbException {
 		GroupId g = getContactGroup(c).getId();
-		sendOurTokens(txn, g);
+		sendOurTokens(txn, c, g);
 		applyVisibility(txn, c, g, getTheirTokens(txn, g));
 	}
 
@@ -228,7 +229,8 @@ class ChannelContactSharing implements OpenDatabaseHook, ContactHook,
 			if (!b.isChannel()) continue;
 			GroupId g = b.getId();
 			if (!isOurs(txn, g, c)) continue;
-			boolean on = isSharing(txn, g) && theirs.contains(token(cg, g));
+			boolean on = isSharing(txn, g, c.getId()) &&
+					theirs.contains(token(cg, g));
 			Visibility v = on ? SHARED : INVISIBLE;
 			if (db.getGroupVisibility(txn, c.getId(), g) != v) {
 				db.setGroupVisibility(txn, c.getId(), g, v);
@@ -255,11 +257,13 @@ class ChannelContactSharing implements OpenDatabaseHook, ContactHook,
 		}
 	}
 
-	private void sendOurTokens(Transaction txn, GroupId cg)
+	private void sendOurTokens(Transaction txn, Contact c, GroupId cg)
 			throws DbException {
 		BdfList tokens = new BdfList();
 		for (Blog b : blogManager.getBlogs(txn)) {
-			if (!b.isChannel() || !isSharing(txn, b.getId())) continue;
+			if (!b.isChannel() || !isSharing(txn, b.getId(), c.getId())) {
+				continue;
+			}
 			if (tokens.size() == MAX_TOKENS) break;
 			tokens.add(token(cg, b.getId()).getBytes());
 		}
@@ -337,10 +341,25 @@ class ChannelContactSharing implements OpenDatabaseHook, ContactHook,
 		db.deleteMessageMetadata(txn, m);
 	}
 
-	private boolean isSharing(Transaction txn, GroupId g) throws DbException {
+	/**
+	 * Whether we pass the channel's posts to this contact: the switch is
+	 * on, and either no contacts were chosen, meaning all of them, or this
+	 * one was.
+	 */
+	private boolean isSharing(Transaction txn, GroupId g, ContactId c)
+			throws DbException {
 		try {
-			return clientHelper.getGroupMetadataAsDictionary(txn, g)
-					.getBoolean(GROUP_KEY_SHARE_WITH_CONTACTS, false);
+			BdfDictionary meta =
+					clientHelper.getGroupMetadataAsDictionary(txn, g);
+			if (!meta.getBoolean(GROUP_KEY_SHARE_WITH_CONTACTS, false)) {
+				return false;
+			}
+			BdfList chosen = meta.getOptionalList(GROUP_KEY_SHARE_CONTACT_IDS);
+			if (chosen == null) return true;
+			for (int i = 0; i < chosen.size(); i++) {
+				if (chosen.getLong(i) == c.getInt()) return true;
+			}
+			return false;
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}

@@ -148,6 +148,7 @@ import static org.briarproject.briar.channel.ChannelConstants.MSG_KEY_FILE_FETCH
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_LAST_MODIFIED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
+import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_CONTACT_IDS;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_WITH_CONTACTS;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNELS;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_AUTHOR;
@@ -482,6 +483,44 @@ class ChannelManagerImpl
 				throw new DbException(e);
 			}
 			contactSharing.updateAll(txn);
+		});
+	}
+
+	@Override
+	public void setSharingContacts(GroupId g, Collection<ContactId> contacts)
+			throws DbException {
+		db.transaction(false, txn -> {
+			Blog blog = blogManager.getBlog(txn, g);
+			if (!blog.isChannel()) throw new NoSuchChannelException();
+			BdfList ids = new BdfList();
+			for (ContactId c : contacts) ids.add((long) c.getInt());
+			try {
+				clientHelper.mergeGroupMetadata(txn, g, BdfDictionary.of(
+						new BdfEntry(GROUP_KEY_SHARE_CONTACT_IDS, ids)));
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+			contactSharing.updateAll(txn);
+		});
+	}
+
+	@Nullable
+	@Override
+	public Collection<ContactId> getSharingContacts(GroupId g)
+			throws DbException {
+		return db.transactionWithResult(true, txn -> {
+			try {
+				BdfList ids = clientHelper.getGroupMetadataAsDictionary(txn, g)
+						.getOptionalList(GROUP_KEY_SHARE_CONTACT_IDS);
+				if (ids == null) return null;
+				List<ContactId> contacts = new ArrayList<>(ids.size());
+				for (int i = 0; i < ids.size(); i++) {
+					contacts.add(new ContactId(ids.getLong(i).intValue()));
+				}
+				return contacts;
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
 		});
 	}
 
