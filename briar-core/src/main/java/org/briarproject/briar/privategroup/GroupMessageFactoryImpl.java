@@ -8,6 +8,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.privategroup.GroupFileHeader;
 import org.briarproject.briar.api.privategroup.GroupMessage;
 import org.briarproject.briar.api.privategroup.GroupMessageFactory;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -19,6 +20,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 import javax.inject.Inject;
 
+import static java.util.Collections.emptyList;
 import static org.briarproject.bramble.util.StringUtils.utf8IsTooLong;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
@@ -124,21 +126,36 @@ class GroupMessageFactoryImpl implements GroupMessageFactory {
 			@Nullable MessageId parentId, LocalAuthor member,
 			@Nullable String text, List<AttachmentHeader> attachmentHeaders,
 			MessageId previousMsgId) {
-		// Without attachments, use the original format so that the message
-		// can be read by members running older clients
-		if (attachmentHeaders.isEmpty()) {
+		return createGroupMessage(groupId, timestamp, parentId, member, text,
+				attachmentHeaders, emptyList(), previousMsgId);
+	}
+
+	@Override
+	public GroupMessage createGroupMessage(GroupId groupId, long timestamp,
+			@Nullable MessageId parentId, LocalAuthor member,
+			@Nullable String text, List<AttachmentHeader> attachmentHeaders,
+			List<GroupFileHeader> fileHeaders, MessageId previousMsgId) {
+		// Without attachments or files, use the original format so that the
+		// message can be read by members running older clients
+		if (attachmentHeaders.isEmpty() && fileHeaders.isEmpty()) {
 			if (text == null) throw new IllegalArgumentException();
 			return createGroupMessage(groupId, timestamp, parentId, member,
 					text, previousMsgId);
 		}
-		if (attachmentHeaders.size() > MAX_GROUP_POST_ATTACHMENTS)
+		if (attachmentHeaders.size() + fileHeaders.size()
+				> MAX_GROUP_POST_ATTACHMENTS) {
 			throw new IllegalArgumentException();
+		}
 		if (text != null && utf8IsTooLong(text, MAX_GROUP_POST_TEXT_LENGTH))
 			throw new IllegalArgumentException();
 		try {
 			BdfList headers = new BdfList();
 			for (AttachmentHeader a : attachmentHeaders) {
 				headers.add(BdfList.of(a.getMessageId(), a.getContentType()));
+			}
+			for (GroupFileHeader h : fileHeaders) {
+				headers.add(BdfList.of(h.getManifestId(), h.getContentType(),
+						h.getName(), h.getSize()));
 			}
 			// Generate the signature, which covers the attachment headers
 			BdfList memberList = clientHelper.toList(member);
@@ -166,7 +183,7 @@ class GroupMessageFactoryImpl implements GroupMessageFactory {
 			);
 			Message m = clientHelper.createMessage(groupId, timestamp, body);
 			return new GroupMessage(m, parentId, member, text != null,
-					attachmentHeaders);
+					attachmentHeaders, fileHeaders);
 		} catch (GeneralSecurityException e) {
 			throw new IllegalArgumentException(e);
 		} catch (FormatException e) {

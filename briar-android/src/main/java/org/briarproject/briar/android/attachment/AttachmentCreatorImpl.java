@@ -33,7 +33,6 @@ import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.briar.android.attachment.AttachmentItem.State.ERROR;
 import static org.briarproject.briar.android.util.UiUtils.observeForeverOnce;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZE;
 
 @NotNullByDefault
 class AttachmentCreatorImpl implements AttachmentCreator {
@@ -137,7 +136,8 @@ class AttachmentCreatorImpl implements AttachmentCreator {
 			errorMsg = app.getString(
 					R.string.image_attach_error_invalid_mime_type, mimeType);
 		} else if (t instanceof FileTooBigException) {
-			int mb = MAX_IMAGE_SIZE / 1024 / 1024;
+			long maxSize = attachmentStore.getMaxAttachmentSize();
+			int mb = (int) Math.max(1, maxSize / 1024 / 1024);
 			errorMsg = app.getString(R.string.image_attach_error_too_big, mb);
 		} else {
 			errorMsg = null; // generic error

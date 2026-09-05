@@ -87,4 +87,20 @@ public interface GroupMessageFactory {
 			@Nullable String text, List<AttachmentHeader> attachmentHeaders,
 			MessageId previousMsgId);
 
+	/**
+	 * Creates a private group post with optional text, attachments and
+	 * shared files. This format requires other members to support client
+	 * version 0.1 or higher.
+	 *
+	 * @param text The text of the post, or null if the post has no text, in
+	 * which case it must have at least one attachment or file
+	 * @param fileHeaders The headers of the files shared by the post, which
+	 * must have been stored with {@link PrivateGroupManager#addLocalFile}
+	 */
+	@CryptoExecutor
+	GroupMessage createGroupMessage(GroupId groupId, long timestamp,
+			@Nullable MessageId parentId, LocalAuthor author,
+			@Nullable String text, List<AttachmentHeader> attachmentHeaders,
+			List<GroupFileHeader> fileHeaders, MessageId previousMsgId);
+
 }

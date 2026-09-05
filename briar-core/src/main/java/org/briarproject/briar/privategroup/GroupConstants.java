@@ -14,7 +14,24 @@ interface GroupConstants {
 	String KEY_MEMBER = "member";
 	String KEY_INITIAL_JOIN_MSG = "initialJoinMsg";
 	String KEY_HAS_TEXT = "hasText";
+	/**
+	 * The list of attachment and file entries carried by a post, as encoded
+	 * in the post's body. Entries with two elements are image attachments,
+	 * entries with four elements are shared files.
+	 */
 	String KEY_ATTACHMENT_HEADERS = "attachmentHeaders";
+
+	// Metadata keys for file manifests
+	String KEY_FILE_NAME = "fileName";
+	String KEY_FILE_CONTENT_TYPE = "fileContentType";
+	String KEY_FILE_SIZE = "fileSize";
+	String KEY_FILE_CHUNK_IDS = "fileChunkIds";
+	/**
+	 * Set on a manifest once all its chunks have arrived: true if the chunks
+	 * add up to the declared file size, false if the sender lied about the
+	 * size and the file must not be read.
+	 */
+	String KEY_FILE_VALID = "fileValid";
 
 	String GROUP_KEY_MEMBERS = "members";
 	String GROUP_KEY_OUR_GROUP = "ourGroup";
@@ -23,8 +40,9 @@ interface GroupConstants {
 	String GROUP_KEY_VISIBILITY = "visibility";
 
 	/**
-	 * How long to keep incoming attachments that aren't referenced by any
-	 * post before deleting them.
+	 * How long to keep incoming attachments, file manifests and file chunks
+	 * that aren't referenced by any post (or, for chunks, by any manifest)
+	 * before deleting them.
 	 */
 	long MISSING_ATTACHMENT_CLEANUP_DURATION_MS = DAYS.toMillis(28);
 

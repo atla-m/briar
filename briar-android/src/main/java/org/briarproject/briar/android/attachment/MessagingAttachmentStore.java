@@ -9,6 +9,8 @@ import org.briarproject.nullsafety.NotNullByDefault;
 import java.io.IOException;
 import java.io.InputStream;
 
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZE;
+
 /**
  * An {@link AttachmentStore} for attachments to private messages.
  */
@@ -32,5 +34,11 @@ public class MessagingAttachmentStore implements AttachmentStore {
 	@Override
 	public void removeAttachment(AttachmentHeader header) throws DbException {
 		messagingManager.removeAttachment(header);
+	}
+
+	@Override
+	public long getMaxAttachmentSize() {
+		// Private messages carry each image in a single message
+		return MAX_IMAGE_SIZE;
 	}
 }

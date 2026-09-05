@@ -1,13 +1,19 @@
 package org.briarproject.briar.privategroup;
 
+import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.contact.Contact;
+import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
 import org.briarproject.briar.api.attachment.Attachment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
+import org.briarproject.briar.api.privategroup.GroupFileHeader;
+import org.briarproject.briar.api.privategroup.GroupFileStatus;
 import org.briarproject.briar.api.privategroup.GroupMember;
 import org.briarproject.briar.api.privategroup.GroupMessage;
 import org.briarproject.briar.api.privategroup.GroupMessageHeader;
@@ -23,24 +29,31 @@ import org.junit.Test;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
+import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.briar.api.identity.AuthorInfo.Status.VERIFIED;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.FILE_CHUNK_PAYLOAD_LENGTH;
+import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_FILE_SIZE;
 import static org.briarproject.briar.api.privategroup.Visibility.INVISIBLE;
 import static org.briarproject.briar.api.privategroup.Visibility.REVEALED_BY_CONTACT;
 import static org.briarproject.briar.api.privategroup.Visibility.REVEALED_BY_US;
 import static org.briarproject.briar.api.privategroup.Visibility.VISIBLE;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
+import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CHUNK_IDS;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class PrivateGroupManagerIntegrationTest
 		extends BriarIntegrationTest<BriarIntegrationTestComponent> {
@@ -513,6 +526,147 @@ public class PrivateGroupManagerIntegrationTest
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		copyAndClose(in, out);
 		return out.toByteArray();
+	}
+
+	@Test
+	public void testSendingFileInChunks() throws Exception {
+		addGroup();
+
+		// author0 stores a file that spans four chunks
+		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 3 + 12345);
+		long time = c0.getClock().currentTimeMillis();
+		GroupFileHeader file = groupManager0.addLocalFile(groupId0, time,
+				"report.pdf", "application/pdf",
+				new ByteArrayInputStream(fileBytes));
+		assertEquals(groupId0, file.getGroupId());
+		assertEquals(fileBytes.length, file.getSize());
+		assertEquals(4, file.getChunkCount());
+		// the file is complete locally and reads back byte for byte
+		assertTrue(groupManager0.getFileStatus(file).isComplete());
+		assertArrayEquals(fileBytes, readFully(groupManager0.getFile(file)));
+		// neither the manifest nor the chunks are messages in their own right
+		assertEquals(2, groupManager0.getHeaders(groupId0).size());
+
+		// Nothing is shared until a post references the file. Share the
+		// manifest and the first two chunks by hand, to simulate a transfer
+		// that is cut off half-way, as happens over Bluetooth
+		List<MessageId> chunkIds = getChunkIds(c0.getClientHelper(), file);
+		assertEquals(4, chunkIds.size());
+		db0.transaction(false, txn -> {
+			db0.setMessageShared(txn, file.getManifestId());
+			db0.setMessageShared(txn, chunkIds.get(0));
+			db0.setMessageShared(txn, chunkIds.get(1));
+		});
+		sync0To1(3, true);
+
+		// author1 knows about the file and has half of it
+		GroupFileStatus partial = groupManager1.getFileStatus(file);
+		assertTrue(partial.isManifestReceived());
+		assertEquals(2, partial.getChunksReceived());
+		assertEquals(4, partial.getChunkCount());
+		assertFalse(partial.isComplete());
+		try {
+			groupManager1.getFile(file);
+			fail();
+		} catch (NoSuchMessageException expected) {
+			// the file can't be read until it's complete
+		}
+
+		// author0 posts the file, which shares the remaining chunks
+		MessageId previousMsgId = groupManager0.getPreviousMsgId(groupId0);
+		GroupMessage msg = groupMessageFactory.createGroupMessage(groupId0,
+				time + 100, null, author0, "Here is the report", emptyList(),
+				singletonList(file), previousMsgId);
+		GroupMessageHeader localHeader = groupManager0.addLocalMessage(msg);
+		assertEquals(singletonList(file), localHeader.getFileHeaders());
+		assertTrue(localHeader.getAttachmentHeaders().isEmpty());
+
+		// sync the remaining two chunks and the post
+		sync0To1(3, true);
+
+		Collection<GroupMessageHeader> headers =
+				groupManager1.getHeaders(groupId0);
+		assertEquals(3, headers.size());
+		GroupMessageHeader header = null;
+		for (GroupMessageHeader h : headers) {
+			if (!(h instanceof JoinMessageHeader)) header = h;
+		}
+		assertNotNull(header);
+		assertTrue(header.hasText());
+		assertEquals(singletonList(file), header.getFileHeaders());
+		GroupFileHeader received = header.getFileHeaders().get(0);
+		assertEquals("report.pdf", received.getName());
+		assertEquals("application/pdf", received.getContentType());
+		assertEquals(fileBytes.length, received.getSize());
+
+		// the file is now complete and reads back byte for byte
+		GroupFileStatus complete = groupManager1.getFileStatus(received);
+		assertTrue(complete.isComplete());
+		assertEquals(4, complete.getChunksReceived());
+		assertArrayEquals(fileBytes, readFully(groupManager1.getFile(received)));
+		// only the post counts as a message
+		assertEquals(3, groupManager1.getGroupCount(groupId0).getMsgCount());
+	}
+
+	@Test
+	public void testChunkedImageReferencedAsAttachment() throws Exception {
+		addGroup();
+
+		// A large image is stored as a chunked file, but the post references
+		// it like a plain attachment, by the manifest's message ID
+		byte[] imageBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 2 + 100);
+		long time = c0.getClock().currentTimeMillis();
+		GroupFileHeader file = groupManager0.addLocalFile(groupId0, time,
+				"image.jpg", "image/jpeg", new ByteArrayInputStream(imageBytes));
+		assertEquals(3, file.getChunkCount());
+		AttachmentHeader attachment = new AttachmentHeader(groupId0,
+				file.getManifestId(), "image/jpeg");
+		// The attachment reader reassembles the image from its chunks
+		Attachment a0 = c0.getAttachmentReader().getAttachment(attachment);
+		assertArrayEquals(imageBytes, readFully(a0.getStream()));
+
+		MessageId previousMsgId = groupManager0.getPreviousMsgId(groupId0);
+		GroupMessage msg = groupMessageFactory.createGroupMessage(groupId0,
+				time + 100, null, author0, null, singletonList(attachment),
+				previousMsgId);
+		groupManager0.addLocalMessage(msg);
+
+		// Adding the post shared the manifest and its chunks as well as the
+		// post itself: manifest, three chunks, post
+		sync0To1(5, true);
+
+		GroupMessageHeader header = null;
+		for (GroupMessageHeader h : groupManager1.getHeaders(groupId0)) {
+			if (!(h instanceof JoinMessageHeader)) header = h;
+		}
+		assertNotNull(header);
+		assertEquals(singletonList(attachment), header.getAttachmentHeaders());
+		assertTrue(header.getFileHeaders().isEmpty());
+		// The receiver reads it through the attachment reader too
+		Attachment a1 = c1.getAttachmentReader().getAttachment(attachment);
+		assertArrayEquals(imageBytes, readFully(a1.getStream()));
+	}
+
+	@Test(expected = FileTooBigException.class)
+	public void testRejectsFileThatIsTooBig() throws Exception {
+		addGroup();
+		byte[] tooBig = new byte[(int) MAX_GROUP_FILE_SIZE + 1];
+		groupManager0.addLocalFile(groupId0, c0.getClock().currentTimeMillis(),
+				"big.bin", "application/octet-stream",
+				new ByteArrayInputStream(tooBig));
+	}
+
+	private List<MessageId> getChunkIds(ClientHelper clientHelper,
+			GroupFileHeader file) throws Exception {
+		BdfDictionary meta = db0.transactionWithResult(true, txn ->
+				clientHelper.getMessageMetadataAsDictionary(txn,
+						file.getManifestId()));
+		BdfList list = meta.getList(KEY_FILE_CHUNK_IDS);
+		List<MessageId> ids = new ArrayList<>();
+		for (int i = 0; i < list.size(); i++) {
+			ids.add(new MessageId(list.getRaw(i)));
+		}
+		return ids;
 	}
 
 

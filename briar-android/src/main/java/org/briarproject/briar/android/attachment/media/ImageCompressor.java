@@ -27,6 +27,17 @@ public interface ImageCompressor {
 			throws IOException;
 
 	/**
+	 * Load an image from {@code is}, compress it and return an InputStream
+	 * from which the resulting image can be read. The image will be scaled
+	 * down so that neither dimension exceeds {@code maxDimension} and
+	 * compressed as a JPEG image such that it fits into {@code maxBytes}.
+	 * This is used for images that are stored in chunks, where the limit is
+	 * much larger than a single message.
+	 */
+	InputStream compressImage(InputStream is, String contentType,
+			long maxBytes, int maxDimension) throws IOException;
+
+	/**
 	 * Compress an image and return an InputStream from which the resulting
 	 * image can be read. The image will be compressed as a JPEG image such that
 	 * it fits into a message.

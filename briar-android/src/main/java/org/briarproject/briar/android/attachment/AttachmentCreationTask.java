@@ -1,6 +1,7 @@
 package org.briarproject.briar.android.attachment;
 
 import android.content.ContentResolver;
+import android.content.res.AssetFileDescriptor;
 import android.net.Uri;
 
 import org.briarproject.bramble.api.db.DbException;
@@ -17,6 +18,7 @@ import java.util.logging.Logger;
 
 import androidx.annotation.Nullable;
 
+import static android.content.res.AssetFileDescriptor.UNKNOWN_LENGTH;
 import static java.util.Arrays.asList;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
@@ -26,12 +28,20 @@ import static org.briarproject.bramble.util.LogUtils.logDuration;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.LogUtils.now;
 import static org.briarproject.briar.android.attachment.media.ImageCompressor.MIME_TYPE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZE;
 
 @NotNullByDefault
 class AttachmentCreationTask {
 
 	private static final Logger LOG =
 			getLogger(AttachmentCreationTask.class.getName());
+
+	/**
+	 * The longest side of an image that has to be compressed to fit into a
+	 * chunked attachment. Much larger than for single-message images, as the
+	 * size limit is much larger too.
+	 */
+	private static final int MAX_CHUNKED_IMAGE_DIMENSION = 4096;
 
 	private final AttachmentStore attachmentStore;
 	private final ContentResolver contentResolver;
@@ -91,6 +101,24 @@ class AttachmentCreationTask {
 		}
 	}
 
+	/**
+	 * Returns the size of the content at the given URI in bytes, or
+	 * {@link Long#MAX_VALUE} if the size is unknown, so that an image of
+	 * unknown size is compressed rather than risking a failed store.
+	 */
+	@IoExecutor
+	private long getSize(Uri uri) {
+		try (AssetFileDescriptor fd =
+				contentResolver.openAssetFileDescriptor(uri, "r")) {
+			if (fd == null) return Long.MAX_VALUE;
+			long length = fd.getLength();
+			return length == UNKNOWN_LENGTH ? Long.MAX_VALUE : length;
+		} catch (IOException | SecurityException e) {
+			logException(LOG, WARNING, e);
+			return Long.MAX_VALUE;
+		}
+	}
+
 	@IoExecutor
 	private AttachmentHeader storeAttachment(Uri uri)
 			throws IOException, DbException {
@@ -107,10 +135,24 @@ class AttachmentCreationTask {
 		} catch (SecurityException e) {
 			throw new IOException(e);
 		}
-		is = imageCompressor.compressImage(is, contentType);
+		String storedType = contentType;
+		long maxSize = attachmentStore.getMaxAttachmentSize();
+		if (maxSize <= MAX_IMAGE_SIZE) {
+			// The store keeps each image in a single message, so compress
+			// the image to fit into one
+			is = imageCompressor.compressImage(is, contentType);
+			storedType = MIME_TYPE;
+		} else if (getSize(uri) > maxSize) {
+			// The store chunks large images, but this one is over its limit,
+			// so compress it just enough to fit. Keep more detail than for
+			// single-message images, since there's far more room.
+			is = imageCompressor.compressImage(is, contentType, maxSize,
+					MAX_CHUNKED_IMAGE_DIMENSION);
+			storedType = MIME_TYPE;
+		}
 		long timestamp = System.currentTimeMillis();
 		AttachmentHeader h = attachmentStore.addLocalAttachment(groupId,
-				timestamp, MIME_TYPE, is);
+				timestamp, storedType, is);
 		tryToClose(is, LOG, WARNING);
 		logDuration(LOG, "Storing attachment", start);
 		return h;
