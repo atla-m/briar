@@ -5,6 +5,8 @@ import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
+import org.briarproject.briar.api.attachment.Attachment;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.briar.api.privategroup.GroupMember;
 import org.briarproject.briar.api.privategroup.GroupMessage;
@@ -18,8 +20,13 @@ import org.briarproject.briar.test.DaggerBriarIntegrationTestComponent;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.util.Collection;
 
+import static java.util.Collections.singletonList;
+import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.briar.api.identity.AuthorInfo.Status.VERIFIED;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
@@ -29,6 +36,7 @@ import static org.briarproject.briar.api.privategroup.Visibility.REVEALED_BY_CON
 import static org.briarproject.briar.api.privategroup.Visibility.REVEALED_BY_US;
 import static org.briarproject.briar.api.privategroup.Visibility.VISIBLE;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -444,6 +452,69 @@ public class PrivateGroupManagerIntegrationTest
 		// group is dissolved now
 		assertTrue(groupManager1.isDissolved(groupId0));
 	}
+
+	@Test
+	public void testSendingPostWithAttachment() throws Exception {
+		addGroup();
+
+		// author0 stores an attachment, which isn't shared yet
+		byte[] imageBytes = getRandomBytes(1234);
+		String contentType = "image/jpeg";
+		long time = c0.getClock().currentTimeMillis();
+		AttachmentHeader attachment = groupManager0.addLocalAttachment(
+				groupId0, time, contentType,
+				new ByteArrayInputStream(imageBytes));
+		assertEquals(groupId0, attachment.getGroupId());
+		assertEquals(contentType, attachment.getContentType());
+		// the attachment can be read locally, without the descriptor
+		Attachment a0 = c0.getAttachmentReader().getAttachment(attachment);
+		assertArrayEquals(imageBytes, readFully(a0.getStream()));
+		// the attachment isn't a message in its own right
+		assertEquals(2, groupManager0.getHeaders(groupId0).size());
+
+		// author0 posts a message without text that references the attachment
+		MessageId previousMsgId = groupManager0.getPreviousMsgId(groupId0);
+		GroupMessage msg = groupMessageFactory.createGroupMessage(groupId0,
+				time, null, author0, null, singletonList(attachment),
+				previousMsgId);
+		assertFalse(msg.hasText());
+		GroupMessageHeader localHeader = groupManager0.addLocalMessage(msg);
+		assertFalse(localHeader.hasText());
+		assertEquals(singletonList(attachment),
+				localHeader.getAttachmentHeaders());
+		assertEquals(3, groupManager0.getHeaders(groupId0).size());
+
+		// sync the post and the attachment
+		sync0To1(2, true);
+
+		// the post arrived with its attachment header
+		Collection<GroupMessageHeader> headers =
+				groupManager1.getHeaders(groupId0);
+		assertEquals(3, headers.size());
+		GroupMessageHeader header = null;
+		for (GroupMessageHeader h : headers) {
+			if (!(h instanceof JoinMessageHeader)) header = h;
+		}
+		assertNotNull(header);
+		assertFalse(header.hasText());
+		assertEquals(singletonList(attachment), header.getAttachmentHeaders());
+		assertEquals("", groupManager1.getMessageText(header.getId()));
+		// the attachment can be read on the receiving side
+		Attachment a1 = c1.getAttachmentReader()
+				.getAttachment(header.getAttachmentHeaders().get(0));
+		assertArrayEquals(imageBytes, readFully(a1.getStream()));
+		// the attachment doesn't count as a message
+		GroupCount count = groupManager1.getGroupCount(groupId0);
+		assertEquals(3, count.getMsgCount());
+		assertEquals(time, count.getLatestMsgTime());
+	}
+
+	private byte[] readFully(InputStream in) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		copyAndClose(in, out);
+		return out.toByteArray();
+	}
+
 
 	private void addGroup() throws Exception {
 		// author0 joins privateGroup0

@@ -1,6 +1,7 @@
 package org.briarproject.briar.android.privategroup.conversation;
 
 import android.app.Application;
+import android.net.Uri;
 
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.crypto.CryptoExecutor;
@@ -18,9 +19,18 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.AndroidExecutor;
 import org.briarproject.bramble.api.system.Clock;
+import org.briarproject.briar.android.attachment.AttachmentCreator;
+import org.briarproject.briar.android.attachment.AttachmentCreatorFactory;
+import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.attachment.AttachmentManager;
+import org.briarproject.briar.android.attachment.AttachmentResult;
+import org.briarproject.briar.android.attachment.AttachmentRetriever;
+import org.briarproject.briar.android.attachment.GroupAttachmentStore;
 import org.briarproject.briar.android.sharing.SharingController;
 import org.briarproject.briar.android.threaded.ThreadListViewModel;
+import org.briarproject.briar.android.viewmodel.LiveResult;
 import org.briarproject.briar.api.android.AndroidNotificationManager;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.briar.api.privategroup.GroupMember;
@@ -31,6 +41,7 @@ import org.briarproject.briar.api.privategroup.JoinMessageHeader;
 import org.briarproject.briar.api.privategroup.PrivateGroup;
 import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 import org.briarproject.briar.api.privategroup.event.ContactRelationshipRevealedEvent;
+import org.briarproject.briar.api.privategroup.event.GroupAttachmentReceivedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupDissolvedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupInvitationResponseReceivedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupMessageAddedEvent;
@@ -47,22 +58,37 @@ import java.util.logging.Logger;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 
+import androidx.annotation.UiThread;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
+import androidx.lifecycle.Observer;
 
 import static java.lang.Math.max;
+import static java.util.Collections.emptyList;
+import static java.util.Objects.requireNonNull;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logDuration;
 import static org.briarproject.bramble.util.LogUtils.now;
 
 @MethodsNotNullByDefault
 @ParametersNotNullByDefault
-class GroupViewModel extends ThreadListViewModel<GroupMessageItem> {
+class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
+		implements AttachmentManager {
 
 	private static final Logger LOG = getLogger(GroupViewModel.class.getName());
 
 	private final PrivateGroupManager privateGroupManager;
 	private final GroupMessageFactory groupMessageFactory;
+	private final AttachmentRetriever attachmentRetriever;
+	private final AttachmentCreator attachmentCreator;
+
+	// The ID of a post whose attachments have changed state, so the list
+	// can redraw that post
+	private final MutableLiveData<MessageId> attachmentUpdated =
+			new MutableLiveData<>();
+	// UiThread
+	private final List<AttachmentSubscription> attachmentSubscriptions =
+			new ArrayList<>();
 
 	private final MutableLiveData<PrivateGroup> privateGroup =
 			new MutableLiveData<>();
@@ -84,12 +110,24 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem> {
 			Clock clock,
 			MessageTracker messageTracker,
 			PrivateGroupManager privateGroupManager,
-			GroupMessageFactory groupMessageFactory) {
+			GroupMessageFactory groupMessageFactory,
+			AttachmentRetriever attachmentRetriever,
+			AttachmentCreatorFactory attachmentCreatorFactory) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
 				identityManager, notificationManager, sharingController,
 				cryptoExecutor, clock, messageTracker, eventBus);
 		this.privateGroupManager = privateGroupManager;
 		this.groupMessageFactory = groupMessageFactory;
+		this.attachmentRetriever = attachmentRetriever;
+		this.attachmentCreator = attachmentCreatorFactory
+				.create(new GroupAttachmentStore(privateGroupManager));
+	}
+
+	@Override
+	protected void onCleared() {
+		super.onCleared();
+		attachmentCreator.cancel(); // also deletes unsent attachments
+		clearAttachmentSubscriptions();
 	}
 
 	@Override
@@ -126,6 +164,13 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem> {
 			GroupDissolvedEvent g = (GroupDissolvedEvent) e;
 			if (g.getGroupId().equals(groupId)) {
 				isDissolved.setValue(true);
+			}
+		} else if (e instanceof GroupAttachmentReceivedEvent) {
+			GroupAttachmentReceivedEvent a = (GroupAttachmentReceivedEvent) e;
+			if (a.getGroupId().equals(groupId)) {
+				LOG.info("Group attachment received");
+				runOnDbThread(() -> attachmentRetriever
+						.loadAttachmentItem(a.getMessageId()));
 			}
 		} else {
 			super.eventOccurred(e);
@@ -199,6 +244,18 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem> {
 	@Override
 	public void createAndStoreMessage(String text,
 			@Nullable MessageId parentId) {
+		createAndStoreMessage(text, emptyList(), parentId);
+	}
+
+	/**
+	 * Creates and stores a post with optional text and attachments. The
+	 * attachments must have been stored via {@link #storeAttachments}.
+	 */
+	void createAndStoreMessage(@Nullable String text,
+			List<AttachmentHeader> attachmentHeaders,
+			@Nullable MessageId parentId) {
+		if (text == null && attachmentHeaders.isEmpty())
+			throw new IllegalArgumentException();
 		runOnDbThread(() -> {
 			try {
 				LocalAuthor author = identityManager.getLocalAuthor();
@@ -207,21 +264,24 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem> {
 				GroupCount count = privateGroupManager.getGroupCount(groupId);
 				long timestamp = count.getLatestMsgTime();
 				timestamp = max(clock.currentTimeMillis(), timestamp + 1);
-				createMessage(text, timestamp, parentId, author, previousMsgId);
+				createMessage(text, attachmentHeaders, timestamp, parentId,
+						author, previousMsgId);
 			} catch (DbException e) {
 				handleException(e);
 			}
 		});
 	}
 
-	private void createMessage(String text, long timestamp,
+	private void createMessage(@Nullable String text,
+			List<AttachmentHeader> attachmentHeaders, long timestamp,
 			@Nullable MessageId parentId, LocalAuthor author,
 			MessageId previousMsgId) {
 		cryptoExecutor.execute(() -> {
 			LOG.info("Creating group message...");
 			GroupMessage msg = groupMessageFactory.createGroupMessage(groupId,
-					timestamp, parentId, author, text, previousMsgId);
-			storePost(msg, text);
+					timestamp, parentId, author, text, attachmentHeaders,
+					previousMsgId);
+			storePost(msg, text == null ? "" : text);
 		});
 	}
 
@@ -231,10 +291,111 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem> {
 			GroupMessageHeader header =
 					privateGroupManager.addLocalMessage(txn, msg);
 			logDuration(LOG, "Storing group message", start);
-			txn.attach(() ->
-					addItem(buildItem(header, text), true)
-			);
+			txn.attach(() -> {
+				// The attachments have been marked as sent, forget them
+				if (!header.getAttachmentHeaders().isEmpty())
+					attachmentCreator.onAttachmentsSent(header.getId());
+				addItem(buildItem(header, text), true);
+			});
 		}, this::handleException);
+	}
+
+	// Attachment loading. Attachments may arrive before or after the post
+	// that references them, so each post's attachment items are observed
+	// and the list is told to redraw the post when one changes state.
+
+	@Override
+	@UiThread
+	protected void setItems(LiveResult<List<GroupMessageItem>> items) {
+		clearAttachmentSubscriptions();
+		List<GroupMessageItem> list = items.getResultOrNull();
+		if (list != null) {
+			for (GroupMessageItem item : list) loadAttachments(item);
+		}
+		super.setItems(items);
+	}
+
+	@Override
+	@UiThread
+	protected void addItem(GroupMessageItem item, boolean scrollToItem) {
+		loadAttachments(item);
+		super.addItem(item, scrollToItem);
+	}
+
+	@UiThread
+	private void loadAttachments(GroupMessageItem item) {
+		List<AttachmentHeader> headers = item.getAttachmentHeaders();
+		if (headers.isEmpty()) return;
+		List<LiveData<AttachmentItem>> liveDataList =
+				attachmentRetriever.getAttachmentItems(headers);
+		List<AttachmentItem> attachments = new ArrayList<>(headers.size());
+		for (LiveData<AttachmentItem> liveData : liveDataList) {
+			attachments.add(requireNonNull(liveData.getValue()));
+			AttachmentSubscription s =
+					new AttachmentSubscription(item, liveData);
+			attachmentSubscriptions.add(s);
+			liveData.observeForever(s);
+		}
+		item.setAttachments(attachments);
+	}
+
+	@UiThread
+	private void clearAttachmentSubscriptions() {
+		for (AttachmentSubscription s : attachmentSubscriptions) s.remove();
+		attachmentSubscriptions.clear();
+	}
+
+	private class AttachmentSubscription implements Observer<AttachmentItem> {
+
+		private final GroupMessageItem item;
+		private final LiveData<AttachmentItem> liveData;
+
+		private AttachmentSubscription(GroupMessageItem item,
+				LiveData<AttachmentItem> liveData) {
+			this.item = item;
+			this.liveData = liveData;
+		}
+
+		@Override
+		public void onChanged(AttachmentItem attachment) {
+			if (item.updateAttachments(attachment)) {
+				attachmentUpdated.setValue(item.getId());
+			}
+			// Once the attachment is loaded (or failed), stop observing
+			if (attachment.getState().isFinal()) remove();
+		}
+
+		private void remove() {
+			liveData.removeObserver(this);
+		}
+	}
+
+	LiveData<MessageId> getAttachmentUpdated() {
+		return attachmentUpdated;
+	}
+
+	// AttachmentManager, used by the text input's attachment controller
+
+	@Override
+	public LiveData<AttachmentResult> storeAttachments(Collection<Uri> uris,
+			boolean restart) {
+		if (restart) {
+			// The activity was recreated, the attachments are already
+			// being created by the existing task
+			return attachmentCreator.getLiveAttachments();
+		}
+		return attachmentCreator
+				.storeAttachments(new MutableLiveData<>(groupId), uris);
+	}
+
+	@Override
+	public List<AttachmentHeader> getAttachmentHeadersForSending() {
+		return attachmentCreator.getAttachmentHeadersForSending();
+	}
+
+	@Override
+	public void cancel() {
+		attachmentCreator.cancel();
 	}
 
 	@Override

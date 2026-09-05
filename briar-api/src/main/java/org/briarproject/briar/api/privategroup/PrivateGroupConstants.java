@@ -24,4 +24,9 @@ public interface PrivateGroupConstants {
 	 */
 	int MAX_GROUP_INVITATION_TEXT_LENGTH = MAX_MESSAGE_BODY_LENGTH - 1024;
 
+	/**
+	 * The maximum number of attachments per group post.
+	 */
+	int MAX_GROUP_POST_ATTACHMENTS = 10;
+
 }

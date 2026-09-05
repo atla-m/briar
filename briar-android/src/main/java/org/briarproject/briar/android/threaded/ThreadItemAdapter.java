@@ -61,7 +61,7 @@ public class ThreadItemAdapter<I extends ThreadItem>
 		ui.bind(item, listener);
 	}
 
-	int findItemPosition(MessageId id) {
+	public int findItemPosition(MessageId id) {
 		for (int i = 0; i < getItemCount(); i++) {
 			if (id.equals(getItem(i).getId())) return i;
 		}

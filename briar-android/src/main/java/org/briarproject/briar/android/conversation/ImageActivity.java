@@ -57,11 +57,11 @@ import static org.briarproject.briar.android.util.UiUtils.getDialogIcon;
 public class ImageActivity extends BriarActivity
 		implements PullDownLayout.Callback, OnGlobalLayoutListener {
 
-	final static String ATTACHMENTS = "attachments";
-	final static String ATTACHMENT_POSITION = "position";
-	final static String NAME = "name";
-	final static String DATE = "date";
-	final static String ITEM_ID = "itemId";
+	public final static String ATTACHMENTS = "attachments";
+	public final static String ATTACHMENT_POSITION = "position";
+	public final static String NAME = "name";
+	public final static String DATE = "date";
+	public final static String ITEM_ID = "itemId";
 
 	private final static int UI_FLAGS_DEFAULT =
 			SYSTEM_UI_FLAG_LAYOUT_STABLE | SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
