@@ -217,7 +217,7 @@ public abstract class ThreadListActivity<I extends ThreadItem, A extends ThreadI
 		}
 	}
 
-	private void scrollToItemAtTop(MessageId messageId) {
+	protected void scrollToItemAtTop(MessageId messageId) {
 		int position = adapter.findItemPosition(messageId);
 		if (position != NO_POSITION) {
 			layoutManager.scrollToPositionWithOffset(position, 0);

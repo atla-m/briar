@@ -380,6 +380,7 @@
 	<string name="groups_create_group_button">Create Group</string>
 	<string name="groups_create_group_invitation_button">Send Invitation</string>
 	<string name="groups_create_group_hint">Choose a name for your private group</string>
+	<string name="groups_quote_photo">Photo</string>
 	<string name="groups_invitation_sent">Group invitation has been sent</string>
 	<string name="groups_member_list">Member List</string>
 	<string name="groups_invite_members">Invite Members</string>

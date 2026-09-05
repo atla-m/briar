@@ -1,38 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- A join notice shown as a small centred system message -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
 	xmlns:app="http://schemas.android.com/apk/res-auto"
 	xmlns:tools="http://schemas.android.com/tools"
 	android:id="@+id/layout"
 	android:layout_width="match_parent"
 	android:layout_height="wrap_content"
-	android:background="@drawable/list_item_thread_background">
-
-	<View
-		android:id="@+id/divider"
-		style="@style/Divider.ThreadItem"
-		app:layout_constraintLeft_toLeftOf="parent"
-		app:layout_constraintTop_toTopOf="parent" />
+	android:background="@drawable/list_item_thread_background"
+	android:paddingTop="@dimen/margin_small"
+	android:paddingBottom="@dimen/margin_small">
 
 	<org.briarproject.briar.android.view.AuthorView
 		android:id="@+id/author"
-		android:layout_width="0dp"
+		android:layout_width="wrap_content"
 		android:layout_height="wrap_content"
-		android:layout_margin="@dimen/margin_medium"
-		app:layout_constraintEnd_toEndOf="parent"
+		android:visibility="gone"
 		app:layout_constraintStart_toStartOf="parent"
-		app:layout_constraintTop_toBottomOf="@+id/divider"
+		app:layout_constraintTop_toTopOf="parent"
 		app:persona="commenter" />
 
 	<com.vanniktech.emoji.EmojiTextView
 		android:id="@+id/text"
-		android:layout_width="match_parent"
+		android:layout_width="wrap_content"
 		android:layout_height="wrap_content"
-		android:padding="@dimen/margin_medium"
+		android:background="@drawable/group_quote_background"
+		android:paddingStart="@dimen/margin_medium"
+		android:paddingLeft="@dimen/margin_medium"
+		android:paddingTop="@dimen/margin_small"
+		android:paddingEnd="@dimen/margin_medium"
+		android:paddingRight="@dimen/margin_medium"
+		android:paddingBottom="@dimen/margin_small"
 		android:textColor="?android:attr/textColorSecondary"
-		android:textSize="@dimen/text_size_medium"
-		android:textStyle="italic"
+		android:textSize="@dimen/text_size_small"
+		app:layout_constraintEnd_toEndOf="parent"
 		app:layout_constraintStart_toStartOf="parent"
-		app:layout_constraintTop_toBottomOf="@id/author"
+		app:layout_constraintTop_toTopOf="parent"
 		tools:text="@string/groups_member_joined" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

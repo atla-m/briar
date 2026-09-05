@@ -88,7 +88,7 @@ class GroupMessageItem extends ThreadItem {
 
 	@LayoutRes
 	public int getLayout() {
-		return R.layout.list_item_thread;
+		return R.layout.list_item_group_post;
 	}
 
 }
