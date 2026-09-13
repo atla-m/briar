@@ -8,6 +8,7 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.threaded.BaseThreadItemViewHolder;
 import org.briarproject.briar.android.threaded.ThreadItemAdapter;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import javax.annotation.Nullable;
@@ -22,18 +23,24 @@ class GroupMessageAdapter extends ThreadItemAdapter<GroupMessageItem>
 
 	private final GroupImageAdapter.Listener imageListener;
 	private final QuoteListener quoteListener;
+	private final FileListener fileListener;
 
 	private boolean isCreator = false;
 	interface QuoteListener {
 		void onQuoteClick(MessageId parentId);
 	}
 
+	interface FileListener {
+		void onFileClick(GroupMessageItem item, FileHeader header);
+	}
+
 	GroupMessageAdapter(ThreadItemListener<GroupMessageItem> listener,
 			GroupImageAdapter.Listener imageListener,
-			QuoteListener quoteListener) {
+			QuoteListener quoteListener, FileListener fileListener) {
 		super(listener);
 		this.imageListener = imageListener;
 		this.quoteListener = quoteListener;
+		this.fileListener = fileListener;
 	}
 
 	@LayoutRes
@@ -66,6 +73,11 @@ class GroupMessageAdapter extends ThreadItemAdapter<GroupMessageItem>
 	@Override
 	public void onQuoteClick(MessageId parentId) {
 		quoteListener.onQuoteClick(parentId);
+	}
+
+	@Override
+	public void onFileClick(GroupMessageItem item, FileHeader header) {
+		fileListener.onFileClick(item, header);
 	}
 
 	@Override

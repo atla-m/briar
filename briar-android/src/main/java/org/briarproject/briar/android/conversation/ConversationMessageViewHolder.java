@@ -2,10 +2,13 @@ package org.briarproject.briar.android.conversation;
 
 import android.content.res.ColorStateList;
 import android.view.View;
+import android.view.View;
 import android.view.ViewGroup;
+import android.widget.LinearLayout;
 
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.attachment.FileRowBinder;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import androidx.annotation.UiThread;
@@ -13,6 +16,8 @@ import androidx.constraintlayout.widget.ConstraintSet;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.recyclerview.widget.RecyclerView.RecycledViewPool;
 
+import static android.view.View.GONE;
+import static android.view.View.VISIBLE;
 import static androidx.constraintlayout.widget.ConstraintSet.WRAP_CONTENT;
 import static androidx.core.content.ContextCompat.getColor;
 import static androidx.core.widget.ImageViewCompat.setImageTintList;
@@ -23,6 +28,8 @@ class ConversationMessageViewHolder extends ConversationItemViewHolder {
 
 	private final ImageAdapter adapter;
 	private final ViewGroup statusLayout;
+	private final LinearLayout fileList;
+	private final View textView;
 	private final int timeColor, timeColorBubble;
 	private final ConstraintSet textConstraints = new ConstraintSet();
 	private final ConstraintSet imageConstraints = new ConstraintSet();
@@ -33,6 +40,8 @@ class ConversationMessageViewHolder extends ConversationItemViewHolder {
 			ImageItemDecoration imageItemDecoration) {
 		super(v, listener, isIncoming);
 		statusLayout = v.findViewById(R.id.statusLayout);
+		fileList = v.findViewById(R.id.fileList);
+		textView = v.findViewById(R.id.text);
 
 		// image list
 		RecyclerView list = v.findViewById(R.id.imageList);
@@ -68,7 +77,9 @@ class ConversationMessageViewHolder extends ConversationItemViewHolder {
 		super.bind(conversationItem, selected);
 		ConversationMessageItem item =
 				(ConversationMessageItem) conversationItem;
-		if (item.getAttachments().isEmpty()) {
+		if (!item.getFileHeaders().isEmpty()) {
+			bindFileItem(item);
+		} else if (item.getAttachments().isEmpty()) {
 			bindTextItem();
 		} else {
 			bindImageItem(item);
@@ -79,6 +90,18 @@ class ConversationMessageViewHolder extends ConversationItemViewHolder {
 		resetStatusLayoutForText();
 		textConstraints.applyTo(layout);
 		adapter.clear();
+		fileList.setVisibility(GONE);
+		textView.setVisibility(VISIBLE);
+	}
+
+	private void bindFileItem(ConversationMessageItem item) {
+		// Files are laid out like text: rows above the optional caption
+		resetStatusLayoutForText();
+		textConstraints.applyTo(layout);
+		adapter.clear();
+		textView.setVisibility(item.getText() == null ? GONE : VISIBLE);
+		FileRowBinder.bind(fileList, item.getFileHeaders(),
+				item::getFileStatus, h -> listener.onFileClick(item, h));
 	}
 
 	private void bindImageItem(ConversationMessageItem item) {
@@ -107,6 +130,8 @@ class ConversationMessageViewHolder extends ConversationItemViewHolder {
 		}
 		constraintSet.applyTo(layout);
 		adapter.setConversationItem(item);
+		fileList.setVisibility(GONE);
+		textView.setVisibility(item.getText() == null ? GONE : VISIBLE);
 	}
 
 	private void resetStatusLayoutForText() {

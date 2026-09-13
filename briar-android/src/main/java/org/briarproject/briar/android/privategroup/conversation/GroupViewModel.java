@@ -1,7 +1,10 @@
 package org.briarproject.briar.android.privategroup.conversation;
 
 import android.app.Application;
+import android.content.ContentResolver;
+import android.database.Cursor;
 import android.net.Uri;
+import android.provider.OpenableColumns;
 
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.crypto.CryptoExecutor;
@@ -14,6 +17,7 @@ import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.identity.IdentityManager;
 import org.briarproject.bramble.api.identity.LocalAuthor;
+import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
@@ -26,14 +30,20 @@ import org.briarproject.briar.android.attachment.AttachmentManager;
 import org.briarproject.briar.android.attachment.AttachmentResult;
 import org.briarproject.briar.android.attachment.AttachmentRetriever;
 import org.briarproject.briar.android.attachment.GroupAttachmentStore;
+import org.briarproject.briar.R;
 import org.briarproject.briar.android.sharing.SharingController;
 import org.briarproject.briar.android.threaded.ThreadListViewModel;
+import org.briarproject.briar.android.viewmodel.LiveEvent;
 import org.briarproject.briar.android.viewmodel.LiveResult;
+import org.briarproject.briar.android.viewmodel.MutableLiveEvent;
 import org.briarproject.briar.api.android.AndroidNotificationManager;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.briar.api.client.MessageTree;
+import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.privategroup.GroupMember;
 import org.briarproject.briar.api.privategroup.GroupMessage;
 import org.briarproject.briar.api.privategroup.GroupMessageFactory;
@@ -51,10 +61,15 @@ import org.briarproject.briar.api.privategroup.invitation.GroupInvitationRespons
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
 
@@ -68,10 +83,17 @@ import androidx.lifecycle.Observer;
 
 import static java.lang.Math.max;
 import static java.util.Collections.emptyList;
+import static java.util.Collections.singletonList;
+import static java.util.logging.Level.WARNING;
 import static java.util.Objects.requireNonNull;
 import static java.util.logging.Logger.getLogger;
+import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.bramble.util.LogUtils.logDuration;
+import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.LogUtils.now;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 
 @MethodsNotNullByDefault
 @ParametersNotNullByDefault
@@ -84,14 +106,23 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	private final GroupMessageFactory groupMessageFactory;
 	private final AttachmentRetriever attachmentRetriever;
 	private final AttachmentCreator attachmentCreator;
+	@IoExecutor
+	private final Executor ioExecutor;
 
-	// The ID of a post whose attachments have changed state, so the list
-	// can redraw that post
+	// The ID of a post whose attachments or files have changed state, so
+	// the list can redraw that post
 	private final MutableLiveData<MessageId> attachmentUpdated =
 			new MutableLiveData<>();
 	// UiThread
 	private final List<AttachmentSubscription> attachmentSubscriptions =
 			new ArrayList<>();
+	// The posts that share files, keyed by manifest ID, so progress events
+	// for a file can be routed to its post. UiThread
+	private final Map<MessageId, GroupMessageItem> filePosts =
+			new HashMap<>();
+	// A string resource explaining why a file could not be sent
+	private final MutableLiveEvent<Integer> fileError =
+			new MutableLiveEvent<>();
 
 	private final MutableLiveData<PrivateGroup> privateGroup =
 			new MutableLiveData<>();
@@ -115,7 +146,8 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 			PrivateGroupManager privateGroupManager,
 			GroupMessageFactory groupMessageFactory,
 			AttachmentRetriever attachmentRetriever,
-			AttachmentCreatorFactory attachmentCreatorFactory) {
+			AttachmentCreatorFactory attachmentCreatorFactory,
+			@IoExecutor Executor ioExecutor) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
 				identityManager, notificationManager, sharingController,
 				cryptoExecutor, clock, messageTracker, eventBus);
@@ -124,6 +156,7 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 		this.attachmentRetriever = attachmentRetriever;
 		this.attachmentCreator = attachmentCreatorFactory
 				.create(new GroupAttachmentStore(privateGroupManager));
+		this.ioExecutor = ioExecutor;
 	}
 
 	@Override
@@ -188,12 +221,23 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 			}
 		} else if (e instanceof FileProgressEvent) {
 			FileProgressEvent p = (FileProgressEvent) e;
-			if (p.getGroupId().equals(groupId) && p.isComplete()) {
-				// A chunked image is referenced by its manifest ID and can
-				// be shown once all of its chunks have arrived
-				LOG.info("Chunked file complete");
-				runOnDbThread(() -> attachmentRetriever
-						.loadAttachmentItem(p.getManifestId()));
+			if (p.getGroupId().equals(groupId)) {
+				if (p.isComplete()) {
+					// A chunked image is referenced by its manifest ID and
+					// can be shown once all of its chunks have arrived
+					LOG.info("Chunked file complete");
+					runOnDbThread(() -> attachmentRetriever
+							.loadAttachmentItem(p.getManifestId()));
+				}
+				// If the file belongs to a post, update its progress row
+				androidExecutor.runOnUiThread(() -> {
+					GroupMessageItem item = filePosts.get(p.getManifestId());
+					if (item == null) return;
+					for (FileHeader h : item.getFileHeaders()) {
+						if (h.getManifestId().equals(p.getManifestId()))
+							loadFileStatus(item, h);
+					}
+				});
 			}
 		} else {
 			super.eventOccurred(e);
@@ -271,6 +315,101 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	}
 
 	/**
+	 * Shares the audio or video file at the given URI with the group: the
+	 * file is stored in chunks and a post referencing it is created.
+	 */
+	void sendFile(Uri uri) {
+		ioExecutor.execute(() -> {
+			ContentResolver resolver =
+					getApplication().getContentResolver();
+			String name = null;
+			long size = -1;
+			try (Cursor c = resolver.query(uri, null, null, null, null)) {
+				if (c != null && c.moveToFirst()) {
+					int nameCol = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+					if (nameCol != -1) name = c.getString(nameCol);
+					int sizeCol = c.getColumnIndex(OpenableColumns.SIZE);
+					if (sizeCol != -1 && !c.isNull(sizeCol))
+						size = c.getLong(sizeCol);
+				}
+			} catch (Exception e) {
+				logException(LOG, WARNING, e);
+			}
+			if (size > MAX_FILE_SIZE) {
+				fileError.postEvent(R.string.file_too_big);
+				return;
+			}
+			String contentType = resolver.getType(uri);
+			if (contentType == null ||
+					contentType.length() > MAX_CONTENT_TYPE_BYTES) {
+				contentType = "application/octet-stream";
+			}
+			if (name == null || name.isEmpty()) {
+				name = "file." + getExtension(contentType);
+			} else if (name.length() > MAX_FILE_NAME_LENGTH / 4) {
+				// Keep well within the byte limit, whatever the characters
+				name = name.substring(0, MAX_FILE_NAME_LENGTH / 4);
+			}
+			try (InputStream in = resolver.openInputStream(uri)) {
+				if (in == null) throw new IOException("Cannot open " + uri);
+				LocalAuthor author = identityManager.getLocalAuthor();
+				MessageId previousMsgId =
+						privateGroupManager.getPreviousMsgId(groupId);
+				GroupCount count = privateGroupManager.getGroupCount(groupId);
+				long timestamp = max(clock.currentTimeMillis(),
+						count.getLatestMsgTime() + 1);
+				// The manifest takes this timestamp and the chunks the next
+				// one, so the post that reveals the file comes after both
+				FileHeader header = privateGroupManager.addLocalFile(
+						groupId, timestamp, name, contentType, in);
+				createMessage(null, emptyList(), singletonList(header),
+						timestamp + 2, null, author, previousMsgId);
+			} catch (FileTooBigException e) {
+				fileError.postEvent(R.string.file_too_big);
+			} catch (IOException | DbException e) {
+				logException(LOG, WARNING, e);
+				fileError.postEvent(R.string.file_send_failed);
+			}
+		});
+	}
+
+	private String getExtension(String contentType) {
+		int slash = contentType.indexOf('/');
+		return slash == -1 ? "bin" : contentType.substring(slash + 1);
+	}
+
+	LiveEvent<Integer> getFileError() {
+		return fileError;
+	}
+
+	// true if there was an error, false if the file was saved
+	private final MutableLiveEvent<Boolean> saveError = new MutableLiveEvent<>();
+
+	LiveEvent<Boolean> getSaveError() {
+		return saveError;
+	}
+
+	/**
+	 * Copies a fully received file to the given location chosen by the
+	 * user.
+	 */
+	void saveFile(FileHeader header, Uri uri) {
+		ioExecutor.execute(() -> {
+			try {
+				InputStream is = privateGroupManager.getFile(header);
+				OutputStream os = getApplication().getContentResolver()
+						.openOutputStream(uri);
+				if (os == null) throw new IOException("Cannot open " + uri);
+				copyAndClose(is, os);
+				saveError.postEvent(false);
+			} catch (IOException | DbException e) {
+				logException(LOG, WARNING, e);
+				saveError.postEvent(true);
+			}
+		});
+	}
+
+	/**
 	 * Creates and stores a post with optional text and attachments. The
 	 * attachments must have been stored via {@link #storeAttachments}.
 	 */
@@ -287,8 +426,8 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 				GroupCount count = privateGroupManager.getGroupCount(groupId);
 				long timestamp = count.getLatestMsgTime();
 				timestamp = max(clock.currentTimeMillis(), timestamp + 1);
-				createMessage(text, attachmentHeaders, timestamp, parentId,
-						author, previousMsgId);
+				createMessage(text, attachmentHeaders, emptyList(), timestamp,
+						parentId, author, previousMsgId);
 			} catch (DbException e) {
 				handleException(e);
 			}
@@ -296,14 +435,15 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	}
 
 	private void createMessage(@Nullable String text,
-			List<AttachmentHeader> attachmentHeaders, long timestamp,
+			List<AttachmentHeader> attachmentHeaders,
+			List<FileHeader> fileHeaders, long timestamp,
 			@Nullable MessageId parentId, LocalAuthor author,
 			MessageId previousMsgId) {
 		cryptoExecutor.execute(() -> {
 			LOG.info("Creating group message...");
 			GroupMessage msg = groupMessageFactory.createGroupMessage(groupId,
 					timestamp, parentId, author, text, attachmentHeaders,
-					previousMsgId);
+					fileHeaders, previousMsgId);
 			storePost(msg, text == null ? "" : text);
 		});
 	}
@@ -331,9 +471,13 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	@UiThread
 	protected void setItems(LiveResult<List<GroupMessageItem>> items) {
 		clearAttachmentSubscriptions();
+		filePosts.clear();
 		List<GroupMessageItem> list = items.getResultOrNull();
 		if (list != null) {
-			for (GroupMessageItem item : list) loadAttachments(item);
+			for (GroupMessageItem item : list) {
+				loadAttachments(item);
+				loadFileStatuses(item);
+			}
 		}
 		super.setItems(items);
 	}
@@ -342,7 +486,34 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	@UiThread
 	protected void addItem(GroupMessageItem item, boolean scrollToItem) {
 		loadAttachments(item);
+		loadFileStatuses(item);
 		super.addItem(item, scrollToItem);
+	}
+
+	@UiThread
+	private void loadFileStatuses(GroupMessageItem item) {
+		for (FileHeader h : item.getFileHeaders()) {
+			filePosts.put(h.getManifestId(), item);
+			loadFileStatus(item, h);
+		}
+	}
+
+	@UiThread
+	private void loadFileStatus(GroupMessageItem item, FileHeader h) {
+		runOnDbThread(() -> {
+			try {
+				FileStatus status = privateGroupManager.getFileStatus(h);
+				androidExecutor.runOnUiThread(() -> {
+					// Only redraw if this post is still being shown
+					if (filePosts.get(h.getManifestId()) == item &&
+							item.updateFileStatus(status)) {
+						attachmentUpdated.setValue(item.getId());
+					}
+				});
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
 	}
 
 	@UiThread

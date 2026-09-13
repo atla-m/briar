@@ -11,9 +11,11 @@ import android.widget.TextView;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.android.attachment.FileRowBinder;
 import org.briarproject.briar.android.threaded.BaseThreadItemViewHolder;
 import org.briarproject.briar.android.threaded.ThreadItemAdapter.ThreadItemListener;
 import org.briarproject.briar.android.view.AuthorView;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.util.Date;
@@ -51,6 +53,11 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 		 * Called when the quoted parent of a reply is tapped.
 		 */
 		void onQuoteClick(MessageId parentId);
+
+		/**
+		 * Called when a file shared by a post is tapped.
+		 */
+		void onFileClick(GroupMessageItem item, FileHeader header);
 	}
 
 	private final LinearLayout bubble;
@@ -58,6 +65,7 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 	private final View quote, quoteBar;
 	private final TextView quoteAuthor, quoteText, time;
 	private final RecyclerView imageList;
+	private final LinearLayout fileList;
 	private final GroupImageAdapter imageAdapter;
 	private final Listener listener;
 	private final int marginTail, marginNonTail;
@@ -76,6 +84,7 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 		quoteText = v.findViewById(R.id.quoteText);
 		time = v.findViewById(R.id.time);
 		imageList = v.findViewById(R.id.imageList);
+		fileList = v.findViewById(R.id.fileList);
 		imageAdapter = new GroupImageAdapter(v.getContext(), listener);
 		imageList.setAdapter(imageAdapter);
 		marginTail = v.getResources()
@@ -119,8 +128,11 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 		} else {
 			quote.setVisibility(VISIBLE);
 			quoteAuthor.setText(parent.getAuthorName());
-			String excerpt = parent.hasText() ? parent.getText()
-					: getContext().getString(R.string.groups_quote_photo);
+			String excerpt;
+			if (parent.hasText()) excerpt = parent.getText();
+			else if (!parent.getFileHeaders().isEmpty())
+				excerpt = parent.getFileHeaders().get(0).getName();
+			else excerpt = getContext().getString(R.string.groups_quote_photo);
 			quoteText.setText(excerpt);
 			quote.setOnClickListener(v -> listener.onQuoteClick(parent.getId()));
 		}
@@ -145,12 +157,18 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 			imageList.setLayoutParams(lp);
 			imageAdapter.setMessageItem(item);
 		}
+		bindFiles(item);
 
 		// Tapping the bubble starts a reply to this post. The text view has
 		// a movement method for links, which consumes its taps, so it needs
 		// its own listener; taps on links still open the link instead.
 		bubble.setOnClickListener(v -> threadListener.onReplyClick(item));
 		textView.setOnClickListener(v -> threadListener.onReplyClick(item));
+	}
+
+	private void bindFiles(GroupMessageItem item) {
+		FileRowBinder.bind(fileList, item.getFileHeaders(), item::getFileStatus,
+				h -> listener.onFileClick(item, h));
 	}
 
 }

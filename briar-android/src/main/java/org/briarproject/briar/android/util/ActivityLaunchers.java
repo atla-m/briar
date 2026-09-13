@@ -111,6 +111,22 @@ public class ActivityLaunchers {
 		}
 	}
 
+	/**
+	 * Opens the system document picker for a single file of any type, to
+	 * share it as a chunked file.
+	 */
+	public static class OpenAnyDocumentAdvanced extends OpenDocument {
+		@NonNull
+		@Override
+		public Intent createIntent(Context context, String[] input) {
+			Intent i = super.createIntent(context, input);
+			putShowAdvancedExtra(i);
+			i.setType("*/*");
+			i.addFlags(FLAG_GRANT_READ_URI_PERMISSION);
+			return i;
+		}
+	}
+
 	public static class RequestBluetoothDiscoverable
 			extends ActivityResultContract<Integer, Boolean> {
 		@NonNull

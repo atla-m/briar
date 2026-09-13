@@ -172,6 +172,12 @@
 		</activity>
 
 		<activity
+			android:name=".android.media.MediaActivity"
+			android:configChanges="orientation|screenSize|keyboardHidden"
+			android:exported="false"
+			android:theme="@style/BriarTheme.NoActionBar" />
+
+		<activity
 			android:name="org.briarproject.briar.android.privategroup.creation.CreateGroupActivity"
 			android:exported="false"
 			android:label="@string/groups_create_group_title"

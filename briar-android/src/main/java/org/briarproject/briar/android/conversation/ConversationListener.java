@@ -3,6 +3,7 @@ package org.briarproject.briar.android.conversation;
 import android.view.View;
 
 import org.briarproject.briar.android.attachment.AttachmentItem;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import androidx.annotation.UiThread;
@@ -17,6 +18,8 @@ interface ConversationListener {
 
 	void onAttachmentClicked(View view, ConversationMessageItem messageItem,
 			AttachmentItem attachmentItem);
+
+	void onFileClick(ConversationMessageItem messageItem, FileHeader header);
 
 	void onAutoDeleteTimerNoticeClicked();
 
