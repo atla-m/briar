@@ -7,6 +7,7 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.ByteArrayInputStream;
@@ -37,7 +38,7 @@ abstract class ChunkingAttachmentStore implements AttachmentStore {
 			throws DbException;
 
 	protected abstract FileHeader addFile(GroupId groupId, long timestamp,
-			String name, String contentType, InputStream in)
+			String name, String contentType, StreamSource source)
 			throws DbException, IOException;
 
 	protected abstract FileHeader getFileHeader(GroupId groupId,
@@ -69,7 +70,7 @@ abstract class ChunkingAttachmentStore implements AttachmentStore {
 		if (!supportsFiles(groupId)) throw new FileTooBigException();
 		String name = "image." + getExtension(contentType);
 		FileHeader file = addFile(groupId, timestamp, name, contentType,
-				new ByteArrayInputStream(bytes));
+				() -> new ByteArrayInputStream(bytes));
 		return new AttachmentHeader(groupId, file.getManifestId(), contentType);
 	}
 

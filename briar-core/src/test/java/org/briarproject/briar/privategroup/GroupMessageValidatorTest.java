@@ -54,7 +54,9 @@ import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
-import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_HASHES;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CONTENT_TYPE;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_NAME;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_SIZE;
@@ -116,9 +118,9 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	private final long fileSize = FILE_CHUNK_PAYLOAD_LENGTH * 3L + 12345;
 	private final BdfList fileEntry = BdfList.of(new MessageId(getRandomId()),
 			contentType, fileName, fileSize);
-	private final BdfList chunkIds = BdfList.of(new MessageId(getRandomId()),
-			new MessageId(getRandomId()), new MessageId(getRandomId()),
-			new MessageId(getRandomId()));
+	private final BdfList chunkHashes = BdfList.of(getRandomId(),
+			getRandomId(), getRandomId(), getRandomId());
+	private final MessageId manifestId = new MessageId(getRandomId());
 
 	private final GroupMessageValidator validator =
 			new GroupMessageValidator(privateGroupFactory, clientHelper,
@@ -856,7 +858,7 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	@Test
 	public void testAcceptsFileManifest() throws Exception {
 		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
-				contentType, fileSize, chunkIds);
+				contentType, fileSize, chunkHashes);
 		BdfMessageContext messageContext =
 				validator.validateMessage(message, group, body);
 		BdfDictionary meta = messageContext.getDictionary();
@@ -867,15 +869,15 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 		assertEquals(contentType, meta.getString(KEY_FILE_CONTENT_TYPE));
 		assertEquals(contentType, meta.getString(MSG_KEY_CONTENT_TYPE));
 		assertEquals(fileSize, meta.getLong(KEY_FILE_SIZE).longValue());
-		assertEquals(chunkIds, meta.getList(KEY_FILE_CHUNK_IDS));
+		assertEquals(chunkHashes, meta.getList(KEY_FILE_CHUNK_HASHES));
 		assertEquals(Collections.emptyList(), messageContext.getDependencies());
 	}
 
 	@Test(expected = FormatException.class)
 	public void testRejectsFileManifestWithWrongChunkCount() throws Exception {
 		// The size implies four chunks, but only three are listed
-		BdfList threeIds = BdfList.of(new MessageId(getRandomId()),
-				new MessageId(getRandomId()), new MessageId(getRandomId()));
+		BdfList threeIds = BdfList.of(getRandomId(), getRandomId(),
+				getRandomId());
 		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
 				contentType, fileSize, threeIds);
 		validator.validateMessage(message, group, body);
@@ -896,14 +898,14 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	public void testRejectsFileManifestWithTooLongName() throws Exception {
 		BdfList body = BdfList.of(FILE_MANIFEST.getInt(),
 				getRandomString(MAX_FILE_NAME_LENGTH + 1), contentType,
-				fileSize, chunkIds);
+				fileSize, chunkHashes);
 		validator.validateMessage(message, group, body);
 	}
 
 	@Test(expected = FormatException.class)
 	public void testRejectsFileManifestWithTooBigSize() throws Exception {
 		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
-				contentType, MAX_FILE_SIZE + 1, chunkIds);
+				contentType, MAX_FILE_SIZE + 1, chunkHashes);
 		validator.validateMessage(message, group, body);
 	}
 
@@ -923,12 +925,14 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	public void testAcceptsFileChunk() throws Exception {
 		Message chunk = getMessage(groupId, 1000);
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK.getInt(), 3));
+		expectParseList(BdfList.of(FILE_CHUNK.getInt(), manifestId, 3));
 		// Descriptor length is zero as the test doesn't read from the
 		// counting input stream
 		BdfDictionary meta = BdfDictionary.of(
 				new BdfEntry(KEY_TYPE, FILE_CHUNK.getInt()),
 				new BdfEntry(KEY_TIMESTAMP, chunk.getTimestamp()),
+				new BdfEntry(KEY_FILE_MANIFEST_ID, manifestId.getBytes()),
+				new BdfEntry(KEY_FILE_CHUNK_INDEX, 3),
 				new BdfEntry(MSG_KEY_DESCRIPTOR_LENGTH, 0L)
 		);
 		expectEncodeMetadata(meta);
@@ -941,7 +945,16 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 		// maximum-length body exceeds the chunk payload length
 		Message chunk = getMessage(groupId, MAX_MESSAGE_BODY_LENGTH);
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK.getInt(), 0));
+		expectParseList(BdfList.of(FILE_CHUNK.getInt(), manifestId, 0));
+		validator.validateMessage(chunk, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileChunkWithTooShortManifestId() throws Exception {
+		Message chunk = getMessage(groupId, 1000);
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK.getInt(),
+				getRandomBytes(MessageId.LENGTH - 1), 3));
 		validator.validateMessage(chunk, group);
 	}
 
@@ -949,7 +962,7 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	public void testRejectsFileChunkWithoutIndex() throws Exception {
 		Message chunk = getMessage(groupId, 1000);
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK.getInt()));
+		expectParseList(BdfList.of(FILE_CHUNK.getInt(), manifestId));
 		validator.validateMessage(chunk, group);
 	}
 
@@ -957,7 +970,7 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	public void testRejectsFileChunkWithTooLongDescriptor() throws Exception {
 		Message chunk = getMessage(groupId, 1000);
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK.getInt(), 1, 2));
+		expectParseList(BdfList.of(FILE_CHUNK.getInt(), manifestId, 1, 2));
 		validator.validateMessage(chunk, group);
 	}
 
@@ -965,7 +978,7 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	public void testRejectsFileChunkWithNegativeIndex() throws Exception {
 		Message chunk = getMessage(groupId, 1000);
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK.getInt(), -1));
+		expectParseList(BdfList.of(FILE_CHUNK.getInt(), manifestId, -1));
 		validator.validateMessage(chunk, group);
 	}
 
@@ -973,7 +986,8 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	public void testRejectsFileChunkWithTooLargeIndex() throws Exception {
 		Message chunk = getMessage(groupId, 1000);
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK.getInt(), MAX_FILE_CHUNKS));
+		expectParseList(BdfList.of(FILE_CHUNK.getInt(), manifestId,
+				MAX_FILE_CHUNKS));
 		validator.validateMessage(chunk, group);
 	}
 

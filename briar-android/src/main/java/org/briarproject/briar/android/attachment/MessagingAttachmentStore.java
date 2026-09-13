@@ -7,6 +7,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -46,10 +47,10 @@ public class MessagingAttachmentStore extends ChunkingAttachmentStore {
 
 	@Override
 	protected FileHeader addFile(GroupId groupId, long timestamp, String name,
-			String contentType, InputStream in)
+			String contentType, StreamSource source)
 			throws DbException, IOException {
 		return messagingManager.addLocalFile(groupId, timestamp, name,
-				contentType, in);
+				contentType, source);
 	}
 
 	@Override

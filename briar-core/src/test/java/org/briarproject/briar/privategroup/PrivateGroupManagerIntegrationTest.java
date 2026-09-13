@@ -3,6 +3,7 @@ package org.briarproject.briar.privategroup;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.sync.GroupId;
@@ -32,6 +33,9 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map.Entry;
+import java.util.Map;
+import java.util.Arrays;
 
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
@@ -47,7 +51,8 @@ import static org.briarproject.briar.api.privategroup.Visibility.REVEALED_BY_CON
 import static org.briarproject.briar.api.privategroup.Visibility.REVEALED_BY_US;
 import static org.briarproject.briar.api.privategroup.Visibility.VISIBLE;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
-import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -537,7 +542,7 @@ public class PrivateGroupManagerIntegrationTest
 		long time = c0.getClock().currentTimeMillis();
 		FileHeader file = groupManager0.addLocalFile(groupId0, time,
 				"report.pdf", "application/pdf",
-				new ByteArrayInputStream(fileBytes));
+				() -> new ByteArrayInputStream(fileBytes));
 		assertEquals(groupId0, file.getGroupId());
 		assertEquals(fileBytes.length, file.getSize());
 		assertEquals(4, file.getChunkCount());
@@ -617,7 +622,8 @@ public class PrivateGroupManagerIntegrationTest
 		byte[] imageBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 2 + 100);
 		long time = c0.getClock().currentTimeMillis();
 		FileHeader file = groupManager0.addLocalFile(groupId0, time,
-				"image.jpg", "image/jpeg", new ByteArrayInputStream(imageBytes));
+				"image.jpg", "image/jpeg",
+				() -> new ByteArrayInputStream(imageBytes));
 		assertEquals(3, file.getChunkCount());
 		AttachmentHeader attachment = new AttachmentHeader(groupId0,
 				file.getManifestId(), "image/jpeg");
@@ -653,20 +659,24 @@ public class PrivateGroupManagerIntegrationTest
 		byte[] tooBig = new byte[(int) MAX_FILE_SIZE + 1];
 		groupManager0.addLocalFile(groupId0, c0.getClock().currentTimeMillis(),
 				"big.bin", "application/octet-stream",
-				new ByteArrayInputStream(tooBig));
+				() -> new ByteArrayInputStream(tooBig));
 	}
 
 	private List<MessageId> getChunkIds(ClientHelper clientHelper,
 			FileHeader file) throws Exception {
-		BdfDictionary meta = db0.transactionWithResult(true, txn ->
-				clientHelper.getMessageMetadataAsDictionary(txn,
-						file.getManifestId()));
-		BdfList list = meta.getList(KEY_FILE_CHUNK_IDS);
-		List<MessageId> ids = new ArrayList<>();
-		for (int i = 0; i < list.size(); i++) {
-			ids.add(new MessageId(list.getRaw(i)));
+		// Chunks name the manifest they belong to, so they're found by
+		// querying for that manifest rather than by a list in the manifest
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(KEY_FILE_MANIFEST_ID, file.getManifestId()));
+		Map<MessageId, BdfDictionary> chunks =
+				db0.transactionWithResult(true, txn -> clientHelper
+						.getMessageMetadataAsDictionary(txn,
+								file.getGroupId(), query));
+		MessageId[] byIndex = new MessageId[file.getChunkCount()];
+		for (Entry<MessageId, BdfDictionary> e : chunks.entrySet()) {
+			byIndex[e.getValue().getInt(KEY_FILE_CHUNK_INDEX)] = e.getKey();
 		}
-		return ids;
+		return Arrays.asList(byIndex);
 	}
 
 

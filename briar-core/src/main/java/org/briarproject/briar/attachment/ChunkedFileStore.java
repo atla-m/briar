@@ -1,21 +1,24 @@
 package org.briarproject.briar.attachment;
 
+import org.briarproject.bramble.api.Bytes;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.UniqueId;
 import org.briarproject.bramble.api.client.ClientHelper;
+import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.data.BdfDictionary;
-import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -23,14 +26,12 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 
-import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 import static org.briarproject.bramble.util.StringUtils.utf8IsTooLong;
@@ -47,17 +48,26 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCR
 /**
  * Stores and reads files that are too large to fit into a single sync
  * message, by splitting them into chunks that are ordinary messages of the
- * client that owns them, plus a manifest listing the chunks in order.
+ * client that owns them, plus a manifest describing the file.
  * <p>
  * Because the chunks are ordinary messages, they are transferred and (in a
  * private group) forwarded over any transport, so a file can arrive piece by
  * piece across many short encounters instead of needing one long connection.
  * <p>
  * Neither manifests nor chunks are signed. They are authenticated by
- * content-addressing: a signed or otherwise authenticated message of the
- * owning client references the manifest by message ID, the manifest lists
- * the chunk IDs, and every message ID is a hash of the message. The bytes a
- * reader assembles are therefore exactly the bytes the sender committed to.
+ * content-addressing, in two layers that bind each chunk to exactly one
+ * file. The manifest lists a hash of every chunk's position and bytes. Each
+ * chunk carries the ID of its manifest, and that ID is part of the chunk's
+ * own message ID. So a chunk belongs to one manifest and cannot be claimed
+ * by another, which is what makes deleting a file safe: only the chunks that
+ * name the deleted manifest are removed. A message of the owning client, in
+ * turn, references the manifest by its ID, so the bytes a reader assembles
+ * are exactly the bytes the sender committed to.
+ * <p>
+ * A chunk declares its manifest as a dependency, so the sync layer holds the
+ * chunk until the manifest has arrived and been delivered. The chunk is then
+ * checked against the manifest and rejected if it does not match. A chunk
+ * that has not been checked is never forwarded to other devices.
  * <p>
  * The client this store belongs to supplies the message types, metadata and
  * queries that identify its own manifests and chunks, so that two clients
@@ -83,16 +93,26 @@ public class ChunkedFileStore {
 	public static final String KEY_FILE_SIZE = "fileSize";
 
 	/**
-	 * Metadata key for the list of a manifest's chunk IDs, in order.
+	 * Metadata key for the list of a manifest's chunk hashes, in order.
+	 * Each hash covers the chunk's index and its bytes.
 	 */
-	public static final String KEY_FILE_CHUNK_IDS = "fileChunkIds";
+	public static final String KEY_FILE_CHUNK_HASHES = "fileChunkHashes";
 
 	/**
-	 * Metadata key set on a manifest once all its chunks have arrived: true
-	 * if the chunks add up to the declared file size, false if the sender
-	 * lied about the size and the file must not be read.
+	 * Metadata key for the ID of the manifest a chunk belongs to.
 	 */
-	public static final String KEY_FILE_VALID = "fileValid";
+	public static final String KEY_FILE_MANIFEST_ID = "fileManifestId";
+
+	/**
+	 * Metadata key for a chunk's index within its file.
+	 */
+	public static final String KEY_FILE_CHUNK_INDEX = "fileChunkIndex";
+
+	/**
+	 * Label for hashing a chunk's index and bytes.
+	 */
+	private static final String LABEL_CHUNK_HASH =
+			"org.briarproject.briar.attachment/CHUNK_HASH";
 
 	/**
 	 * The parts of file storage that differ between the clients that use it.
@@ -143,12 +163,14 @@ public class ChunkedFileStore {
 
 	private final DatabaseComponent db;
 	private final ClientHelper clientHelper;
+	private final CryptoComponent crypto;
 	private final Client client;
 
 	public ChunkedFileStore(DatabaseComponent db, ClientHelper clientHelper,
-			Client client) {
+			CryptoComponent crypto, Client client) {
 		this.db = db;
 		this.clientHelper = clientHelper;
+		this.crypto = crypto;
 		this.client = client;
 	}
 
@@ -161,7 +183,7 @@ public class ChunkedFileStore {
 	 */
 	public static BdfDictionary validateManifest(BdfList body)
 			throws FormatException {
-		// Message type, file name, content type, size, chunk IDs
+		// Message type, file name, content type, size, chunk hashes
 		checkSize(body, 5);
 		String name = body.getString(1);
 		checkLength(name, 1, MAX_FILE_NAME_LENGTH);
@@ -171,16 +193,15 @@ public class ChunkedFileStore {
 		if (size < 1 || size > MAX_FILE_SIZE) throw new FormatException();
 		// Every chunk except the last carries FILE_CHUNK_PAYLOAD_LENGTH
 		// bytes, so the number of chunks follows from the size
-		int expectedChunks = (int) ((size + FILE_CHUNK_PAYLOAD_LENGTH - 1)
-				/ FILE_CHUNK_PAYLOAD_LENGTH);
-		BdfList chunkIds = body.getList(4);
-		if (chunkIds.size() != expectedChunks) throw new FormatException();
-		Set<MessageId> unique = new HashSet<>();
-		for (int i = 0; i < chunkIds.size(); i++) {
-			byte[] id = chunkIds.getRaw(i);
-			checkLength(id, UniqueId.LENGTH);
-			// A chunk can't appear twice in the same file
-			if (!unique.add(new MessageId(id))) throw new FormatException();
+		BdfList hashes = body.getList(4);
+		if (hashes.size() != getChunkCount(size)) throw new FormatException();
+		Set<Bytes> unique = new HashSet<>();
+		for (int i = 0; i < hashes.size(); i++) {
+			byte[] hash = hashes.getRaw(i);
+			checkLength(hash, UniqueId.LENGTH);
+			// A hash covers its chunk's index, so the same hash can't
+			// legitimately appear at two indices
+			if (!unique.add(new Bytes(hash))) throw new FormatException();
 		}
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(KEY_FILE_NAME, name);
@@ -189,37 +210,82 @@ public class ChunkedFileStore {
 		// read through the attachment reader like a single-message attachment
 		meta.put(MSG_KEY_CONTENT_TYPE, contentType);
 		meta.put(KEY_FILE_SIZE, size);
-		meta.put(KEY_FILE_CHUNK_IDS, chunkIds);
+		meta.put(KEY_FILE_CHUNK_HASHES, hashes);
 		return meta;
 	}
 
 	/**
-	 * Checks a chunk's descriptor and payload length.
+	 * Checks a chunk's descriptor and payload length, and returns the
+	 * metadata naming the chunk's manifest and index. The caller adds its
+	 * own metadata and declares the manifest as a dependency, so that the
+	 * chunk is not delivered until the manifest is, and can then be checked
+	 * against it.
 	 */
-	public static void validateChunk(BdfList descriptor, long payloadLength)
-			throws FormatException {
-		// Message type, chunk index, followed by the chunk's bytes. The
-		// index makes chunks with identical content distinct messages.
-		checkSize(descriptor, 2);
-		int index = descriptor.getInt(1);
+	public static BdfDictionary validateChunk(BdfList descriptor,
+			long payloadLength) throws FormatException {
+		// Message type, manifest ID, chunk index, followed by the chunk's
+		// bytes. The manifest ID binds the chunk to one file; the index
+		// makes chunks with identical content distinct messages.
+		checkSize(descriptor, 3);
+		byte[] manifestId = descriptor.getRaw(1);
+		checkLength(manifestId, UniqueId.LENGTH);
+		int index = descriptor.getInt(2);
 		if (index < 0 || index >= MAX_FILE_CHUNKS) throw new FormatException();
+		// The exact length expected at this index is known only from the
+		// manifest, and is checked when the chunk is delivered
 		if (payloadLength < 1 || payloadLength > FILE_CHUNK_PAYLOAD_LENGTH)
 			throw new FormatException();
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(KEY_FILE_MANIFEST_ID, manifestId);
+		meta.put(KEY_FILE_CHUNK_INDEX, index);
+		return meta;
+	}
+
+	/**
+	 * Returns the number of chunks in a file of the given size.
+	 */
+	public static int getChunkCount(long size) {
+		return (int) ((size + FILE_CHUNK_PAYLOAD_LENGTH - 1)
+				/ FILE_CHUNK_PAYLOAD_LENGTH);
+	}
+
+	/**
+	 * Returns the number of bytes carried by the chunk at the given index
+	 * of a file of the given size.
+	 */
+	private static int getPayloadLength(long size, int index) {
+		long remaining = size - (long) index * FILE_CHUNK_PAYLOAD_LENGTH;
+		return (int) Math.min(remaining, FILE_CHUNK_PAYLOAD_LENGTH);
+	}
+
+	private byte[] hashChunk(int index, byte[] payload, int offset, int len) {
+		byte[] indexBytes = new byte[] {
+				(byte) (index >> 24), (byte) (index >> 16),
+				(byte) (index >> 8), (byte) index
+		};
+		byte[] bytes = payload;
+		if (offset != 0 || len != payload.length) {
+			bytes = Arrays.copyOfRange(payload, offset, offset + len);
+		}
+		return crypto.hash(LABEL_CHUNK_HASH, indexBytes, bytes);
 	}
 
 	// Storing a local file
 
 	/**
 	 * Splits the given file into chunks and stores them, plus a manifest
-	 * listing them, as temporary unshared messages in the given group. The
-	 * file is not sent until {@link #shareFile(Transaction, MessageId)} is
-	 * called for the manifest.
+	 * describing them, as temporary unshared messages in the given group.
+	 * The file is not sent until {@link #shareFile(Transaction, GroupId,
+	 * MessageId)} is called for the manifest.
+	 * <p>
+	 * The file is read twice: once to hash the chunks, which the manifest
+	 * lists, and again to store the chunks, which carry the manifest's ID.
 	 *
 	 * @throws FileTooBigException If the file is larger than
 	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_FILE_SIZE}
 	 */
 	public FileHeader addLocalFile(GroupId groupId, long timestamp,
-			String name, String contentType, InputStream in)
+			String name, String contentType, StreamSource source)
 			throws DbException, IOException {
 		if (name.isEmpty() || utf8IsTooLong(name, MAX_FILE_NAME_LENGTH))
 			throw new IllegalArgumentException();
@@ -227,69 +293,88 @@ public class ChunkedFileStore {
 				utf8IsTooLong(contentType, MAX_CONTENT_TYPE_BYTES)) {
 			throw new IllegalArgumentException();
 		}
-		// Read the file in chunk-sized pieces and store each chunk as a
-		// temporary, unshared message. The manifest gets the given timestamp
-		// so it's sent first. All chunks share the next timestamp, so the
-		// sync layer sends them in a random order: contacts who each receive
-		// part of the file then hold different pieces and can complete each
-		// other's copy, rather than all holding the same prefix.
-		List<MessageId> chunkIds = new ArrayList<>();
+		// First pass: hash the chunks
+		BdfList hashes = new BdfList();
 		long size = 0;
-		try {
+		try (InputStream in = source.openStream()) {
 			byte[] buf = new byte[FILE_CHUNK_PAYLOAD_LENGTH];
 			while (true) {
 				int read = readFully(in, buf);
 				if (read <= 0) break;
 				size += read;
 				if (size > MAX_FILE_SIZE) throw new FileTooBigException();
-				// The descriptor includes the chunk's index, so chunks with
-				// identical content at different positions in the file (or
-				// in different files) still have distinct message IDs
-				byte[] descriptor = clientHelper.toByteArray(
-						BdfList.of(client.getChunkType(), chunkIds.size()));
-				byte[] body = new byte[descriptor.length + read];
-				System.arraycopy(descriptor, 0, body, 0, descriptor.length);
-				System.arraycopy(buf, 0, body, descriptor.length, read);
-				long chunkTimestamp = timestamp + 1;
+				hashes.add(hashChunk(hashes.size(), buf, 0, read));
+				if (read < buf.length) break; // Last chunk
+			}
+		}
+		if (size == 0) throw new IllegalArgumentException("Empty file");
+		// Store the manifest. It gets the given timestamp so it's sent
+		// before the chunks, which is also needed for the chunks to be
+		// delivered: they depend on it.
+		BdfList body = BdfList.of(client.getManifestType(), name, contentType,
+				size, hashes);
+		Message manifest = clientHelper.createMessage(groupId, timestamp, body);
+		MessageId manifestId = manifest.getId();
+		BdfDictionary manifestMeta = client.getLocalFileMetadata(
+				client.getManifestType(), timestamp);
+		manifestMeta.put(KEY_FILE_NAME, name);
+		manifestMeta.put(KEY_FILE_CONTENT_TYPE, contentType);
+		manifestMeta.put(MSG_KEY_CONTENT_TYPE, contentType);
+		manifestMeta.put(KEY_FILE_SIZE, size);
+		manifestMeta.put(KEY_FILE_CHUNK_HASHES, hashes);
+		db.transaction(false, txn -> clientHelper.addLocalMessage(txn,
+				manifest, manifestMeta, false, true));
+		// Second pass: store the chunks. All chunks share the next
+		// timestamp, so the sync layer sends them in a random order:
+		// contacts who each receive part of the file then hold different
+		// pieces and can complete each other's copy, rather than all
+		// holding the same prefix.
+		long chunkTimestamp = timestamp + 1;
+		List<MessageId> chunkIds = new ArrayList<>();
+		try (InputStream in = source.openStream()) {
+			byte[] buf = new byte[FILE_CHUNK_PAYLOAD_LENGTH];
+			int index = 0;
+			while (true) {
+				int read = readFully(in, buf);
+				if (read <= 0) break;
+				// The file must not have changed between the two passes
+				if (index >= hashes.size() ||
+						!Arrays.equals(hashes.getRaw(index),
+								hashChunk(index, buf, 0, read))) {
+					throw new IOException("File changed while being stored");
+				}
+				byte[] descriptor = clientHelper.toByteArray(BdfList.of(
+						client.getChunkType(), manifestId, index));
+				byte[] chunkBody = new byte[descriptor.length + read];
+				System.arraycopy(descriptor, 0, chunkBody, 0,
+						descriptor.length);
+				System.arraycopy(buf, 0, chunkBody, descriptor.length, read);
 				Message m = clientHelper.createMessage(groupId, chunkTimestamp,
-						body);
+						chunkBody);
 				BdfDictionary meta = client.getLocalFileMetadata(
 						client.getChunkType(), chunkTimestamp);
 				meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptor.length);
+				meta.put(KEY_FILE_MANIFEST_ID, manifestId);
+				meta.put(KEY_FILE_CHUNK_INDEX, index);
 				db.transaction(false, txn ->
 						clientHelper.addLocalMessage(txn, m, meta, false,
 								true));
 				chunkIds.add(m.getId());
+				index++;
 				if (read < buf.length) break; // Last chunk
 			}
-			if (size == 0) throw new IllegalArgumentException("Empty file");
+			if (index != hashes.size()) {
+				throw new IOException("File changed while being stored");
+			}
 		} catch (IOException | RuntimeException e) {
-			// Don't leave orphaned chunks behind
+			// Don't leave an orphaned manifest or chunks behind
 			db.transaction(false, txn -> {
 				for (MessageId id : chunkIds) db.removeMessage(txn, id);
+				db.removeMessage(txn, manifestId);
 			});
 			throw e;
-		} finally {
-			in.close();
 		}
-		// Store the manifest
-		BdfList chunkIdList = new BdfList();
-		for (MessageId id : chunkIds) chunkIdList.add(id);
-		BdfList body = BdfList.of(client.getManifestType(), name, contentType,
-				size, chunkIdList);
-		Message manifest = clientHelper.createMessage(groupId, timestamp, body);
-		BdfDictionary meta = client.getLocalFileMetadata(
-				client.getManifestType(), timestamp);
-		meta.put(KEY_FILE_NAME, name);
-		meta.put(KEY_FILE_CONTENT_TYPE, contentType);
-		meta.put(MSG_KEY_CONTENT_TYPE, contentType);
-		meta.put(KEY_FILE_SIZE, size);
-		meta.put(KEY_FILE_CHUNK_IDS, chunkIdList);
-		meta.put(KEY_FILE_VALID, true); // We created the chunks ourselves
-		db.transaction(false, txn ->
-				clientHelper.addLocalMessage(txn, manifest, meta, false, true));
-		return new FileHeader(groupId, manifest.getId(), name, contentType,
-				size);
+		return new FileHeader(groupId, manifestId, name, contentType, size);
 	}
 
 	/**
@@ -311,7 +396,8 @@ public class ChunkedFileStore {
 	 */
 	public void removeFile(FileHeader header) throws DbException {
 		db.transaction(false, txn -> {
-			for (MessageId id : getChunkIds(txn, header.getManifestId())) {
+			for (MessageId id : getChunkIds(txn, header.getGroupId(),
+					header.getManifestId())) {
 				db.removeMessage(txn, id);
 			}
 			db.removeMessage(txn, header.getManifestId());
@@ -319,21 +405,24 @@ public class ChunkedFileStore {
 	}
 
 	/**
-	 * Deletes a received file and its chunks, for example when the message
-	 * that shared it is deleted or auto-deleted. Chunks that haven't
-	 * arrived, and a manifest that hasn't arrived, are ignored.
+	 * Deletes a file and its chunks, for example when the message that
+	 * shared it is deleted or auto-deleted. Only chunks that name the given
+	 * manifest are deleted, so a manifest written by someone else that
+	 * happens to describe the same bytes cannot be used to delete this
+	 * file. If another delivered message still references the manifest,
+	 * nothing is deleted. Chunks that haven't arrived, and a manifest that
+	 * hasn't arrived, are ignored.
 	 */
-	public void deleteFile(Transaction txn, MessageId manifestId)
+	public void deleteFile(Transaction txn, GroupId g, MessageId manifestId)
 			throws DbException {
-		List<MessageId> chunkIds;
 		try {
-			chunkIds = getChunkIds(txn, manifestId);
-		} catch (DbException e) {
-			// The manifest hasn't arrived, so we don't know its chunks.
-			// Any chunks that have arrived will be cleaned up as orphans.
-			chunkIds = new ArrayList<>();
+			if (client.isManifestReferenced(txn, g, manifestId)) return;
+		} catch (FormatException e) {
+			throw new DbException(e);
 		}
-		for (MessageId id : chunkIds) deleteIfPresent(txn, id);
+		for (MessageId id : getChunkIds(txn, g, manifestId)) {
+			deleteIfPresent(txn, id);
+		}
 		deleteIfPresent(txn, manifestId);
 	}
 
@@ -352,11 +441,11 @@ public class ChunkedFileStore {
 	 * permanent, so they are sent to contacts and not cleaned up. Called
 	 * when the message that references the file is added.
 	 */
-	public void shareFile(Transaction txn, MessageId manifestId)
+	public void shareFile(Transaction txn, GroupId g, MessageId manifestId)
 			throws DbException {
 		db.setMessageShared(txn, manifestId);
 		db.setMessagePermanent(txn, manifestId);
-		for (MessageId chunkId : getChunkIds(txn, manifestId)) {
+		for (MessageId chunkId : getChunkIds(txn, g, manifestId)) {
 			db.setMessageShared(txn, chunkId);
 			db.setMessagePermanent(txn, chunkId);
 		}
@@ -371,7 +460,7 @@ public class ChunkedFileStore {
 		try {
 			BdfDictionary meta =
 					clientHelper.getMessageMetadataAsDictionary(txn, m);
-			return meta.containsKey(KEY_FILE_CHUNK_IDS);
+			return meta.containsKey(KEY_FILE_CHUNK_HASHES);
 		} catch (NoSuchMessageException e) {
 			return false;
 		} catch (FormatException e) {
@@ -379,28 +468,62 @@ public class ChunkedFileStore {
 		}
 	}
 
+	// Looking up chunks. Chunks are found by the manifest they name and
+	// their index, which the database indexes, so no query needs to look at
+	// chunks of other files.
+
+	private BdfDictionary getChunkQuery(MessageId manifestId) {
+		BdfDictionary query = client.getChunkQuery();
+		query.put(KEY_FILE_MANIFEST_ID, manifestId);
+		return query;
+	}
+
 	/**
-	 * Returns the IDs of the given manifest's chunks, in order.
+	 * Returns the IDs of the delivered chunks that name the given manifest.
 	 */
-	public List<MessageId> getChunkIds(Transaction txn, MessageId manifestId)
-			throws DbException {
+	private Collection<MessageId> getChunkIds(Transaction txn, GroupId g,
+			MessageId manifestId) throws DbException {
 		try {
-			BdfDictionary meta = clientHelper
-					.getMessageMetadataAsDictionary(txn, manifestId);
-			return parseChunkIds(meta);
+			return clientHelper.getMessageIds(txn, g,
+					getChunkQuery(manifestId));
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
 	}
 
-	private List<MessageId> parseChunkIds(BdfDictionary manifestMeta)
-			throws FormatException {
-		BdfList list = manifestMeta.getList(KEY_FILE_CHUNK_IDS);
-		List<MessageId> ids = new ArrayList<>(list.size());
-		for (int i = 0; i < list.size(); i++) {
-			ids.add(new MessageId(list.getRaw(i)));
+	/**
+	 * Returns the ID of the delivered chunk with the given index that names
+	 * the given manifest.
+	 *
+	 * @throws NoSuchMessageException If the chunk has not arrived
+	 */
+	private MessageId getChunkId(Transaction txn, GroupId g,
+			MessageId manifestId, int index) throws DbException {
+		BdfDictionary query = getChunkQuery(manifestId);
+		query.put(KEY_FILE_CHUNK_INDEX, index);
+		try {
+			Collection<MessageId> ids =
+					clientHelper.getMessageIds(txn, g, query);
+			// Two chunks with the same manifest and index have passed the
+			// same hash check, so they hold the same bytes
+			if (ids.isEmpty()) throw new NoSuchMessageException();
+			return ids.iterator().next();
+		} catch (FormatException e) {
+			throw new DbException(e);
 		}
-		return ids;
+	}
+
+	/**
+	 * Returns how many distinct chunks of the given file have arrived.
+	 */
+	private int countChunks(Transaction txn, GroupId g, MessageId manifestId)
+			throws DbException, FormatException {
+		Set<Integer> indices = new HashSet<>();
+		for (BdfDictionary meta : clientHelper.getMessageMetadataAsDictionary(
+				txn, g, getChunkQuery(manifestId)).values()) {
+			indices.add(meta.getInt(KEY_FILE_CHUNK_INDEX));
+		}
+		return indices.size();
 	}
 
 	// Reading a file
@@ -421,7 +544,7 @@ public class ChunkedFileStore {
 				throw new NoSuchMessageException();
 			BdfDictionary meta = clientHelper
 					.getMessageMetadataAsDictionary(txn, manifestId);
-			if (!meta.containsKey(KEY_FILE_CHUNK_IDS))
+			if (!meta.containsKey(KEY_FILE_CHUNK_HASHES))
 				throw new NoSuchMessageException();
 			return new FileHeader(groupId, manifestId,
 					meta.getString(KEY_FILE_NAME),
@@ -439,34 +562,24 @@ public class ChunkedFileStore {
 	}
 
 	/**
-	 * Returns how much of the given file has been received.
+	 * Returns how much of the given file has been received. Every chunk
+	 * counted has been checked against the manifest, so a complete file is
+	 * a correct file.
 	 */
 	public FileStatus getFileStatus(Transaction txn, FileHeader header)
 			throws DbException {
 		try {
-			BdfDictionary manifestMeta;
-			try {
-				manifestMeta = clientHelper.getMessageMetadataAsDictionary(txn,
-						header.getManifestId());
-			} catch (NoSuchMessageException e) {
-				// Chunks may have arrived, but without the manifest we can't
-				// tell which of them belong to this file
-				return new FileStatus(header, false, 0);
-			}
-			List<MessageId> chunkIds = parseChunkIds(manifestMeta);
-			int received = countChunks(txn, header.getGroupId(), chunkIds);
-			if (received == header.getChunkCount()) {
-				// If all chunks are here but they don't add up to the
-				// declared size, the file is unusable. Report it as
-				// incomplete. The check is normally recorded when the last
-				// chunk arrives, but compute it here if it wasn't.
-				Boolean valid = manifestMeta.getOptionalBoolean(KEY_FILE_VALID);
-				if (valid == null) {
-					valid = chunksAddUpToSize(txn, chunkIds,
-							manifestMeta.getLong(KEY_FILE_SIZE), null, 0);
-				}
-				if (!valid) received--;
-			}
+			clientHelper.getMessageMetadataAsDictionary(txn,
+					header.getManifestId());
+		} catch (NoSuchMessageException e) {
+			// Without the manifest no chunk can have been delivered
+			return new FileStatus(header, false, 0);
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+		try {
+			int received = countChunks(txn, header.getGroupId(),
+					header.getManifestId());
 			return new FileStatus(header, true, received);
 		} catch (FormatException e) {
 			throw new DbException(e);
@@ -476,52 +589,6 @@ public class ChunkedFileStore {
 	public FileStatus getFileStatus(FileHeader header) throws DbException {
 		return db.transactionWithResult(true,
 				txn -> getFileStatus(txn, header));
-	}
-
-	/**
-	 * Returns how many of the given chunks have been received.
-	 */
-	private int countChunks(Transaction txn, GroupId g,
-			List<MessageId> chunkIds) throws DbException {
-		Set<MessageId> present = new HashSet<>(getChunkIdsInGroup(txn, g));
-		int count = 0;
-		for (MessageId id : chunkIds) if (present.contains(id)) count++;
-		return count;
-	}
-
-	private Collection<MessageId> getChunkIdsInGroup(Transaction txn, GroupId g)
-			throws DbException {
-		try {
-			return clientHelper.getMessageIds(txn, g, client.getChunkQuery());
-		} catch (FormatException e) {
-			throw new DbException(e);
-		}
-	}
-
-	/**
-	 * Returns true if the payloads of the given chunks add up to the
-	 * expected file size. The chunk that is currently being delivered, if
-	 * any, may not have its metadata stored yet, so its descriptor length is
-	 * passed in from the metadata the validator produced for it.
-	 */
-	private boolean chunksAddUpToSize(Transaction txn, List<MessageId> chunkIds,
-			long expected, @Nullable Message arriving,
-			int arrivingDescriptorLength) throws DbException, FormatException {
-		long actual = 0;
-		for (MessageId id : chunkIds) {
-			Message chunk = arriving != null && arriving.getId().equals(id)
-					? arriving : db.getMessage(txn, id);
-			int offset;
-			if (chunk == arriving) {
-				offset = arrivingDescriptorLength;
-			} else {
-				BdfDictionary chunkMeta =
-						clientHelper.getMessageMetadataAsDictionary(txn, id);
-				offset = chunkMeta.getInt(MSG_KEY_DESCRIPTOR_LENGTH);
-			}
-			actual += chunk.getBody().length - offset;
-		}
-		return actual == expected;
 	}
 
 	/**
@@ -535,12 +602,11 @@ public class ChunkedFileStore {
 	 */
 	public InputStream getFile(Transaction txn, FileHeader header)
 			throws DbException {
-		// Check that the file is complete and valid before handing out a
-		// stream, so callers don't get a truncated file
+		// Check that the file is complete before handing out a stream, so
+		// callers don't get a truncated file
 		FileStatus status = getFileStatus(txn, header);
 		if (!status.isComplete()) throw new NoSuchMessageException();
-		List<MessageId> chunkIds = getChunkIds(txn, header.getManifestId());
-		return new ChunkInputStream(header.getGroupId(), chunkIds);
+		return new ChunkInputStream(header);
 	}
 
 	public InputStream getFile(FileHeader header) throws DbException {
@@ -564,21 +630,17 @@ public class ChunkedFileStore {
 		return db.transactionWithResult(true, txn -> {
 			FileStatus status = getFileStatus(txn, header);
 			if (!status.isComplete()) throw new NoSuchMessageException();
-			List<MessageId> chunkIds = getChunkIds(txn, header.getManifestId());
-			if (index < 0 || index >= chunkIds.size())
+			if (index < 0 || index >= header.getChunkCount())
 				throw new NoSuchMessageException();
-			return loadChunkPayload(txn, header.getGroupId(),
-					chunkIds.get(index));
+			return loadChunkPayload(txn, header, index);
 		});
 	}
 
-	private byte[] loadChunkPayload(Transaction txn, GroupId groupId,
-			MessageId id) throws DbException {
+	private byte[] loadChunkPayload(Transaction txn, FileHeader header,
+			int index) throws DbException {
+		MessageId id = getChunkId(txn, header.getGroupId(),
+				header.getManifestId(), index);
 		Message m = db.getMessage(txn, id);
-		// Check the chunk belongs to this group, so a manifest can't be used
-		// to read messages from other groups
-		if (!m.getGroupId().equals(groupId))
-			throw new NoSuchMessageException();
 		try {
 			BdfDictionary meta =
 					clientHelper.getMessageMetadataAsDictionary(txn, id);
@@ -597,14 +659,12 @@ public class ChunkedFileStore {
 	 */
 	private class ChunkInputStream extends InputStream {
 
-		private final GroupId groupId;
-		private final List<MessageId> chunkIds;
+		private final FileHeader header;
 		private int next = 0;
 		private InputStream current = new ByteArrayInputStream(new byte[0]);
 
-		private ChunkInputStream(GroupId groupId, List<MessageId> chunkIds) {
-			this.groupId = groupId;
-			this.chunkIds = chunkIds;
+		private ChunkInputStream(FileHeader header) {
+			this.header = header;
 		}
 
 		@Override
@@ -619,85 +679,93 @@ public class ChunkedFileStore {
 			while (true) {
 				int read = current.read(b, off, len);
 				if (read != -1) return read;
-				if (next >= chunkIds.size()) return -1;
-				current = loadChunk(chunkIds.get(next++));
+				if (next >= header.getChunkCount()) return -1;
+				current = loadChunk(next++);
 			}
 		}
 
-		private InputStream loadChunk(MessageId id) throws IOException {
+		private InputStream loadChunk(int index) throws IOException {
 			try {
 				return db.transactionWithResult(true, txn ->
 						new ByteArrayInputStream(
-								loadChunkPayload(txn, groupId, id)));
+								loadChunkPayload(txn, header, index)));
 			} catch (DbException e) {
 				throw new IOException(e);
 			}
 		}
 	}
 
-	// Receiving files. Manifests and chunks may arrive in any order, before
-	// or after the message that references the manifest, so each of them
-	// keeps a cleanup timer until that message makes the file wanted.
+	// Receiving files. A manifest may arrive before or after the message
+	// that references it, so it keeps a cleanup timer until that message
+	// makes the file wanted. Chunks depend on their manifest, so they are
+	// delivered only after it, and are checked against it on delivery.
 
 	/**
 	 * Handles an incoming manifest. Call from the client's incoming message
-	 * hook.
+	 * hook. No chunk of the file can have been delivered yet, as chunks
+	 * depend on the manifest; they are delivered after this returns.
 	 */
 	public void incomingManifest(Transaction txn, Message m,
 			BdfDictionary meta) throws DbException, FormatException {
 		GroupId g = m.getGroupId();
-		List<MessageId> chunkIds = parseChunkIds(meta);
-		Set<MessageId> present = new HashSet<>(getChunkIdsInGroup(txn, g));
-		boolean referenced = client.isManifestReferenced(txn, g, m.getId());
-		if (referenced) {
-			// Chunks that arrived before the manifest were orphans with
-			// cleanup timers running. The file is wanted, so stop them.
-			for (MessageId id : chunkIds) {
-				if (present.contains(id)) db.stopCleanupTimer(txn, id);
-			}
-		} else {
-			// Nothing references this file yet. The manifest and the chunks
-			// that are already here are all orphans: give them a deadline,
-			// which is lifted if the referencing message arrives.
+		if (!client.isManifestReferenced(txn, g, m.getId())) {
+			// Nothing references this file yet. Give the manifest a
+			// deadline, which is lifted if the referencing message arrives.
 			startCleanupTimer(txn, m.getId());
-			for (MessageId id : chunkIds) {
-				if (present.contains(id)) startCleanupTimer(txn, id);
-			}
 		}
-		reportProgress(txn, g, m.getId(), meta, present, null, 0);
+		reportProgress(txn, g, m.getId(), meta, 0);
 	}
 
 	/**
 	 * Handles an incoming chunk. Call from the client's incoming message
-	 * hook.
+	 * hook. The chunk's manifest has been delivered, as the chunk depends
+	 * on it. The chunk is checked against the manifest: its hash must be
+	 * the one listed at its index, and its length must be the one implied
+	 * by the file size.
+	 *
+	 * @throws InvalidMessageException If the chunk does not match the
+	 * manifest, in which case the sync layer deletes it
 	 */
 	public void incomingChunk(Transaction txn, Message m, BdfDictionary meta)
-			throws DbException, FormatException {
+			throws DbException, FormatException, InvalidMessageException {
 		GroupId g = m.getGroupId();
+		MessageId manifestId = new MessageId(meta.getRaw(KEY_FILE_MANIFEST_ID));
+		int index = meta.getInt(KEY_FILE_CHUNK_INDEX);
 		int descriptorLength = meta.getInt(MSG_KEY_DESCRIPTOR_LENGTH);
-		// Find the manifests, if any, that list this chunk
-		Map<MessageId, BdfDictionary> manifests = clientHelper
-				.getMessageMetadataAsDictionary(txn, g,
-						client.getManifestQuery());
-		boolean wanted = false;
-		Set<MessageId> present = null;
-		for (Entry<MessageId, BdfDictionary> e : manifests.entrySet()) {
-			if (!parseChunkIds(e.getValue()).contains(m.getId())) continue;
-			// This chunk is wanted if any file that lists it is wanted
-			if (client.isManifestReferenced(txn, g, e.getKey())) wanted = true;
-			if (present == null) {
-				present = new HashSet<>(getChunkIdsInGroup(txn, g));
-				// This chunk isn't marked as delivered until this hook
-				// returns, so the query above doesn't include it
-				present.add(m.getId());
-			}
-			reportProgress(txn, g, e.getKey(), e.getValue(), present, m,
-					descriptorLength);
+		BdfDictionary manifestMeta;
+		try {
+			manifestMeta = clientHelper.getMessageMetadataAsDictionary(txn,
+					manifestId);
+		} catch (NoSuchMessageException e) {
+			// The dependency is delivered but isn't one of our manifests
+			throw new InvalidMessageException();
 		}
-		// If no manifest lists this chunk yet, it may arrive later; and if
-		// the only files that list it are themselves unreferenced, the chunk
-		// may never be wanted. Keep it for a while, then give up on it.
-		if (!wanted) startCleanupTimer(txn, m.getId());
+		if (!manifestMeta.containsKey(KEY_FILE_CHUNK_HASHES))
+			throw new InvalidMessageException();
+		// The manifest must be in the same group as the chunk
+		if (!db.getMessage(txn, manifestId).getGroupId().equals(g))
+			throw new InvalidMessageException();
+		BdfList hashes = manifestMeta.getList(KEY_FILE_CHUNK_HASHES);
+		long size = manifestMeta.getLong(KEY_FILE_SIZE);
+		if (index >= hashes.size()) throw new InvalidMessageException();
+		byte[] body = m.getBody();
+		int payloadLength = body.length - descriptorLength;
+		if (payloadLength != getPayloadLength(size, index))
+			throw new InvalidMessageException();
+		byte[] expected = hashes.getRaw(index);
+		byte[] actual = hashChunk(index, body, descriptorLength,
+				payloadLength);
+		if (!Arrays.equals(expected, actual))
+			throw new InvalidMessageException();
+		// The chunk is wanted if the file is. Otherwise keep it for a
+		// while in case the referencing message arrives, then give up.
+		if (!client.isManifestReferenced(txn, g, manifestId)) {
+			startCleanupTimer(txn, m.getId());
+		}
+		// This chunk isn't marked as delivered until this hook returns, so
+		// the count doesn't include it yet
+		int received = countChunks(txn, g, manifestId) + 1;
+		reportProgress(txn, g, manifestId, manifestMeta, received);
 	}
 
 	/**
@@ -710,28 +778,16 @@ public class ChunkedFileStore {
 			Collection<MessageId> manifestIds)
 			throws DbException, FormatException {
 		if (manifestIds.isEmpty()) return;
-		Collection<MessageId> presentManifests;
-		Collection<MessageId> presentChunks = null;
-		try {
-			presentManifests = clientHelper.getMessageIds(txn, g,
-					client.getManifestQuery());
-		} catch (FormatException e) {
-			throw new DbException(e);
-		}
+		Collection<MessageId> presentManifests = clientHelper.getMessageIds(
+				txn, g, client.getManifestQuery());
 		for (MessageId manifestId : manifestIds) {
 			if (!presentManifests.contains(manifestId)) continue;
 			db.stopCleanupTimer(txn, manifestId);
 			// The chunks that are already here are wanted now too. A chunk
 			// that arrives later finds a referenced manifest and isn't given
-			// a timer at all. Chunks that haven't arrived aren't in the
-			// database, so their timers can't be touched.
-			if (presentChunks == null) {
-				presentChunks = getChunkIdsInGroup(txn, g);
-			}
-			for (MessageId chunkId : getChunkIds(txn, manifestId)) {
-				if (presentChunks.contains(chunkId)) {
-					db.stopCleanupTimer(txn, chunkId);
-				}
+			// a timer at all.
+			for (MessageId chunkId : getChunkIds(txn, g, manifestId)) {
+				db.stopCleanupTimer(txn, chunkId);
 			}
 		}
 	}
@@ -743,30 +799,10 @@ public class ChunkedFileStore {
 		db.startCleanupTimer(txn, m);
 	}
 
-	/**
-	 * Broadcasts the progress of a file and, once all its chunks are here,
-	 * checks that they add up to the declared size.
-	 */
 	private void reportProgress(Transaction txn, GroupId g,
-			MessageId manifestId, BdfDictionary manifestMeta,
-			Set<MessageId> presentChunks, @Nullable Message arriving,
-			int arrivingDescriptorLength) throws DbException, FormatException {
-		List<MessageId> chunkIds = parseChunkIds(manifestMeta);
-		int received = 0;
-		for (MessageId id : chunkIds) {
-			if (presentChunks.contains(id)) received++;
-		}
-		if (received == chunkIds.size() &&
-				!manifestMeta.containsKey(KEY_FILE_VALID)) {
-			boolean valid = chunksAddUpToSize(txn, chunkIds,
-					manifestMeta.getLong(KEY_FILE_SIZE), arriving,
-					arrivingDescriptorLength);
-			BdfDictionary update = BdfDictionary.of(
-					new BdfEntry(KEY_FILE_VALID, valid));
-			clientHelper.mergeMessageMetadata(txn, manifestId, update);
-			if (!valid) received--; // Unusable, see getFileStatus
-		}
-		txn.attach(new FileProgressEvent(g, manifestId, received,
-				chunkIds.size()));
+			MessageId manifestId, BdfDictionary manifestMeta, int received)
+			throws FormatException {
+		int total = manifestMeta.getList(KEY_FILE_CHUNK_HASHES).size();
+		txn.attach(new FileProgressEvent(g, manifestId, received, total));
 	}
 }

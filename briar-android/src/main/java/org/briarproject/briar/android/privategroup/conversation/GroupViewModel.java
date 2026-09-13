@@ -42,6 +42,7 @@ import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
 import org.briarproject.briar.api.client.MessageTree;
 import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.privategroup.GroupMember;
@@ -350,8 +351,14 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 				// Keep well within the byte limit, whatever the characters
 				name = name.substring(0, MAX_FILE_NAME_LENGTH / 4);
 			}
-			try (InputStream in = resolver.openInputStream(uri)) {
+			// The file is read twice while it's stored, so the source
+			// opens a fresh stream each time it's asked
+			StreamSource source = () -> {
+				InputStream in = resolver.openInputStream(uri);
 				if (in == null) throw new IOException("Cannot open " + uri);
+				return in;
+			};
+			try {
 				LocalAuthor author = identityManager.getLocalAuthor();
 				MessageId previousMsgId =
 						privateGroupManager.getPreviousMsgId(groupId);
@@ -361,7 +368,7 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 				// The manifest takes this timestamp and the chunks the next
 				// one, so the post that reveals the file comes after both
 				FileHeader header = privateGroupManager.addLocalFile(
-						groupId, timestamp, name, contentType, in);
+						groupId, timestamp, name, contentType, source);
 				createMessage(null, emptyList(), singletonList(header),
 						timestamp + 2, null, author, previousMsgId);
 			} catch (FileTooBigException e) {

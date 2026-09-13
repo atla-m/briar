@@ -36,6 +36,7 @@ import java.util.Collection;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
+import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_SIGNATURE_LENGTH;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
@@ -44,6 +45,7 @@ import static org.briarproject.bramble.util.ValidationUtils.checkSize;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_JOIN;
 import static org.briarproject.briar.api.privategroup.GroupMessageFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.privategroup.MessageType.ATTACHMENT;
@@ -314,12 +316,12 @@ class GroupMessageValidator extends BdfMessageValidator {
 
 	private BdfMessageContext validateFileManifest(Message m, BdfList body)
 			throws FormatException {
-		// The file's name, type, size and chunk IDs are checked by the
+		// The file's name, type, size and chunk hashes are checked by the
 		// shared file store, which the messaging client uses too
 		BdfDictionary meta = ChunkedFileStore.validateManifest(body);
 		// Manifests aren't signed. They're authenticated by the signed post
 		// that references them by message ID. Return the metadata and no
-		// dependencies: the chunks may arrive before or after the manifest.
+		// dependencies: chunks depend on the manifest, not the other way.
 		meta.put(KEY_TYPE, FILE_MANIFEST.getInt());
 		meta.put(KEY_TIMESTAMP, m.getTimestamp());
 		return new BdfMessageContext(meta);
@@ -327,16 +329,19 @@ class GroupMessageValidator extends BdfMessageValidator {
 
 	private BdfMessageContext validateFileChunk(Message m, BdfList descriptor,
 			long descriptorLength) throws FormatException {
-		ChunkedFileStore.validateChunk(descriptor,
+		// The descriptor names the chunk's manifest and index, which the
+		// shared file store checks and returns as metadata
+		BdfDictionary meta = ChunkedFileStore.validateChunk(descriptor,
 				m.getBody().length - descriptorLength);
-		// Chunks aren't signed. They're authenticated by their message IDs,
-		// which are hashes of their content, listed in a manifest that a
-		// signed post references. Return the metadata and no dependencies.
-		BdfDictionary meta = new BdfDictionary();
-		meta.put(KEY_TYPE, FILE_CHUNK.getInt());
+		MessageId manifestId =
+				new MessageId(meta.getRaw(KEY_FILE_MANIFEST_ID));
 		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(KEY_TYPE, FILE_CHUNK.getInt());
 		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptorLength);
-		return new BdfMessageContext(meta);
+		// The chunk depends on its manifest, so it isn't delivered until
+		// the manifest is, and is then checked against it. A chunk that
+		// hasn't been checked is never shared with other devices.
+		return new BdfMessageContext(meta, singletonList(manifestId));
 	}
 
 	private BdfMessageContext validateAttachment(Message m, BdfList descriptor,

@@ -20,6 +20,7 @@ import org.junit.Test;
 
 import java.io.InputStream;
 
+import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
 import static org.briarproject.bramble.test.TestUtils.getClientId;
 import static org.briarproject.bramble.test.TestUtils.getGroup;
@@ -33,7 +34,9 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_CHUN
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
-import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_HASHES;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CONTENT_TYPE;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_NAME;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_SIZE;
@@ -111,9 +114,9 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	// A shared file: three full chunks and a partial one
 	private final String fileName = getRandomString(MAX_FILE_NAME_LENGTH);
 	private final long fileSize = FILE_CHUNK_PAYLOAD_LENGTH * 3L + 12345;
-	private final BdfList chunkIds = BdfList.of(
-			new MessageId(getRandomId()), new MessageId(getRandomId()),
-			new MessageId(getRandomId()), new MessageId(getRandomId()));
+	private final BdfList chunkHashes = BdfList.of(
+			getRandomId(), getRandomId(), getRandomId(), getRandomId());
+	private final MessageId manifestId = new MessageId(getRandomId());
 	private final BdfList fileHeader = BdfList.of(new MessageId(getRandomId()),
 			contentType, fileName, fileSize);
 	private final BdfDictionary fileMessageMeta = BdfDictionary.of(
@@ -129,7 +132,7 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 			new BdfEntry(KEY_FILE_CONTENT_TYPE, contentType),
 			new BdfEntry(MSG_KEY_CONTENT_TYPE, contentType),
 			new BdfEntry(KEY_FILE_SIZE, fileSize),
-			new BdfEntry(KEY_FILE_CHUNK_IDS, chunkIds),
+			new BdfEntry(KEY_FILE_CHUNK_HASHES, chunkHashes),
 			new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
 			new BdfEntry(MSG_KEY_LOCAL, false),
 			new BdfEntry(MSG_KEY_MSG_TYPE, FILE_MANIFEST)
@@ -138,6 +141,8 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 			new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
 			new BdfEntry(MSG_KEY_LOCAL, false),
 			new BdfEntry(MSG_KEY_MSG_TYPE, FILE_CHUNK),
+			new BdfEntry(KEY_FILE_MANIFEST_ID, manifestId.getBytes()),
+			new BdfEntry(KEY_FILE_CHUNK_INDEX, 3),
 			// Descriptor length is zero as the test doesn't read from the
 			// counting input stream, so the whole body counts as payload
 			new BdfEntry(MSG_KEY_DESCRIPTOR_LENGTH, 0L)
@@ -541,7 +546,7 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	public void testAcceptsFileManifest() throws Exception {
 		expectCheckTimestamp(now);
 		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
-				fileSize, chunkIds));
+				fileSize, chunkHashes));
 		expectReadEof(true);
 		expectEncodeMetadata(manifestMeta);
 
@@ -552,8 +557,8 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsFileManifestWithWrongChunkCount() throws Exception {
 		// Four chunks are needed for this size, three are listed
-		BdfList tooFew = BdfList.of(chunkIds.get(0), chunkIds.get(1),
-				chunkIds.get(2));
+		BdfList tooFew = BdfList.of(chunkHashes.get(0), chunkHashes.get(1),
+				chunkHashes.get(2));
 		expectCheckTimestamp(now);
 		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
 				fileSize, tooFew));
@@ -564,8 +569,8 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsFileManifestWithDuplicateChunk() throws Exception {
-		BdfList duplicate = BdfList.of(chunkIds.get(0), chunkIds.get(1),
-				chunkIds.get(2), chunkIds.get(2));
+		BdfList duplicate = BdfList.of(chunkHashes.get(0), chunkHashes.get(1),
+				chunkHashes.get(2), chunkHashes.get(2));
 		expectCheckTimestamp(now);
 		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
 				fileSize, duplicate));
@@ -578,7 +583,7 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	public void testRejectsFileManifestWithTooBigSize() throws Exception {
 		expectCheckTimestamp(now);
 		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
-				MAX_FILE_SIZE + 1, chunkIds));
+				MAX_FILE_SIZE + 1, chunkHashes));
 		expectReadEof(true);
 
 		validator.validateMessage(message, group);
@@ -588,7 +593,7 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	public void testRejectsFileManifestWithTrailingData() throws Exception {
 		expectCheckTimestamp(now);
 		expectParseList(BdfList.of(FILE_MANIFEST, fileName, contentType,
-				fileSize, chunkIds));
+				fileSize, chunkHashes));
 		expectReadEof(false);
 
 		validator.validateMessage(message, group);
@@ -597,15 +602,25 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	@Test
 	public void testAcceptsFileChunk() throws Exception {
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK, 3));
+		expectParseList(BdfList.of(FILE_CHUNK, manifestId, 3));
 		expectEncodeMetadata(chunkMeta);
 
 		MessageContext result = validator.validateMessage(message, group);
-		assertEquals(0, result.getDependencies().size());
+		// The chunk depends on its manifest, so it isn't delivered, checked
+		// or forwarded until the manifest has arrived
+		assertEquals(singletonList(manifestId), result.getDependencies());
 	}
 
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsFileChunkWithoutIndex() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK, manifestId));
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileChunkWithoutManifestId() throws Exception {
 		expectCheckTimestamp(now);
 		expectParseList(BdfList.of(FILE_CHUNK));
 		// Single-element list is interpreted as a legacy private message, so
@@ -616,9 +631,18 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	}
 
 	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileChunkWithTooShortManifestId() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_CHUNK,
+				getRandomBytes(MessageId.LENGTH - 1), 3));
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
 	public void testRejectsFileChunkWithNegativeIndex() throws Exception {
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK, -1));
+		expectParseList(BdfList.of(FILE_CHUNK, manifestId, -1));
 
 		validator.validateMessage(message, group);
 	}
@@ -626,7 +650,7 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsFileChunkWithTooBigIndex() throws Exception {
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK, MAX_FILE_CHUNKS));
+		expectParseList(BdfList.of(FILE_CHUNK, manifestId, MAX_FILE_CHUNKS));
 
 		validator.validateMessage(message, group);
 	}

@@ -5,6 +5,7 @@ import org.briarproject.bramble.api.client.BdfIncomingMessageHook;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.contact.ContactManager;
+import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
@@ -33,6 +34,7 @@ import org.briarproject.briar.api.identity.AuthorInfo;
 import org.briarproject.briar.api.identity.AuthorInfo.Status;
 import org.briarproject.briar.api.identity.AuthorManager;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.privategroup.GroupMember;
 import org.briarproject.briar.api.privategroup.GroupMessage;
@@ -119,14 +121,15 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			MetadataParser metadataParser, DatabaseComponent db,
 			PrivateGroupFactory privateGroupFactory,
 			ContactManager contactManager, IdentityManager identityManager,
-			AuthorManager authorManager, MessageTracker messageTracker) {
+			AuthorManager authorManager, MessageTracker messageTracker,
+			CryptoComponent crypto) {
 		super(db, clientHelper, metadataParser);
 		this.privateGroupFactory = privateGroupFactory;
 		this.contactManager = contactManager;
 		this.identityManager = identityManager;
 		this.authorManager = authorManager;
 		this.messageTracker = messageTracker;
-		this.fileStore = new ChunkedFileStore(db, clientHelper, this);
+		this.fileStore = new ChunkedFileStore(db, clientHelper, crypto, this);
 		hooks = new CopyOnWriteArrayList<>();
 	}
 
@@ -261,7 +264,8 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				for (FileHeader h : files) referenced.add(h.getManifestId());
 				for (MessageId id : referenced) {
 					if (fileStore.isManifest(txn, id)) {
-						fileStore.shareFile(txn, id);
+						fileStore.shareFile(txn,
+								m.getMessage().getGroupId(), id);
 					} else {
 						db.setMessageShared(txn, id);
 						db.setMessagePermanent(txn, id);
@@ -423,10 +427,10 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 
 	@Override
 	public FileHeader addLocalFile(GroupId groupId, long timestamp,
-			String name, String contentType, InputStream in)
+			String name, String contentType, StreamSource source)
 			throws DbException, IOException {
 		return fileStore.addLocalFile(groupId, timestamp, name, contentType,
-				in);
+				source);
 	}
 
 	@Override

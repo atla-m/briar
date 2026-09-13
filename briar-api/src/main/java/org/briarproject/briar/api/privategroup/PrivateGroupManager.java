@@ -10,6 +10,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
@@ -133,7 +134,8 @@ public interface PrivateGroupManager {
 	 * {@link PrivateGroupConstants#MAX_FILE_SIZE}
 	 */
 	FileHeader addLocalFile(GroupId groupId, long timestamp, String name,
-			String contentType, InputStream in) throws DbException, IOException;
+			String contentType, StreamSource source)
+			throws DbException, IOException;
 
 	/**
 	 * Removes an unsent file and its chunks.
