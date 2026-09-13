@@ -5,6 +5,7 @@ import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.util.List;
@@ -101,6 +102,6 @@ public interface GroupMessageFactory {
 	GroupMessage createGroupMessage(GroupId groupId, long timestamp,
 			@Nullable MessageId parentId, LocalAuthor author,
 			@Nullable String text, List<AttachmentHeader> attachmentHeaders,
-			List<GroupFileHeader> fileHeaders, MessageId previousMsgId);
+			List<FileHeader> fileHeaders, MessageId previousMsgId);
 
 }

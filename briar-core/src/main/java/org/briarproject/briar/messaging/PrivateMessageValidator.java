@@ -15,6 +15,7 @@ import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageContext;
 import org.briarproject.bramble.api.sync.validation.MessageValidator;
 import org.briarproject.bramble.api.system.Clock;
+import org.briarproject.briar.attachment.ChunkedFileStore;
 import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -29,6 +30,8 @@ import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOC
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
@@ -36,6 +39,8 @@ import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACH
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_AUTO_DELETE_TIMER;
@@ -90,6 +95,11 @@ class PrivateMessageValidator implements MessageValidator {
 					context = validatePrivateMessage(m, list);
 				} else if (messageType == ATTACHMENT) {
 					context = validateAttachment(m, list, bytesRead);
+				} else if (messageType == FILE_MANIFEST) {
+					if (!reader.eof()) throw new FormatException();
+					context = validateFileManifest(m, list);
+				} else if (messageType == FILE_CHUNK) {
+					context = validateFileChunk(m, list, bytesRead);
 				} else {
 					throw new InvalidMessageException();
 				}
@@ -121,6 +131,8 @@ class PrivateMessageValidator implements MessageValidator {
 		// text, attachment headers.
 		// Client version 0.3: Message type, optional private message text,
 		// attachment headers, optional auto-delete timer.
+		// Client version 0.4: As 0.3, but an attachment header may also
+		// describe a chunked file (see below).
 		checkSize(body, 3, 4);
 		String text = body.getOptionalString(1);
 		checkLength(text, 0, MAX_PRIVATE_MESSAGE_TEXT_LENGTH);
@@ -129,12 +141,21 @@ class PrivateMessageValidator implements MessageValidator {
 		else checkSize(headers, 0, MAX_ATTACHMENTS_PER_MESSAGE);
 		for (int i = 0; i < headers.size(); i++) {
 			BdfList header = headers.getList(i);
-			// Message ID, content type
-			checkSize(header, 2);
+			// Image attachment: message ID, content type.
+			// Shared file: manifest ID, content type, name, size.
+			checkSize(header, 2, 4);
+			if (header.size() == 3) throw new FormatException();
 			byte[] id = header.getRaw(0);
 			checkLength(id, UniqueId.LENGTH);
 			String contentType = header.getString(1);
 			checkLength(contentType, 1, MAX_CONTENT_TYPE_BYTES);
+			if (header.size() == 4) {
+				String name = header.getString(2);
+				checkLength(name, 1, MAX_FILE_NAME_LENGTH);
+				long size = header.getLong(3);
+				if (size < 1 || size > MAX_FILE_SIZE)
+					throw new FormatException();
+			}
 		}
 		long timer = NO_AUTO_DELETE_TIMER;
 		if (body.size() == 4) {
@@ -151,6 +172,33 @@ class PrivateMessageValidator implements MessageValidator {
 		if (timer != NO_AUTO_DELETE_TIMER) {
 			meta.put(MSG_KEY_AUTO_DELETE_TIMER, timer);
 		}
+		return new BdfMessageContext(meta);
+	}
+
+	private BdfMessageContext validateFileManifest(Message m, BdfList body)
+			throws FormatException {
+		// The file's name, type, size and chunk IDs are checked by the
+		// shared file store, which the private group client uses too
+		BdfDictionary meta = ChunkedFileStore.validateManifest(body);
+		// Manifests aren't authenticated on their own. They're wanted only
+		// once a private message references them by message ID.
+		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(MSG_KEY_LOCAL, false);
+		meta.put(MSG_KEY_MSG_TYPE, FILE_MANIFEST);
+		return new BdfMessageContext(meta);
+	}
+
+	private BdfMessageContext validateFileChunk(Message m, BdfList descriptor,
+			long descriptorLength) throws FormatException {
+		ChunkedFileStore.validateChunk(descriptor,
+				m.getBody().length - descriptorLength);
+		// Chunks are authenticated by their message IDs, which are hashes
+		// of their content, listed in a manifest that a message references
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(MSG_KEY_LOCAL, false);
+		meta.put(MSG_KEY_MSG_TYPE, FILE_CHUNK);
+		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptorLength);
 		return new BdfMessageContext(meta);
 	}
 

@@ -28,6 +28,8 @@ import org.briarproject.bramble.api.sync.validation.IncomingMessageHook;
 import org.briarproject.bramble.api.versioning.ClientVersioningManager;
 import org.briarproject.bramble.api.versioning.ClientVersioningManager.ClientVersioningHook;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
 import org.briarproject.briar.api.autodelete.event.ConversationMessagesDeletedEvent;
@@ -43,6 +45,7 @@ import org.briarproject.briar.api.messaging.PrivateMessageFormat;
 import org.briarproject.briar.api.messaging.PrivateMessageHeader;
 import org.briarproject.briar.api.messaging.event.AttachmentReceivedEvent;
 import org.briarproject.briar.api.messaging.event.PrivateMessageReceivedEvent;
+import org.briarproject.briar.attachment.ChunkedFileStore;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.ByteArrayOutputStream;
@@ -73,9 +76,12 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCR
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE;
+import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_ONLY;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
@@ -89,7 +95,7 @@ import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_TIMEST
 @NotNullByDefault
 class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		ConversationClient, OpenDatabaseHook, ContactHook,
-		ClientVersioningHook, CleanupHook {
+		ClientVersioningHook, CleanupHook, ChunkedFileStore.Client {
 
 	private static final Logger LOG =
 			getLogger(MessagingManagerImpl.class.getName());
@@ -102,6 +108,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 	private final ClientVersioningManager clientVersioningManager;
 	private final ContactGroupFactory contactGroupFactory;
 	private final AutoDeleteManager autoDeleteManager;
+	private final ChunkedFileStore fileStore;
 
 	@Inject
 	MessagingManagerImpl(
@@ -121,6 +128,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		this.clientVersioningManager = clientVersioningManager;
 		this.contactGroupFactory = contactGroupFactory;
 		this.autoDeleteManager = autoDeleteManager;
+		this.fileStore = new ChunkedFileStore(db, clientHelper, this);
 	}
 
 	@Override
@@ -184,14 +192,22 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			// Message type is null for version 0.0 private messages
 			Integer messageType = metaDict.getOptionalInt(MSG_KEY_MSG_TYPE);
 			if (messageType == null) {
-				incomingPrivateMessage(txn, m, metaDict, true, emptyList());
+				incomingPrivateMessage(txn, m, metaDict, true, emptyList(),
+						emptyList());
 			} else if (messageType == PRIVATE_MESSAGE) {
 				boolean hasText = metaDict.getBoolean(MSG_KEY_HAS_TEXT);
 				List<AttachmentHeader> headers =
 						parseAttachmentHeaders(m.getGroupId(), metaDict);
-				incomingPrivateMessage(txn, m, metaDict, hasText, headers);
+				List<FileHeader> files =
+						parseFileHeaders(m.getGroupId(), metaDict);
+				incomingPrivateMessage(txn, m, metaDict, hasText, headers,
+						files);
 			} else if (messageType == ATTACHMENT) {
 				incomingAttachment(txn, m);
+			} else if (messageType == FILE_MANIFEST) {
+				fileStore.incomingManifest(txn, m, metaDict);
+			} else if (messageType == FILE_CHUNK) {
+				fileStore.incomingChunk(txn, m, metaDict);
 			} else {
 				throw new InvalidMessageException();
 			}
@@ -202,8 +218,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 	}
 
 	private void incomingPrivateMessage(Transaction txn, Message m,
-			BdfDictionary meta, boolean hasText, List<AttachmentHeader> headers)
-			throws DbException, FormatException {
+			BdfDictionary meta, boolean hasText, List<AttachmentHeader> headers,
+			List<FileHeader> files) throws DbException, FormatException {
 		long start = now();
 		GroupId groupId = m.getGroupId();
 		long timestamp = meta.getLong(MSG_KEY_TIMESTAMP);
@@ -213,7 +229,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 				NO_AUTO_DELETE_TIMER);
 		PrivateMessageHeader header =
 				new PrivateMessageHeader(m.getId(), groupId, timestamp, local,
-						read, false, false, hasText, headers, timer);
+						read, false, false, hasText, headers, files, timer);
 		ContactId contactId = getContactId(txn, groupId);
 		PrivateMessageReceivedEvent event =
 				new PrivateMessageReceivedEvent(header, contactId);
@@ -225,9 +241,18 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		autoDeleteManager.receiveAutoDeleteTimer(txn, contactId, timer,
 				timestamp);
 		if (!headers.isEmpty()) stopAttachmentCleanupTimers(txn, m, headers);
+		// Any files the message references, and their chunks, are wanted
+		// now. An image entry may point at a chunked image's manifest, so
+		// all referenced IDs are checked, not just the file entries.
+		fileStore.onFilesReferenced(txn, groupId, getReferencedIds(meta));
 		logDuration(LOG, "Receiving private message", start);
 	}
 
+	/**
+	 * Returns the image attachments listed by a message: the entries with
+	 * two elements. An image entry may point at a single attachment message
+	 * or at the manifest of a chunked image.
+	 */
 	private List<AttachmentHeader> parseAttachmentHeaders(GroupId g,
 			BdfDictionary meta) throws FormatException {
 		BdfList attachmentHeaders = meta.getList(MSG_KEY_ATTACHMENT_HEADERS);
@@ -235,11 +260,44 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		List<AttachmentHeader> headers = new ArrayList<>(length);
 		for (int i = 0; i < length; i++) {
 			BdfList header = attachmentHeaders.getList(i);
+			if (header.size() != 2) continue;
 			MessageId m = new MessageId(header.getRaw(0));
 			String contentType = header.getString(1);
 			headers.add(new AttachmentHeader(g, m, contentType));
 		}
 		return headers;
+	}
+
+	/**
+	 * Returns the files shared by a message: the entries with four elements.
+	 */
+	private List<FileHeader> parseFileHeaders(GroupId g, BdfDictionary meta)
+			throws FormatException {
+		BdfList list = meta.getList(MSG_KEY_ATTACHMENT_HEADERS);
+		List<FileHeader> headers = new ArrayList<>();
+		for (int i = 0; i < list.size(); i++) {
+			BdfList header = list.getList(i);
+			if (header.size() != 4) continue;
+			MessageId manifestId = new MessageId(header.getRaw(0));
+			headers.add(new FileHeader(g, manifestId, header.getString(2),
+					header.getString(1), header.getLong(3)));
+		}
+		return headers;
+	}
+
+	/**
+	 * Returns the IDs of all messages referenced by a message's attachment
+	 * header list: single-message attachments and file manifests alike.
+	 */
+	private Set<MessageId> getReferencedIds(BdfDictionary meta)
+			throws FormatException {
+		Set<MessageId> ids = new HashSet<>();
+		if (!meta.containsKey(MSG_KEY_ATTACHMENT_HEADERS)) return ids;
+		BdfList list = meta.getList(MSG_KEY_ATTACHMENT_HEADERS);
+		for (int i = 0; i < list.size(); i++) {
+			ids.add(new MessageId(list.getList(i).getRaw(0)));
+		}
+		return ids;
 	}
 
 	private void stopAttachmentCleanupTimers(Transaction txn, Message m,
@@ -312,16 +370,30 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 					headers.add(
 							BdfList.of(a.getMessageId(), a.getContentType()));
 				}
+				for (FileHeader f : m.getFileHeaders()) {
+					headers.add(BdfList.of(f.getManifestId(),
+							f.getContentType(), f.getName(), f.getSize()));
+				}
 				meta.put(MSG_KEY_ATTACHMENT_HEADERS, headers);
-				if (m.getFormat() == TEXT_IMAGES_AUTO_DELETE
+				if (m.getFormat().supportsAutoDelete()
 						&& timer != NO_AUTO_DELETE_TIMER) {
 					meta.put(MSG_KEY_AUTO_DELETE_TIMER, timer);
 				}
 			}
-			// Mark attachments as shared and permanent now we're ready to send
+			// Mark attachments and files as shared and permanent now we're
+			// ready to send. An image entry may point at a chunked image's
+			// manifest, in which case its chunks are shared too.
 			for (AttachmentHeader a : m.getAttachmentHeaders()) {
-				db.setMessageShared(txn, a.getMessageId());
-				db.setMessagePermanent(txn, a.getMessageId());
+				MessageId id = a.getMessageId();
+				if (fileStore.isManifest(txn, id)) {
+					fileStore.shareFile(txn, id);
+				} else {
+					db.setMessageShared(txn, id);
+					db.setMessagePermanent(txn, id);
+				}
+			}
+			for (FileHeader f : m.getFileHeaders()) {
+				fileStore.shareFile(txn, f.getManifestId());
 			}
 			clientHelper.addLocalMessage(txn, m.getMessage(), meta, true,
 					false);
@@ -364,6 +436,111 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 	public void removeAttachment(AttachmentHeader header) throws DbException {
 		db.transaction(false,
 				txn -> db.removeMessage(txn, header.getMessageId()));
+	}
+
+	// Shared files. The mechanics live in ChunkedFileStore, which the
+	// private group client uses too; this class supplies the parts that are
+	// specific to private conversations.
+
+	@Override
+	public int getManifestType() {
+		return FILE_MANIFEST;
+	}
+
+	@Override
+	public int getChunkType() {
+		return FILE_CHUNK;
+	}
+
+	@Override
+	public BdfDictionary getLocalFileMetadata(int messageType,
+			long timestamp) {
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(MSG_KEY_TIMESTAMP, timestamp);
+		meta.put(MSG_KEY_LOCAL, true);
+		meta.put(MSG_KEY_MSG_TYPE, messageType);
+		return meta;
+	}
+
+	@Override
+	public BdfDictionary getManifestQuery() {
+		return BdfDictionary.of(new BdfEntry(MSG_KEY_MSG_TYPE, FILE_MANIFEST));
+	}
+
+	@Override
+	public BdfDictionary getChunkQuery() {
+		return BdfDictionary.of(new BdfEntry(MSG_KEY_MSG_TYPE, FILE_CHUNK));
+	}
+
+	@Override
+	public boolean isManifestReferenced(Transaction txn, GroupId g,
+			MessageId manifestId) throws DbException, FormatException {
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_MSG_TYPE, PRIVATE_MESSAGE));
+		Map<MessageId, BdfDictionary> messages =
+				clientHelper.getMessageMetadataAsDictionary(txn, g, query);
+		for (BdfDictionary meta : messages.values()) {
+			if (getReferencedIds(meta).contains(manifestId)) return true;
+		}
+		return false;
+	}
+
+	@Override
+	public long getMissingFileCleanupDurationMs() {
+		return MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
+	}
+
+	@Override
+	public FileHeader addLocalFile(GroupId groupId, long timestamp,
+			String name, String contentType, InputStream in)
+			throws DbException, IOException {
+		return fileStore.addLocalFile(groupId, timestamp, name, contentType,
+				in);
+	}
+
+	@Override
+	public void removeFile(FileHeader header) throws DbException {
+		fileStore.removeFile(header);
+	}
+
+	@Override
+	public FileStatus getFileStatus(FileHeader header) throws DbException {
+		return fileStore.getFileStatus(header);
+	}
+
+	@Override
+	public FileStatus getFileStatus(Transaction txn, FileHeader header)
+			throws DbException {
+		return fileStore.getFileStatus(txn, header);
+	}
+
+	@Override
+	public InputStream getFile(FileHeader header) throws DbException {
+		return fileStore.getFile(header);
+	}
+
+	@Override
+	public InputStream getFile(Transaction txn, FileHeader header)
+			throws DbException {
+		return fileStore.getFile(txn, header);
+	}
+
+	@Override
+	public byte[] getFileChunk(FileHeader header, int index)
+			throws DbException {
+		return fileStore.getFileChunk(header, index);
+	}
+
+	@Override
+	public FileHeader getFileHeader(Transaction txn, GroupId groupId,
+			MessageId manifestId) throws DbException {
+		return fileStore.getFileHeader(txn, groupId, manifestId);
+	}
+
+	@Override
+	public FileHeader getFileHeader(GroupId groupId, MessageId manifestId)
+			throws DbException {
+		return fileStore.getFileHeader(groupId, manifestId);
 	}
 
 	private ContactId getContactId(Transaction txn, GroupId g)
@@ -435,7 +612,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 							NO_AUTO_DELETE_TIMER);
 					headers.add(new PrivateMessageHeader(id, g, timestamp,
 							local, read, s.isSent(), s.isSeen(), hasText,
-							parseAttachmentHeaders(g, meta), timer));
+							parseAttachmentHeaders(g, meta),
+							parseFileHeaders(g, meta), timer));
 				}
 			} catch (FormatException e) {
 				throw new DbException(e);
@@ -486,7 +664,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			ContactId c) throws DbException {
 		int minorVersion = clientVersioningManager
 				.getClientMinorVersion(txn, c, CLIENT_ID, 0);
-		if (minorVersion >= 3) return TEXT_IMAGES_AUTO_DELETE;
+		if (minorVersion >= 4) return TEXT_IMAGES_AUTO_DELETE_FILES;
+		else if (minorVersion >= 3) return TEXT_IMAGES_AUTO_DELETE;
 		else if (minorVersion >= 1) return TEXT_IMAGES;
 		else return TEXT_ONLY;
 	}
@@ -530,12 +709,19 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 					clientHelper.getMessageMetadataAsDictionary(txn, m);
 			Integer messageType = meta.getOptionalInt(MSG_KEY_MSG_TYPE);
 			if (messageType != null && messageType == PRIVATE_MESSAGE) {
-				for (AttachmentHeader h : parseAttachmentHeaders(g, meta)) {
-					try {
-						db.deleteMessage(txn, h.getMessageId());
-						db.deleteMessageMetadata(txn, h.getMessageId());
-					} catch (NoSuchMessageException e) {
-						// Continue
+				// Delete the message's attachments and files. A file's
+				// chunks go with its manifest, so a deleted or auto-deleted
+				// message leaves no part of its files behind.
+				for (MessageId id : getReferencedIds(meta)) {
+					if (fileStore.isManifest(txn, id)) {
+						fileStore.deleteFile(txn, id);
+					} else {
+						try {
+							db.deleteMessage(txn, id);
+							db.deleteMessageMetadata(txn, id);
+						} catch (NoSuchMessageException e) {
+							// Continue
+						}
 					}
 				}
 			}

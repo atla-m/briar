@@ -6,6 +6,7 @@ import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.messaging.PrivateMessage;
 import org.briarproject.briar.api.messaging.PrivateMessageFactory;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -18,6 +19,7 @@ import javax.inject.Inject;
 
 import static org.briarproject.bramble.util.StringUtils.utf8IsTooLong;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
+import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 
@@ -68,6 +70,33 @@ class PrivateMessageFactoryImpl implements PrivateMessageFactory {
 		BdfList body = BdfList.of(PRIVATE_MESSAGE, text, attachmentList, timer);
 		Message m = clientHelper.createMessage(groupId, timestamp, body);
 		return new PrivateMessage(m, text != null, headers, autoDeleteTimer);
+	}
+
+	@Override
+	public PrivateMessage createPrivateMessage(GroupId groupId, long timestamp,
+			@Nullable String text, List<AttachmentHeader> headers,
+			List<FileHeader> fileHeaders, long autoDeleteTimer)
+			throws FormatException {
+		if (text == null && headers.isEmpty() && fileHeaders.isEmpty())
+			throw new IllegalArgumentException();
+		if (text != null && utf8IsTooLong(text, MAX_PRIVATE_MESSAGE_TEXT_LENGTH))
+			throw new IllegalArgumentException();
+		if (headers.size() + fileHeaders.size() > MAX_ATTACHMENTS_PER_MESSAGE)
+			throw new IllegalArgumentException();
+		// Image attachments and files share one list; an entry with two
+		// elements is an image, an entry with four elements is a file
+		BdfList attachmentList = serialiseAttachmentHeaders(headers);
+		for (FileHeader f : fileHeaders) {
+			attachmentList.add(BdfList.of(f.getManifestId(),
+					f.getContentType(), f.getName(), f.getSize()));
+		}
+		// Serialise the message
+		Long timer = autoDeleteTimer == NO_AUTO_DELETE_TIMER ?
+				null : autoDeleteTimer;
+		BdfList body = BdfList.of(PRIVATE_MESSAGE, text, attachmentList, timer);
+		Message m = clientHelper.createMessage(groupId, timestamp, body);
+		return new PrivateMessage(m, text != null, headers, fileHeaders,
+				autoDeleteTimer);
 	}
 
 	private void validateTextAndAttachmentHeaders(@Nullable String text,

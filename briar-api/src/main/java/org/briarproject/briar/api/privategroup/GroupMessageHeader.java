@@ -4,6 +4,7 @@ import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.client.PostHeader;
 import org.briarproject.briar.api.identity.AuthorInfo;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -22,7 +23,7 @@ public class GroupMessageHeader extends PostHeader {
 	private final GroupId groupId;
 	private final boolean hasText;
 	private final List<AttachmentHeader> attachmentHeaders;
-	private final List<GroupFileHeader> fileHeaders;
+	private final List<FileHeader> fileHeaders;
 
 	public GroupMessageHeader(GroupId groupId, MessageId id,
 			@Nullable MessageId parentId, long timestamp,
@@ -43,7 +44,7 @@ public class GroupMessageHeader extends PostHeader {
 			@Nullable MessageId parentId, long timestamp,
 			Author author, AuthorInfo authorInfo, boolean read,
 			boolean hasText, List<AttachmentHeader> attachmentHeaders,
-			List<GroupFileHeader> fileHeaders) {
+			List<FileHeader> fileHeaders) {
 		super(id, parentId, timestamp, author, authorInfo, read);
 		this.groupId = groupId;
 		this.hasText = hasText;
@@ -73,7 +74,7 @@ public class GroupMessageHeader extends PostHeader {
 	/**
 	 * Returns the headers of the files shared by the message, if any.
 	 */
-	public List<GroupFileHeader> getFileHeaders() {
+	public List<FileHeader> getFileHeaders() {
 		return fileHeaders;
 	}
 

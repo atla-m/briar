@@ -21,18 +21,6 @@ interface GroupConstants {
 	 */
 	String KEY_ATTACHMENT_HEADERS = "attachmentHeaders";
 
-	// Metadata keys for file manifests
-	String KEY_FILE_NAME = "fileName";
-	String KEY_FILE_CONTENT_TYPE = "fileContentType";
-	String KEY_FILE_SIZE = "fileSize";
-	String KEY_FILE_CHUNK_IDS = "fileChunkIds";
-	/**
-	 * Set on a manifest once all its chunks have arrived: true if the chunks
-	 * add up to the declared file size, false if the sender lied about the
-	 * size and the file must not be read.
-	 */
-	String KEY_FILE_VALID = "fileValid";
-
 	String GROUP_KEY_MEMBERS = "members";
 	String GROUP_KEY_OUR_GROUP = "ourGroup";
 	String GROUP_KEY_CREATOR_ID = "creatorId";

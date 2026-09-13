@@ -44,7 +44,7 @@ import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 import org.briarproject.briar.api.privategroup.event.ContactRelationshipRevealedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupAttachmentReceivedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupDissolvedEvent;
-import org.briarproject.briar.api.privategroup.event.GroupFileProgressEvent;
+import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.privategroup.event.GroupInvitationResponseReceivedEvent;
 import org.briarproject.briar.api.privategroup.event.GroupMessageAddedEvent;
 import org.briarproject.briar.api.privategroup.invitation.GroupInvitationResponse;
@@ -186,8 +186,8 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 				runOnDbThread(() -> attachmentRetriever
 						.loadAttachmentItem(a.getMessageId()));
 			}
-		} else if (e instanceof GroupFileProgressEvent) {
-			GroupFileProgressEvent p = (GroupFileProgressEvent) e;
+		} else if (e instanceof FileProgressEvent) {
+			FileProgressEvent p = (FileProgressEvent) e;
 			if (p.getGroupId().equals(groupId) && p.isComplete()) {
 				// A chunked image is referenced by its manifest ID and can
 				// be shown once all of its chunks have arrived

@@ -45,6 +45,7 @@ import org.briarproject.briar.api.messaging.PrivateMessage;
 import org.briarproject.briar.api.messaging.PrivateMessageFactory;
 import org.briarproject.briar.api.messaging.PrivateMessageFormat;
 import org.briarproject.briar.api.messaging.PrivateMessageHeader;
+import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.messaging.event.AttachmentReceivedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -172,6 +173,26 @@ public class ConversationViewModel extends DbViewModel
 				LOG.info("Attachment received");
 				runOnDbThread(() -> attachmentRetriever
 						.loadAttachmentItem(a.getMessageId()));
+			}
+		} else if (e instanceof FileProgressEvent) {
+			FileProgressEvent p = (FileProgressEvent) e;
+			if (p.isComplete()) {
+				// A chunked image is referenced by its manifest ID and can be
+				// shown once all of its chunks have arrived, if the file
+				// belongs to this conversation
+				runOnDbThread(() -> {
+					try {
+						ContactId c = messagingManager
+								.getContactId(p.getGroupId());
+						if (c.equals(contactId)) {
+							LOG.info("Chunked file complete");
+							attachmentRetriever
+									.loadAttachmentItem(p.getManifestId());
+						}
+					} catch (DbException ex) {
+						// Not a private conversation, or contact removed
+					}
+				});
 			}
 		} else if (e instanceof AutoDeleteTimerMirroredEvent) {
 			AutoDeleteTimerMirroredEvent a = (AutoDeleteTimerMirroredEvent) e;

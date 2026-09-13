@@ -3,6 +3,7 @@ package org.briarproject.briar.api.messaging;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.util.List;
@@ -37,4 +38,16 @@ public interface PrivateMessageFactory {
 	PrivateMessage createPrivateMessage(GroupId groupId, long timestamp,
 			@Nullable String text, List<AttachmentHeader> headers,
 			long autoDeleteTimer) throws FormatException;
+
+	/**
+	 * Creates a private message in the
+	 * {@link PrivateMessageFormat#TEXT_IMAGES_AUTO_DELETE_FILES
+	 * TEXT_IMAGES_AUTO_DELETE_FILES} format, with optional text, image
+	 * attachments and shared files. This format requires the contact to
+	 * support client version 0.4 or higher.
+	 */
+	PrivateMessage createPrivateMessage(GroupId groupId, long timestamp,
+			@Nullable String text, List<AttachmentHeader> headers,
+			List<FileHeader> fileHeaders, long autoDeleteTimer)
+			throws FormatException;
 }

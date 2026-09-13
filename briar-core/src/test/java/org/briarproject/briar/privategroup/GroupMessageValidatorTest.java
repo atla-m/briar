@@ -44,20 +44,20 @@ import static org.briarproject.briar.api.privategroup.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.privategroup.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.privategroup.MessageType.JOIN;
 import static org.briarproject.briar.api.privategroup.MessageType.POST;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.FILE_CHUNK_PAYLOAD_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.GROUP_SALT_LENGTH;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_FILE_CHUNKS;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_FILE_NAME_LENGTH;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_CHUNKS;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_NAME_LENGTH;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CHUNK_IDS;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CONTENT_TYPE;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_NAME;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_SIZE;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CONTENT_TYPE;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_NAME;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_SIZE;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_HAS_TEXT;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_INITIAL_JOIN_MSG;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_MEMBER;
@@ -844,7 +844,7 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	@Test(expected = FormatException.class)
 	public void testRejectsPostWithTooBigFileSize() throws Exception {
 		BdfList headers = BdfList.of(BdfList.of(new MessageId(getRandomId()),
-				contentType, fileName, MAX_GROUP_FILE_SIZE + 1));
+				contentType, fileName, MAX_FILE_SIZE + 1));
 		BdfList body = BdfList.of(POST.getInt(), memberList, null,
 				previousMsgId, text, headers, memberSignature);
 		expectParseAuthor(memberList, member);
@@ -903,7 +903,7 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 	@Test(expected = FormatException.class)
 	public void testRejectsFileManifestWithTooBigSize() throws Exception {
 		BdfList body = BdfList.of(FILE_MANIFEST.getInt(), fileName,
-				contentType, MAX_GROUP_FILE_SIZE + 1, chunkIds);
+				contentType, MAX_FILE_SIZE + 1, chunkIds);
 		validator.validateMessage(message, group, body);
 	}
 

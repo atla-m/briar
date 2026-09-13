@@ -12,8 +12,8 @@ import org.briarproject.briar.api.attachment.Attachment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.client.MessageTracker.GroupCount;
-import org.briarproject.briar.api.privategroup.GroupFileHeader;
-import org.briarproject.briar.api.privategroup.GroupFileStatus;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.privategroup.GroupMember;
 import org.briarproject.briar.api.privategroup.GroupMessage;
 import org.briarproject.briar.api.privategroup.GroupMessageHeader;
@@ -40,14 +40,14 @@ import static org.briarproject.briar.api.identity.AuthorInfo.Status.VERIFIED;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.FILE_CHUNK_PAYLOAD_LENGTH;
-import static org.briarproject.briar.api.privategroup.PrivateGroupConstants.MAX_GROUP_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.privategroup.Visibility.INVISIBLE;
 import static org.briarproject.briar.api.privategroup.Visibility.REVEALED_BY_CONTACT;
 import static org.briarproject.briar.api.privategroup.Visibility.REVEALED_BY_US;
 import static org.briarproject.briar.api.privategroup.Visibility.VISIBLE;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
-import static org.briarproject.briar.privategroup.GroupConstants.KEY_FILE_CHUNK_IDS;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_IDS;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -535,7 +535,7 @@ public class PrivateGroupManagerIntegrationTest
 		// author0 stores a file that spans four chunks
 		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 3 + 12345);
 		long time = c0.getClock().currentTimeMillis();
-		GroupFileHeader file = groupManager0.addLocalFile(groupId0, time,
+		FileHeader file = groupManager0.addLocalFile(groupId0, time,
 				"report.pdf", "application/pdf",
 				new ByteArrayInputStream(fileBytes));
 		assertEquals(groupId0, file.getGroupId());
@@ -560,7 +560,7 @@ public class PrivateGroupManagerIntegrationTest
 		sync0To1(3, true);
 
 		// author1 knows about the file and has half of it
-		GroupFileStatus partial = groupManager1.getFileStatus(file);
+		FileStatus partial = groupManager1.getFileStatus(file);
 		assertTrue(partial.isManifestReceived());
 		assertEquals(2, partial.getChunksReceived());
 		assertEquals(4, partial.getChunkCount());
@@ -594,13 +594,13 @@ public class PrivateGroupManagerIntegrationTest
 		assertNotNull(header);
 		assertTrue(header.hasText());
 		assertEquals(singletonList(file), header.getFileHeaders());
-		GroupFileHeader received = header.getFileHeaders().get(0);
+		FileHeader received = header.getFileHeaders().get(0);
 		assertEquals("report.pdf", received.getName());
 		assertEquals("application/pdf", received.getContentType());
 		assertEquals(fileBytes.length, received.getSize());
 
 		// the file is now complete and reads back byte for byte
-		GroupFileStatus complete = groupManager1.getFileStatus(received);
+		FileStatus complete = groupManager1.getFileStatus(received);
 		assertTrue(complete.isComplete());
 		assertEquals(4, complete.getChunksReceived());
 		assertArrayEquals(fileBytes, readFully(groupManager1.getFile(received)));
@@ -616,7 +616,7 @@ public class PrivateGroupManagerIntegrationTest
 		// it like a plain attachment, by the manifest's message ID
 		byte[] imageBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 2 + 100);
 		long time = c0.getClock().currentTimeMillis();
-		GroupFileHeader file = groupManager0.addLocalFile(groupId0, time,
+		FileHeader file = groupManager0.addLocalFile(groupId0, time,
 				"image.jpg", "image/jpeg", new ByteArrayInputStream(imageBytes));
 		assertEquals(3, file.getChunkCount());
 		AttachmentHeader attachment = new AttachmentHeader(groupId0,
@@ -650,14 +650,14 @@ public class PrivateGroupManagerIntegrationTest
 	@Test(expected = FileTooBigException.class)
 	public void testRejectsFileThatIsTooBig() throws Exception {
 		addGroup();
-		byte[] tooBig = new byte[(int) MAX_GROUP_FILE_SIZE + 1];
+		byte[] tooBig = new byte[(int) MAX_FILE_SIZE + 1];
 		groupManager0.addLocalFile(groupId0, c0.getClock().currentTimeMillis(),
 				"big.bin", "application/octet-stream",
 				new ByteArrayInputStream(tooBig));
 	}
 
 	private List<MessageId> getChunkIds(ClientHelper clientHelper,
-			GroupFileHeader file) throws Exception {
+			FileHeader file) throws Exception {
 		BdfDictionary meta = db0.transactionWithResult(true, txn ->
 				clientHelper.getMessageMetadataAsDictionary(txn,
 						file.getManifestId()));

@@ -23,11 +23,13 @@ public interface AttachmentStore {
 	void removeAttachment(AttachmentHeader header) throws DbException;
 
 	/**
-	 * Returns the maximum size of an attachment this store accepts, in
-	 * bytes. Images larger than this are compressed to fit before being
-	 * stored. Stores that split attachments into chunks can accept far more
-	 * than a single message, so most images keep their original quality.
+	 * Returns the maximum size of an attachment this store accepts for the
+	 * given group, in bytes. Images larger than this are compressed to fit
+	 * before being stored. Stores that split attachments into chunks can
+	 * accept far more than a single message, so most images keep their
+	 * original quality; whether that's possible may depend on the client
+	 * version of the other side, hence the group.
 	 */
-	long getMaxAttachmentSize();
+	long getMaxAttachmentSize(GroupId groupId);
 
 }

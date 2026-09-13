@@ -8,7 +8,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
-import org.briarproject.briar.api.privategroup.GroupFileHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.privategroup.GroupMessage;
 import org.briarproject.briar.api.privategroup.GroupMessageFactory;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -134,7 +134,7 @@ class GroupMessageFactoryImpl implements GroupMessageFactory {
 	public GroupMessage createGroupMessage(GroupId groupId, long timestamp,
 			@Nullable MessageId parentId, LocalAuthor member,
 			@Nullable String text, List<AttachmentHeader> attachmentHeaders,
-			List<GroupFileHeader> fileHeaders, MessageId previousMsgId) {
+			List<FileHeader> fileHeaders, MessageId previousMsgId) {
 		// Without attachments or files, use the original format so that the
 		// message can be read by members running older clients
 		if (attachmentHeaders.isEmpty() && fileHeaders.isEmpty()) {
@@ -153,7 +153,7 @@ class GroupMessageFactoryImpl implements GroupMessageFactory {
 			for (AttachmentHeader a : attachmentHeaders) {
 				headers.add(BdfList.of(a.getMessageId(), a.getContentType()));
 			}
-			for (GroupFileHeader h : fileHeaders) {
+			for (FileHeader h : fileHeaders) {
 				headers.add(BdfList.of(h.getManifestId(), h.getContentType(),
 						h.getName(), h.getSize()));
 			}

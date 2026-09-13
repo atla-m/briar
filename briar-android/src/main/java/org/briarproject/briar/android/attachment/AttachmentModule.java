@@ -2,6 +2,7 @@ package org.briarproject.briar.android.attachment;
 
 import android.app.Application;
 
+import org.briarproject.bramble.api.db.TransactionManager;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.briar.android.attachment.media.ImageCompressor;
 import org.briarproject.briar.api.messaging.MessagingManager;
@@ -37,9 +38,10 @@ public class AttachmentModule {
 	@Singleton
 	AttachmentCreator provideAttachmentCreator(Application app,
 			@IoExecutor Executor ioExecutor, MessagingManager messagingManager,
-			AttachmentRetriever retriever, ImageCompressor imageCompressor) {
+			TransactionManager db, AttachmentRetriever retriever,
+			ImageCompressor imageCompressor) {
 		return new AttachmentCreatorImpl(app, ioExecutor,
-				new MessagingAttachmentStore(messagingManager), retriever,
+				new MessagingAttachmentStore(messagingManager, db), retriever,
 				imageCompressor);
 	}
 

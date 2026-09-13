@@ -136,7 +136,7 @@ class AttachmentCreationTask {
 			throw new IOException(e);
 		}
 		String storedType = contentType;
-		long maxSize = attachmentStore.getMaxAttachmentSize();
+		long maxSize = attachmentStore.getMaxAttachmentSize(groupId);
 		if (maxSize <= MAX_IMAGE_SIZE) {
 			// The store keeps each image in a single message, so compress
 			// the image to fit into one
