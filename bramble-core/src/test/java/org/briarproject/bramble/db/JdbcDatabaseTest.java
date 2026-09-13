@@ -45,6 +45,7 @@ import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Collection;
 import java.util.Enumeration;
 import java.util.List;
@@ -79,6 +80,7 @@ import static org.briarproject.bramble.test.TestUtils.getAuthor;
 import static org.briarproject.bramble.test.TestUtils.getClientId;
 import static org.briarproject.bramble.test.TestUtils.getGroup;
 import static org.briarproject.bramble.test.TestUtils.getIdentity;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.test.TestUtils.getMessage;
 import static org.briarproject.bramble.test.TestUtils.getPendingContact;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
@@ -360,6 +362,89 @@ public abstract class JdbcDatabaseTest extends BrambleTestCase {
 		capacity = RECORD_HEADER_BYTES + message.getRawLength();
 		ids = db.getMessagesToSend(txn, contactId, capacity, MAX_LATENCY);
 		assertEquals(singletonList(messageId), ids);
+
+		db.commitTransaction(txn);
+		db.close();
+	}
+
+	@Test
+	public void testSmallMessagesAreSentBeforeLargeOnes() throws Exception {
+		Database<Connection> db = open(false);
+		Connection txn = db.startTransaction();
+
+		// Add a contact and a shared group
+		db.addIdentity(txn, identity);
+		assertEquals(contactId,
+				db.addContact(txn, author, localAuthor.getId(), null, true));
+		db.addGroup(txn, group);
+		db.addGroupVisibility(txn, contactId, groupId, true);
+
+		// An old large message, a newer small one, and an older small one
+		Message large = getMessage(groupId, MAX_MESSAGE_BODY_LENGTH, 1000);
+		Message small = getMessage(groupId, 100, 3000);
+		Message older = getMessage(groupId, 100, 2000);
+		db.addMessage(txn, large, DELIVERED, true, false, null);
+		db.addMessage(txn, small, DELIVERED, true, false, null);
+		db.addMessage(txn, older, DELIVERED, true, false, null);
+
+		// Small messages come first, oldest first among them, then the large
+		// message, even though it's the oldest of all
+		List<MessageId> expected =
+				asList(older.getId(), small.getId(), large.getId());
+		assertEquals(expected, new ArrayList<>(db.getMessagesToSend(txn,
+				contactId, ONE_MEGABYTE, MAX_LATENCY)));
+		assertEquals(expected, new ArrayList<>(db.getMessagesToOffer(txn,
+				contactId, 100, MAX_LATENCY)));
+		// A limited offer includes the small messages, not the large one
+		assertEquals(asList(older.getId(), small.getId()),
+				new ArrayList<>(db.getMessagesToOffer(txn, contactId, 2,
+						MAX_LATENCY)));
+		// Likewise for requested and unacked messages
+		for (MessageId id : expected) db.raiseRequestedFlag(txn, contactId, id);
+		assertEquals(expected, new ArrayList<>(db.getRequestedMessagesToSend(
+				txn, contactId, ONE_MEGABYTE, MAX_LATENCY)));
+		assertEquals(expected, new ArrayList<>(
+				db.getUnackedMessagesToSend(txn, contactId)));
+
+		db.commitTransaction(txn);
+		db.close();
+	}
+
+	@Test
+	public void testMessagesWithEqualTimestampsAreSentInRandomOrder()
+			throws Exception {
+		Database<Connection> db = open(false);
+		Connection txn = db.startTransaction();
+
+		// Add a contact and a shared group
+		db.addIdentity(txn, identity);
+		assertEquals(contactId,
+				db.addContact(txn, author, localAuthor.getId(), null, true));
+		db.addGroup(txn, group);
+		db.addGroupVisibility(txn, contactId, groupId, true);
+
+		// Add many large messages with the same timestamp, like the chunks
+		// of a file
+		int count = 20;
+		for (int i = 0; i < count; i++) {
+			Message m = getMessage(groupId, MAX_MESSAGE_BODY_LENGTH, 1000);
+			db.addMessage(txn, m, DELIVERED, true, false, null);
+		}
+
+		List<MessageId> first = new ArrayList<>(db.getMessagesToSend(txn,
+				contactId, ONE_MEGABYTE, MAX_LATENCY));
+		assertEquals(count, first.size());
+		// The same messages must be returned each time, but in a different
+		// order. With 20 messages the chance of the same order twice by
+		// accident is 1 in 20 factorial, so try a few times to be safe.
+		boolean differs = false;
+		for (int i = 0; i < 3 && !differs; i++) {
+			List<MessageId> again = new ArrayList<>(db.getMessagesToSend(txn,
+					contactId, ONE_MEGABYTE, MAX_LATENCY));
+			assertEquals(new HashSet<>(first), new HashSet<>(again));
+			differs = !first.equals(again);
+		}
+		assertTrue(differs);
 
 		db.commitTransaction(txn);
 		db.close();

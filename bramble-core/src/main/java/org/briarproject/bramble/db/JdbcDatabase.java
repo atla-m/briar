@@ -81,6 +81,7 @@ import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.bramble.api.sync.Group.Visibility.VISIBLE;
 import static org.briarproject.bramble.api.sync.SyncConstants.MESSAGE_HEADER_LENGTH;
+import static org.briarproject.bramble.api.sync.SyncConstants.SMALL_MESSAGE_LENGTH;
 import static org.briarproject.bramble.api.sync.validation.MessageState.DELIVERED;
 import static org.briarproject.bramble.api.sync.validation.MessageState.PENDING;
 import static org.briarproject.bramble.api.sync.validation.MessageState.UNKNOWN;
@@ -357,6 +358,25 @@ abstract class JdbcDatabase implements Database<Connection> {
 	private static final String INDEX_MESSAGES_BY_CLEANUP_DEADLINE =
 			"CREATE INDEX IF NOT EXISTS messagesByCleanupDeadline"
 					+ " ON messages (cleanupDeadline)";
+
+	/**
+	 * The order in which messages are offered and sent to a contact: small
+	 * messages before large ones, so that texts and control messages aren't
+	 * held up behind images and file chunks on a slow or short-lived
+	 * connection; then oldest first; then, among large messages with the
+	 * same timestamp, randomly. The random tie-break matters for file
+	 * chunks, which share a timestamp: different contacts receive different
+	 * chunks first, so two contacts who each have part of a file can
+	 * complete each other's copy when they meet, instead of both holding the
+	 * same prefix. Small messages keep a stable order, so a message and its
+	 * dependencies are still sent in the order they were stored.
+	 */
+	private static final String SEND_ORDER_TAIL =
+			" CASE WHEN length > " + SMALL_MESSAGE_LENGTH + " THEN 1 ELSE 0 END,"
+					+ " timestamp,"
+					+ " CASE WHEN length > " + SMALL_MESSAGE_LENGTH
+					+ " THEN RAND() ELSE 0 END";
+	private static final String SEND_ORDER = " ORDER BY" + SEND_ORDER_TAIL;
 
 	private static final Logger LOG =
 			getLogger(JdbcDatabase.class.getName());
@@ -2278,7 +2298,7 @@ abstract class JdbcDatabase implements Database<Connection> {
 					+ " AND seen = FALSE AND requested = FALSE"
 					+ " AND (expiry <= ? OR maxLatency IS NULL"
 					+ " OR ? < maxLatency)"
-					+ " ORDER BY timestamp LIMIT ?";
+					+ SEND_ORDER + " LIMIT ?";
 			ps = txn.prepareStatement(sql);
 			ps.setInt(1, c.getInt());
 			ps.setInt(2, DELIVERED.getValue());
@@ -2337,7 +2357,7 @@ abstract class JdbcDatabase implements Database<Connection> {
 					+ " AND seen = FALSE"
 					+ " AND (expiry <= ? OR maxLatency IS NULL"
 					+ " OR ? < maxLatency)"
-					+ " ORDER BY timestamp";
+					+ SEND_ORDER;
 			ps = txn.prepareStatement(sql);
 			ps.setInt(1, c.getInt());
 			ps.setInt(2, DELIVERED.getValue());
@@ -2371,7 +2391,7 @@ abstract class JdbcDatabase implements Database<Connection> {
 					+ " WHERE contactId = ? AND state = ?"
 					+ " AND groupShared = TRUE AND messageShared = TRUE"
 					+ " AND deleted = FALSE AND seen = FALSE"
-					+ " ORDER BY txCount, timestamp";
+					+ " ORDER BY txCount," + SEND_ORDER_TAIL;
 			ps = txn.prepareStatement(sql);
 			ps.setInt(1, c.getInt());
 			ps.setInt(2, DELIVERED.getValue());
@@ -2648,7 +2668,7 @@ abstract class JdbcDatabase implements Database<Connection> {
 					+ " AND seen = FALSE AND requested = TRUE"
 					+ " AND (expiry <= ? OR maxLatency IS NULL"
 					+ " OR ? < maxLatency)"
-					+ " ORDER BY timestamp";
+					+ SEND_ORDER;
 			ps = txn.prepareStatement(sql);
 			ps.setInt(1, c.getInt());
 			ps.setInt(2, DELIVERED.getValue());
