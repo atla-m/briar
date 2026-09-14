@@ -5,6 +5,7 @@ import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.client.ContactGroupFactory;
 import org.briarproject.bramble.api.crypto.PrivateKey;
 import org.briarproject.bramble.api.crypto.PublicKey;
+import org.briarproject.bramble.api.crypto.SignaturePublicKey;
 import org.briarproject.bramble.api.crypto.SignaturePrivateKey;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
@@ -26,6 +27,7 @@ import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageFactory;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.Clock;
+import org.briarproject.bramble.util.Base32;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
@@ -40,7 +42,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.GeneralSecurityException;
-import java.util.Collection;
+import java.util.Locale;
+import java.util.regex.Matcher;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -49,7 +52,12 @@ import javax.annotation.concurrent.Immutable;
 import javax.inject.Inject;
 
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_AUTHOR_NAME_LENGTH;
+import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
+import static org.briarproject.briar.api.channel.ChannelConstants.LINK_FORMAT_VERSION;
+import static org.briarproject.briar.api.channel.ChannelConstants.LINK_PREFIX;
+import static org.briarproject.briar.api.channel.ChannelConstants.LINK_REGEX;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_LINK_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
@@ -206,6 +214,42 @@ class ChannelManagerImpl implements ChannelManager, OpenDatabaseHook {
 		// channel's posts if we are offered them
 		db.transaction(false, txn -> blogManager.addBlog(txn, blog));
 		return blog;
+	}
+
+	@Override
+	public String getChannelLink(GroupId g) throws DbException {
+		Blog blog = db.transactionWithResult(true,
+				txn -> blogManager.getBlog(txn, g));
+		if (!blog.isChannel()) throw new NoSuchChannelException();
+		Author a = blog.getAuthor();
+		byte[] raw;
+		try {
+			// The title is part of the channel's identity, so the link
+			// has to carry it as well as the public key
+			raw = clientHelper.toByteArray(BdfList.of(LINK_FORMAT_VERSION,
+					a.getName(), a.getPublicKey().getEncoded()));
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+		return LINK_PREFIX + Base32.encode(raw).toLowerCase(Locale.US);
+	}
+
+	@Override
+	public Blog subscribeFromLink(String link)
+			throws DbException, FormatException {
+		Matcher matcher = LINK_REGEX.matcher(link);
+		if (!matcher.find()) throw new FormatException();
+		// Discard the prefix and anything around the link
+		byte[] raw = Base32.decode(matcher.group(2), false);
+		if (raw.length > MAX_LINK_BYTES) throw new FormatException();
+		BdfList parsed = clientHelper.toList(raw);
+		checkSize(parsed, 3);
+		if (parsed.getInt(0) != LINK_FORMAT_VERSION)
+			throw new FormatException();
+		String title = parsed.getString(1);
+		checkLength(title, 1, MAX_AUTHOR_NAME_LENGTH);
+		PublicKey publicKey = new SignaturePublicKey(parsed.getRaw(2));
+		return subscribe(title, publicKey);
 	}
 
 	@Override

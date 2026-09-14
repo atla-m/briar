@@ -5,6 +5,7 @@ import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
 import org.briarproject.briar.api.blog.Blog;
+import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
@@ -251,6 +252,67 @@ public class ChannelManagerIntegrationTest
 
 		channelManager1.importChannel(
 				new ByteArrayInputStream(out.toByteArray()));
+	}
+
+	@Test
+	public void testSubscribingFromALinkGivesTheSameChannel()
+			throws Exception {
+		// A link carries a channel's title and public key, which is all
+		// anyone needs to derive the same channel and start accepting its
+		// posts. It says nothing about who created the channel.
+		Channel channel = channelManager0.createChannel("Announcements");
+		String link = channelManager0.getChannelLink(channel.getBlogId());
+		assertTrue(link.startsWith("briar-channel://"));
+
+		Blog subscribed = channelManager1.subscribeFromLink(link);
+		assertEquals(channel.getBlogId(), subscribed.getId());
+		assertTrue(subscribed.isChannel());
+		assertEquals("Announcements", subscribed.getName());
+
+		// Subscribing doesn't make us the owner
+		assertNull(channelManager1.getChannel(subscribed.getId()));
+	}
+
+	@Test
+	public void testSubscribingFromALinkIsEnoughToImportAStream()
+			throws Exception {
+		// The whole loop with no contact relationship: a link to subscribe
+		// and a published file to read
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		String text = getRandomString(42);
+		channelManager0.post(g, text);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, out);
+
+		channelManager1.subscribeFromLink(
+				channelManager0.getChannelLink(g));
+		assertEquals(1, channelManager1.importChannel(
+				new ByteArrayInputStream(out.toByteArray())));
+		awaitPendingMessageDelivery(1);
+
+		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
+		assertEquals(1, headers.size());
+		assertEquals(text,
+				blogManager1.getPostText(headers.iterator().next().getId()));
+	}
+
+	@Test
+	public void testRejectsMalformedLinks() throws Exception {
+		expectBadLink("");
+		expectBadLink("briar-channel://");
+		expectBadLink("briar-channel://not!base32");
+		// A well-formed handshake link is not a channel link
+		expectBadLink("briar://" + getRandomString(53).toLowerCase());
+	}
+
+	private void expectBadLink(String link) throws Exception {
+		try {
+			channelManager1.subscribeFromLink(link);
+			fail("Accepted " + link);
+		} catch (FormatException | IllegalArgumentException expected) {
+			// Expected
+		}
 	}
 
 	/**

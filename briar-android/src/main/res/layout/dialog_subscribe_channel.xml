@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	android:layout_width="match_parent"
+	android:layout_height="wrap_content"
+	android:orientation="vertical"
+	android:paddingStart="@dimen/margin_activity_horizontal"
+	android:paddingLeft="@dimen/margin_activity_horizontal"
+	android:paddingTop="@dimen/margin_activity_vertical"
+	android:paddingEnd="@dimen/margin_activity_horizontal"
+	android:paddingRight="@dimen/margin_activity_horizontal">
+
+	<TextView
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginBottom="@dimen/margin_medium"
+		android:text="@string/channels_subscribe_explanation"
+		android:textColor="?android:attr/textColorSecondary"
+		android:textSize="@dimen/text_size_small" />
+
+	<EditText
+		android:id="@+id/channelLink"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:hint="@string/channels_link_hint"
+		android:importantForAutofill="no"
+		android:inputType="textUri"
+		android:textSize="@dimen/text_size_small" />
+
+</LinearLayout>

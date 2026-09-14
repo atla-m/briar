@@ -56,7 +56,7 @@ class ChannelAdapter
 		private final Context ctx;
 		private final View layout;
 		private final TextView title, created;
-		private final ImageButton write, delete;
+		private final ImageButton overflow;
 
 		private ChannelViewHolder(View v) {
 			super(v);
@@ -64,15 +64,14 @@ class ChannelAdapter
 			layout = v;
 			title = v.findViewById(R.id.titleView);
 			created = v.findViewById(R.id.createdView);
-			write = v.findViewById(R.id.writeButton);
-			delete = v.findViewById(R.id.deleteButton);
+			overflow = v.findViewById(R.id.overflowButton);
 		}
 
 		private void bindItem(Channel item) {
 			title.setText(item.getTitle());
 			created.setText(formatDate(ctx, item.getCreated()));
-			write.setOnClickListener(v -> listener.onWriteClick(item));
-			delete.setOnClickListener(v -> listener.onDeleteClick(item));
+			overflow.setOnClickListener(
+					v -> listener.onActionsClick(item, v));
 			layout.setOnClickListener(v -> listener.onChannelClick(item));
 		}
 	}
@@ -81,8 +80,6 @@ class ChannelAdapter
 
 		void onChannelClick(Channel channel);
 
-		void onWriteClick(Channel channel);
-
-		void onDeleteClick(Channel channel);
+		void onActionsClick(Channel channel, View anchor);
 	}
 }

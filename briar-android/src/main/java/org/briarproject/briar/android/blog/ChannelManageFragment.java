@@ -1,6 +1,11 @@
 package org.briarproject.briar.android.blog;
 
+import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -8,12 +13,16 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.Toast;
 
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.blog.ChannelAdapter.ChannelListener;
 import org.briarproject.briar.android.fragment.BaseFragment;
+import org.briarproject.briar.android.util.ActivityLaunchers.CreateDocumentAdvanced;
+import org.briarproject.briar.android.util.ActivityLaunchers.OpenAnyDocumentAdvanced;
 import org.briarproject.briar.android.view.BriarRecyclerView;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
@@ -22,11 +31,14 @@ import org.briarproject.nullsafety.ParametersNotNullByDefault;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 
+import androidx.activity.result.ActivityResultLauncher;
 import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.widget.PopupMenu;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 
 import static android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP;
+import static android.widget.Toast.LENGTH_LONG;
 import static org.briarproject.briar.android.activity.BriarActivity.GROUP_ID;
 import static org.briarproject.nullsafety.NullSafety.requireNonNull;
 
@@ -43,6 +55,26 @@ public class ChannelManageFragment extends BaseFragment
 
 	private BriarRecyclerView list;
 	private final ChannelAdapter adapter = new ChannelAdapter(this);
+
+	@Nullable
+	private GroupId publishing = null;
+
+	private final ActivityResultLauncher<String> publishLauncher =
+			registerForActivityResult(new CreateDocumentAdvanced(),
+					this::onPublishUriChosen);
+	private final ActivityResultLauncher<String[]> importLauncher =
+			registerForActivityResult(new OpenAnyDocumentAdvanced(),
+					this::onImportUriChosen);
+
+	private void onPublishUriChosen(@Nullable Uri uri) {
+		GroupId g = publishing;
+		publishing = null;
+		if (uri != null && g != null) viewModel.publish(g, uri);
+	}
+
+	private void onImportUriChosen(@Nullable Uri uri) {
+		if (uri != null) viewModel.importFile(uri);
+	}
 
 	public static ChannelManageFragment newInstance() {
 		return new ChannelManageFragment();
@@ -76,6 +108,12 @@ public class ChannelManageFragment extends BaseFragment
 					if (requireNonNull(channels).isEmpty()) list.showData();
 				})
 		);
+		viewModel.getChannelLink().observeEvent(getViewLifecycleOwner(),
+				this::copyToClipboard);
+		viewModel.getMessage().observeEvent(getViewLifecycleOwner(),
+				this::showMessage);
+		viewModel.getSubscribed().observeEvent(getViewLifecycleOwner(),
+				this::openBlog);
 		return v;
 	}
 
@@ -98,6 +136,16 @@ public class ChannelManageFragment extends BaseFragment
 		} else if (item.getItemId() == R.id.action_channel_create) {
 			showCreateDialog();
 			return true;
+		} else if (item.getItemId() == R.id.action_channel_subscribe) {
+			showSubscribeDialog();
+			return true;
+		} else if (item.getItemId() == R.id.action_channel_import) {
+			try {
+				importLauncher.launch(new String[] {"*/*"});
+			} catch (ActivityNotFoundException e) {
+				showMessage(R.string.error_start_activity);
+			}
+			return true;
 		}
 		return super.onOptionsItemSelected(item);
 	}
@@ -105,7 +153,7 @@ public class ChannelManageFragment extends BaseFragment
 	private void showCreateDialog() {
 		View v = requireActivity().getLayoutInflater()
 				.inflate(R.layout.dialog_create_channel, null);
-		android.widget.EditText input = v.findViewById(R.id.channelTitle);
+		EditText input = v.findViewById(R.id.channelTitle);
 		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
 				R.style.BriarDialogTheme);
 		b.setTitle(R.string.channels_create);
@@ -124,14 +172,36 @@ public class ChannelManageFragment extends BaseFragment
 	}
 
 	@Override
-	public void onWriteClick(Channel channel) {
-		Intent i = new Intent(getActivity(), WriteBlogPostActivity.class);
-		i.putExtra(GROUP_ID, channel.getBlogId().getBytes());
-		startActivity(i);
+	public void onActionsClick(Channel channel, View anchor) {
+		PopupMenu menu = new PopupMenu(requireContext(), anchor);
+		menu.inflate(R.menu.channel_item_actions);
+		menu.setOnMenuItemClickListener(item -> {
+			int id = item.getItemId();
+			if (id == R.id.action_channel_write) {
+				Intent i = new Intent(getActivity(),
+						WriteBlogPostActivity.class);
+				i.putExtra(GROUP_ID, channel.getBlogId().getBytes());
+				startActivity(i);
+			} else if (id == R.id.action_channel_copy_link) {
+				viewModel.copyLink(channel.getBlogId());
+			} else if (id == R.id.action_channel_publish) {
+				publishing = channel.getBlogId();
+				try {
+					publishLauncher.launch(channel.getTitle() + ".briar");
+				} catch (ActivityNotFoundException e) {
+					showMessage(R.string.error_start_activity);
+				}
+			} else if (id == R.id.action_channel_delete) {
+				confirmDelete(channel);
+			} else {
+				return false;
+			}
+			return true;
+		});
+		menu.show();
 	}
 
-	@Override
-	public void onDeleteClick(Channel channel) {
+	private void confirmDelete(Channel channel) {
 		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
 				R.style.BriarDialogTheme);
 		b.setTitle(R.string.channels_delete_title);
@@ -140,6 +210,36 @@ public class ChannelManageFragment extends BaseFragment
 				(d, w) -> viewModel.deleteChannel(channel.getBlogId()));
 		b.setNegativeButton(R.string.cancel, null);
 		b.show();
+	}
+
+	private void showSubscribeDialog() {
+		View v = requireActivity().getLayoutInflater()
+				.inflate(R.layout.dialog_subscribe_channel, null);
+		EditText input = v.findViewById(R.id.channelLink);
+		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
+				R.style.BriarDialogTheme);
+		b.setTitle(R.string.channels_subscribe);
+		b.setView(v);
+		b.setPositiveButton(R.string.channels_subscribe_button, (d, w) -> {
+			String link = input.getText().toString().trim();
+			if (!link.isEmpty()) viewModel.subscribe(link);
+		});
+		b.setNegativeButton(R.string.cancel, null);
+		b.show();
+	}
+
+	private void showMessage(int stringId) {
+		Toast.makeText(requireContext(), stringId, LENGTH_LONG).show();
+	}
+
+	private void copyToClipboard(String link) {
+		ClipboardManager cm = (ClipboardManager) requireContext()
+				.getSystemService(Context.CLIPBOARD_SERVICE);
+		if (cm != null) {
+			cm.setPrimaryClip(ClipData.newPlainText(
+					getString(R.string.channels_copy_link), link));
+			showMessage(R.string.channels_link_copied);
+		}
 	}
 
 	private void openBlog(GroupId g) {

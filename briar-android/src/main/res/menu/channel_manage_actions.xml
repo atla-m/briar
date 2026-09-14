@@ -9,4 +9,14 @@
 		android:title="@string/channels_create"
 		app:showAsAction="always" />
 
+	<item
+		android:id="@+id/action_channel_subscribe"
+		android:title="@string/channels_subscribe"
+		app:showAsAction="never" />
+
+	<item
+		android:id="@+id/action_channel_import"
+		android:title="@string/channels_import"
+		app:showAsAction="never" />
+
 </menu>
