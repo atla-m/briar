@@ -958,6 +958,20 @@ class DatabaseComponentImpl<T> implements DatabaseComponent {
 	}
 
 	@Override
+	public void importMessage(Transaction transaction, Message m)
+			throws DbException {
+		if (transaction.isReadOnly()) throw new IllegalArgumentException();
+		T txn = unbox(transaction);
+		if (!db.containsGroup(txn, m.getGroupId()))
+			throw new NoSuchGroupException();
+		if (db.containsMessage(txn, m.getId())) return;
+		// The message has no sender, so no contact's seen flag is raised
+		// and it will be offered to every contact that can see the group
+		db.addMessage(txn, m, UNKNOWN, false, false, null);
+		transaction.attach(new MessageAddedEvent(m, null, true));
+	}
+
+	@Override
 	public void receiveMessage(Transaction transaction, ContactId c, Message m)
 			throws DbException {
 		if (transaction.isReadOnly()) throw new IllegalArgumentException();

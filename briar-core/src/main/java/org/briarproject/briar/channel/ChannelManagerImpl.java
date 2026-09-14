@@ -4,10 +4,15 @@ import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.client.ContactGroupFactory;
 import org.briarproject.bramble.api.crypto.PrivateKey;
+import org.briarproject.bramble.api.crypto.PublicKey;
 import org.briarproject.bramble.api.crypto.SignaturePrivateKey;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.data.BdfReader;
+import org.briarproject.bramble.api.data.BdfReaderFactory;
+import org.briarproject.bramble.api.data.BdfWriter;
+import org.briarproject.bramble.api.data.BdfWriterFactory;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.Transaction;
@@ -17,6 +22,9 @@ import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager.OpenDatabaseHook;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.Message;
+import org.briarproject.bramble.api.sync.MessageFactory;
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
@@ -28,7 +36,11 @@ import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.channel.NoSuchChannelException;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.security.GeneralSecurityException;
+import java.util.Collection;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -37,6 +49,9 @@ import javax.annotation.concurrent.Immutable;
 import javax.inject.Inject;
 
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_AUTHOR_NAME_LENGTH;
+import static org.briarproject.bramble.util.ValidationUtils.checkSize;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
+import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNELS;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_AUTHOR;
@@ -60,6 +75,9 @@ class ChannelManagerImpl implements ChannelManager, OpenDatabaseHook {
 	private final BlogFactory blogFactory;
 	private final BlogManager blogManager;
 	private final BlogPostFactory blogPostFactory;
+	private final MessageFactory messageFactory;
+	private final BdfReaderFactory bdfReaderFactory;
+	private final BdfWriterFactory bdfWriterFactory;
 	private final Clock clock;
 
 	@Inject
@@ -67,7 +85,9 @@ class ChannelManagerImpl implements ChannelManager, OpenDatabaseHook {
 			ContactGroupFactory contactGroupFactory,
 			AuthorFactory authorFactory, BlogFactory blogFactory,
 			BlogManager blogManager, BlogPostFactory blogPostFactory,
-			Clock clock) {
+			MessageFactory messageFactory,
+			BdfReaderFactory bdfReaderFactory,
+			BdfWriterFactory bdfWriterFactory, Clock clock) {
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.contactGroupFactory = contactGroupFactory;
@@ -75,6 +95,9 @@ class ChannelManagerImpl implements ChannelManager, OpenDatabaseHook {
 		this.blogFactory = blogFactory;
 		this.blogManager = blogManager;
 		this.blogPostFactory = blogPostFactory;
+		this.messageFactory = messageFactory;
+		this.bdfReaderFactory = bdfReaderFactory;
+		this.bdfWriterFactory = bdfWriterFactory;
 		this.clock = clock;
 	}
 
@@ -171,6 +194,76 @@ class ChannelManagerImpl implements ChannelManager, OpenDatabaseHook {
 			storeChannels(txn, channels);
 			blogManager.removeBlog(txn, found.getBlog());
 		});
+	}
+
+	@Override
+	public Blog subscribe(String title, PublicKey publicKey)
+			throws DbException {
+		String name = truncateUtf8(title, MAX_AUTHOR_NAME_LENGTH);
+		Author author = authorFactory.createAuthor(name, publicKey);
+		Blog blog = blogFactory.createChannelBlog(author);
+		// Subscribing tells no one: it only means we will accept this
+		// channel's posts if we are offered them
+		db.transaction(false, txn -> blogManager.addBlog(txn, blog));
+		return blog;
+	}
+
+	@Override
+	public void exportChannel(GroupId g, OutputStream out)
+			throws DbException, IOException {
+		BdfWriter w = bdfWriterFactory.createWriter(out);
+		db.transaction(true, txn -> {
+			Blog blog = blogManager.getBlog(txn, g);
+			if (!blog.isChannel()) throw new NoSuchChannelException();
+			// Header: the format version and the channel's descriptor, so
+			// a reader can derive the group and check it is the channel
+			// they subscribed to
+			try {
+				w.writeList(BdfList.of(STREAM_FORMAT_VERSION,
+						blog.getGroup().getDescriptor()));
+				// Each message as it was signed, so the reader validates
+				// it rather than trusting whoever served the stream
+				for (MessageId m : db.getMessageIds(txn, g)) {
+					Message message = db.getMessage(txn, m);
+					w.writeList(BdfList.of(message.getTimestamp(),
+							message.getBody()));
+				}
+			} catch (IOException e) {
+				throw new DbException(e);
+			}
+		});
+		w.flush();
+	}
+
+	@Override
+	public int importChannel(InputStream in)
+			throws DbException, IOException, FormatException {
+		BdfReader r = bdfReaderFactory.createReader(in);
+		BdfList header = r.readList();
+		checkSize(header, 2);
+		if (header.getInt(0) != STREAM_FORMAT_VERSION)
+			throw new FormatException();
+		BdfList descriptor = clientHelper.toList(header.getRaw(1));
+		Blog blog = blogFactory.parseBlog(descriptor);
+		if (!blog.isChannel()) throw new FormatException();
+		GroupId g = blog.getId();
+		int count = 0;
+		while (!r.eof()) {
+			if (++count > MAX_STREAM_MESSAGES) throw new FormatException();
+			BdfList entry = r.readList();
+			checkSize(entry, 2);
+			long timestamp = entry.getLong(0);
+			byte[] body = entry.getRaw(1);
+			// The message ID is a hash of the group, timestamp and body,
+			// so a stream can't claim a message it didn't carry
+			Message m = messageFactory.createMessage(g, timestamp, body);
+			db.transaction(false, txn -> {
+				if (!db.containsGroup(txn, g))
+					throw new NoSuchChannelException();
+				db.importMessage(txn, m);
+			});
+		}
+		return count;
 	}
 
 	private void storeChannels(Transaction txn, List<Channel> channels)

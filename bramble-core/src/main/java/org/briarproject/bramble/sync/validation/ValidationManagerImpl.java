@@ -443,7 +443,7 @@ class ValidationManagerImpl implements ValidationManager, Service,
 		if (e instanceof MessageAddedEvent) {
 			// Validate the message if it wasn't created locally
 			MessageAddedEvent m = (MessageAddedEvent) e;
-			if (m.getContactId() != null)
+			if (m.isValidationRequired())
 				loadGroupAndValidateAsync(m.getMessage());
 		}
 	}

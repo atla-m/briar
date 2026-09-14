@@ -644,6 +644,21 @@ public interface DatabaseComponent extends TransactionManager {
 	void receiveAck(Transaction txn, ContactId c, Ack a) throws DbException;
 
 	/**
+	 * Stores a message that was imported from a source that is not a
+	 * contact, such as a file published by the owner of a channel. The
+	 * message is validated in the same way as a message received from a
+	 * contact, so nothing about it is taken on trust, and it is offered to
+	 * contacts that can see its group, so imported messages spread like any
+	 * other.
+	 * <p>
+	 * Does nothing if the message is already in the database.
+	 *
+	 * @throws NoSuchGroupException If we haven't subscribed to the
+	 * message's group, so that a file can't add groups we didn't ask for
+	 */
+	void importMessage(Transaction txn, Message m) throws DbException;
+
+	/**
 	 * Processes a message from the given contact.
 	 */
 	void receiveMessage(Transaction txn, ContactId c, Message m)
