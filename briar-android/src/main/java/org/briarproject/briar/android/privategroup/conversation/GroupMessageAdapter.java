@@ -6,6 +6,7 @@ import android.view.ViewGroup;
 
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
+import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.threaded.BaseThreadItemViewHolder;
 import org.briarproject.briar.android.threaded.ThreadItemAdapter;
 import org.briarproject.briar.api.attachment.FileHeader;
@@ -82,7 +83,7 @@ class GroupMessageAdapter extends ThreadItemAdapter<GroupMessageItem>
 
 	@Override
 	public void onAttachmentClicked(View view, GroupMessageItem item,
-			org.briarproject.briar.android.attachment.AttachmentItem attachment) {
+			AttachmentItem attachment) {
 		imageListener.onAttachmentClicked(view, item, attachment);
 	}
 

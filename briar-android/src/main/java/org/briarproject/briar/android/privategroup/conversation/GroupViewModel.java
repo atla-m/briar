@@ -327,7 +327,8 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 			long size = -1;
 			try (Cursor c = resolver.query(uri, null, null, null, null)) {
 				if (c != null && c.moveToFirst()) {
-					int nameCol = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+					int nameCol =
+							c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
 					if (nameCol != -1) name = c.getString(nameCol);
 					int sizeCol = c.getColumnIndex(OpenableColumns.SIZE);
 					if (sizeCol != -1 && !c.isNull(sizeCol))
@@ -390,7 +391,8 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	}
 
 	// true if there was an error, false if the file was saved
-	private final MutableLiveEvent<Boolean> saveError = new MutableLiveEvent<>();
+	private final MutableLiveEvent<Boolean> saveError =
+			new MutableLiveEvent<>();
 
 	LiveEvent<Boolean> getSaveError() {
 		return saveError;

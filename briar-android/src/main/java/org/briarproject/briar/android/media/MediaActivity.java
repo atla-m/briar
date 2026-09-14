@@ -160,7 +160,8 @@ public class MediaActivity extends BriarActivity {
 		playPause.setEnabled(false);
 		playPause.setOnClickListener(v -> togglePlayback());
 		seekBar.setEnabled(false);
-		seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+		seekBar.setOnSeekBarChangeListener(
+				new SeekBar.OnSeekBarChangeListener() {
 			@Override
 			public void onProgressChanged(SeekBar s, int progress,
 					boolean fromUser) {

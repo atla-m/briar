@@ -134,7 +134,8 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 				excerpt = parent.getFileHeaders().get(0).getName();
 			else excerpt = getContext().getString(R.string.groups_quote_photo);
 			quoteText.setText(excerpt);
-			quote.setOnClickListener(v -> listener.onQuoteClick(parent.getId()));
+			quote.setOnClickListener(
+					v -> listener.onQuoteClick(parent.getId()));
 		}
 
 		textView.setVisibility(item.hasText() ? VISIBLE : GONE);

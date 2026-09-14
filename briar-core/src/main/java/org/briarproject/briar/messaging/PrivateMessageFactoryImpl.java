@@ -79,7 +79,8 @@ class PrivateMessageFactoryImpl implements PrivateMessageFactory {
 			throws FormatException {
 		if (text == null && headers.isEmpty() && fileHeaders.isEmpty())
 			throw new IllegalArgumentException();
-		if (text != null && utf8IsTooLong(text, MAX_PRIVATE_MESSAGE_TEXT_LENGTH))
+		if (text != null &&
+				utf8IsTooLong(text, MAX_PRIVATE_MESSAGE_TEXT_LENGTH))
 			throw new IllegalArgumentException();
 		if (headers.size() + fileHeaders.size() > MAX_ATTACHMENTS_PER_MESSAGE)
 			throw new IllegalArgumentException();

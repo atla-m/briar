@@ -147,9 +147,11 @@ public class ConversationViewModel extends DbViewModel
 	private final MutableLiveData<FileStatus> fileStatusUpdated =
 			new MutableLiveData<>();
 	// A string resource explaining why a file could not be sent
-	private final MutableLiveEvent<Integer> fileError = new MutableLiveEvent<>();
+	private final MutableLiveEvent<Integer> fileError =
+			new MutableLiveEvent<>();
 	// true if there was an error, false if the file was saved
-	private final MutableLiveEvent<Boolean> saveError = new MutableLiveEvent<>();
+	private final MutableLiveEvent<Boolean> saveError =
+			new MutableLiveEvent<>();
 	private final Clock clock;
 	@IoExecutor
 	private final Executor ioExecutor;
@@ -216,10 +218,12 @@ public class ConversationViewModel extends DbViewModel
 						// A chunked image is referenced by its manifest ID
 						// and can be shown once all its chunks have arrived
 						LOG.info("Chunked file complete");
-						attachmentRetriever.loadAttachmentItem(p.getManifestId());
+						attachmentRetriever
+								.loadAttachmentItem(p.getManifestId());
 					}
 					// If the file is shown as a row, update its progress
-					FileHeader h = messagingManager.getFileHeader(p.getGroupId(),
+					FileHeader h = messagingManager.getFileHeader(
+							p.getGroupId(),
 							p.getManifestId());
 					postFileStatus(messagingManager.getFileStatus(h));
 				} catch (DbException ex) {
