@@ -3,12 +3,15 @@ package org.briarproject.briar.api.blog;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.identity.LocalAuthor;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.security.GeneralSecurityException;
+import java.util.List;
 
 import javax.annotation.Nullable;
 
@@ -19,6 +22,17 @@ public interface BlogPostFactory {
 
 	String SIGNING_LABEL_POST = CLIENT_ID.getString() + "/POST";
 	String SIGNING_LABEL_COMMENT = CLIENT_ID.getString() + "/COMMENT";
+
+	/**
+	 * Creates a blog post carrying images and files as well as text. The
+	 * headers are covered by the post's signature, so they cannot be
+	 * swapped or removed on the way.
+	 */
+	BlogPost createBlogPost(GroupId groupId, long timestamp,
+			@Nullable MessageId parent, LocalAuthor author,
+			@Nullable String text, List<AttachmentHeader> attachments,
+			List<FileHeader> files)
+			throws FormatException, GeneralSecurityException;
 
 	BlogPost createBlogPost(GroupId groupId, long timestamp,
 			@Nullable MessageId parent, LocalAuthor author, String text)

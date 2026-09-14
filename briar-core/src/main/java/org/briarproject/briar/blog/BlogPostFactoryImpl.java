@@ -4,6 +4,8 @@ import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.identity.LocalAuthor;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
@@ -15,13 +17,16 @@ import org.briarproject.briar.api.blog.MessageType;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.security.GeneralSecurityException;
+import java.util.List;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 import javax.inject.Inject;
 
 import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_COMMENT_TEXT_LENGTH;
+import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_POST_TEXT_LENGTH;
+import static org.briarproject.briar.blog.BlogPostValidator.getSignedPost;
 import static org.briarproject.briar.api.blog.MessageType.COMMENT;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.blog.MessageType.WRAPPED_COMMENT;
@@ -51,7 +56,7 @@ class BlogPostFactoryImpl implements BlogPostFactory {
 			throw new IllegalArgumentException();
 
 		// Serialise the data to be signed
-		BdfList signed = BdfList.of(groupId, timestamp, text);
+		BdfList signed = getSignedPost(groupId, timestamp, text, null);
 
 		// Generate the signature
 		byte[] sig = clientHelper
@@ -59,6 +64,42 @@ class BlogPostFactoryImpl implements BlogPostFactory {
 
 		// Serialise the signed message
 		BdfList message = BdfList.of(POST.getInt(), text, sig);
+		Message m = clientHelper.createMessage(groupId, timestamp, message);
+		return new BlogPost(m, parent, author);
+	}
+
+	@Override
+	public BlogPost createBlogPost(GroupId groupId, long timestamp,
+			@Nullable MessageId parent, LocalAuthor author,
+			@Nullable String text, List<AttachmentHeader> attachments,
+			List<FileHeader> files)
+			throws FormatException, GeneralSecurityException {
+
+		if (attachments.isEmpty() && files.isEmpty())
+			throw new IllegalArgumentException();
+		if (attachments.size() + files.size() > MAX_BLOG_POST_ATTACHMENTS)
+			throw new IllegalArgumentException();
+		if (text != null && StringUtils.toUtf8(text).length >
+				MAX_BLOG_POST_TEXT_LENGTH) {
+			throw new IllegalArgumentException();
+		}
+
+		// An image is named by the message holding it, a file by the
+		// message holding its manifest, with its name and size so they
+		// can be shown before it has arrived
+		BdfList headers = new BdfList();
+		for (AttachmentHeader a : attachments) {
+			headers.add(BdfList.of(a.getMessageId(), a.getContentType()));
+		}
+		for (FileHeader f : files) {
+			headers.add(BdfList.of(f.getManifestId(), f.getContentType(),
+					f.getName(), f.getSize()));
+		}
+
+		BdfList signed = getSignedPost(groupId, timestamp, text, headers);
+		byte[] sig = clientHelper
+				.sign(SIGNING_LABEL_POST, signed, author.getPrivateKey());
+		BdfList message = BdfList.of(POST.getInt(), text, headers, sig);
 		Message m = clientHelper.createMessage(groupId, timestamp, message);
 		return new BlogPost(m, parent, author);
 	}

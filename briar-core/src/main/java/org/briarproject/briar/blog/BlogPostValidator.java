@@ -1,6 +1,7 @@
 package org.briarproject.briar.blog;
 
 import org.briarproject.bramble.api.FormatException;
+import org.briarproject.bramble.api.UniqueId;
 import org.briarproject.bramble.api.client.BdfMessageContext;
 import org.briarproject.bramble.api.client.BdfMessageValidator;
 import org.briarproject.bramble.api.client.ClientHelper;
@@ -9,6 +10,7 @@ import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.sync.Group;
+import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.GroupFactory;
 import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.Message;
@@ -23,6 +25,7 @@ import org.briarproject.nullsafety.NotNullByDefault;
 import java.security.GeneralSecurityException;
 import java.util.Collection;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 import static java.util.Collections.singletonList;
@@ -40,6 +43,11 @@ import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIMESTAMP;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIME_RECEIVED;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TYPE;
 import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_COMMENT_TEXT_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
+import static org.briarproject.briar.api.blog.BlogConstants.KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_POST_TEXT_LENGTH;
 import static org.briarproject.briar.api.blog.BlogManager.CLIENT_ID;
 import static org.briarproject.briar.api.blog.BlogManager.MAJOR_VERSION;
@@ -99,15 +107,30 @@ class BlogPostValidator extends BdfMessageValidator {
 	private BdfMessageContext validatePost(Message m, Group g, BdfList body)
 			throws InvalidMessageException, FormatException {
 
-		// Text, signature
-		checkSize(body, 2);
-		String text = body.getString(0);
-		checkLength(text, 0, MAX_BLOG_POST_TEXT_LENGTH);
+		// Client version 0.1: text, signature.
+		// Client version 0.2: optional text, attachment headers, signature.
+		checkSize(body, 2, 3);
+		boolean hasAttachments = body.size() == 3;
+		String text;
+		BdfList headers = null;
+		byte[] sig;
+		if (hasAttachments) {
+			// Text is optional when there are attachments
+			text = body.getOptionalString(0);
+			checkLength(text, 1, MAX_BLOG_POST_TEXT_LENGTH);
+			headers = validateAttachmentHeaders(body.getList(1));
+			sig = body.getRaw(2);
+		} else {
+			text = body.getString(0);
+			checkLength(text, 0, MAX_BLOG_POST_TEXT_LENGTH);
+			sig = body.getRaw(1);
+		}
 
-		// Verify signature
-		byte[] sig = body.getRaw(1);
+		// Verify signature. The attachment headers are covered by it, so
+		// they can't be swapped or removed.
 		checkLength(sig, 1, MAX_SIGNATURE_LENGTH);
-		BdfList signed = BdfList.of(g.getId(), m.getTimestamp(), text);
+		BdfList signed = getSignedPost(g.getId(), m.getTimestamp(), text,
+				headers);
 		Blog b = blogFactory.parseBlog(g);
 		Author a = b.getAuthor();
 		try {
@@ -122,7 +145,47 @@ class BlogPostValidator extends BdfMessageValidator {
 		meta.put(KEY_ORIGINAL_MSG_ID, m.getId());
 		meta.put(KEY_AUTHOR, clientHelper.toList(a));
 		meta.put(KEY_RSS_FEED, b.isRssFeed());
+		if (headers != null) meta.put(KEY_ATTACHMENT_HEADERS, headers);
 		return new BdfMessageContext(meta);
+	}
+
+	/**
+	 * Checks the headers of the images and files a post carries. An image
+	 * is named by the message holding it; a file by the message holding
+	 * its manifest, with the name and size shown before it has arrived.
+	 */
+	private BdfList validateAttachmentHeaders(BdfList headers)
+			throws FormatException {
+		// The format with headers is only used when there are some
+		checkSize(headers, 1, MAX_BLOG_POST_ATTACHMENTS);
+		for (int i = 0; i < headers.size(); i++) {
+			BdfList header = headers.getList(i);
+			// Image: message ID, content type.
+			// File: manifest ID, content type, name, size.
+			checkSize(header, 2, 4);
+			if (header.size() == 3) throw new FormatException();
+			checkLength(header.getRaw(0), UniqueId.LENGTH);
+			checkLength(header.getString(1), 1, MAX_CONTENT_TYPE_BYTES);
+			if (header.size() == 4) {
+				checkLength(header.getString(2), 1, MAX_FILE_NAME_LENGTH);
+				long size = header.getLong(3);
+				if (size < 1 || size > MAX_FILE_SIZE)
+					throw new FormatException();
+			}
+		}
+		return headers;
+	}
+
+	/**
+	 * Returns the list a post's signature covers. Shared with the post
+	 * factory so that both sides sign and check the same thing.
+	 */
+	static BdfList getSignedPost(GroupId groupId, long timestamp,
+			@Nullable String text, @Nullable BdfList attachmentHeaders) {
+		if (attachmentHeaders == null) {
+			return BdfList.of(groupId, timestamp, text);
+		}
+		return BdfList.of(groupId, timestamp, text, attachmentHeaders);
 	}
 
 	private BdfMessageContext validateComment(Message m, Group g, BdfList body)
