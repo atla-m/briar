@@ -4,6 +4,7 @@ import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.sync.Group;
@@ -58,6 +59,8 @@ public class BlogPostValidatorTest extends BrambleMockTestCase {
 	private final MessageFactory messageFactory =
 			context.mock(MessageFactory.class);
 	private final BlogFactory blogFactory = context.mock(BlogFactory.class);
+	private final BdfReaderFactory bdfReaderFactory =
+			context.mock(BdfReaderFactory.class);
 	private final ClientHelper clientHelper = context.mock(ClientHelper.class);
 	private final Author author;
 	private final String text = getRandomString(42);
@@ -78,7 +81,8 @@ public class BlogPostValidatorTest extends BrambleMockTestCase {
 		MetadataEncoder metadataEncoder = context.mock(MetadataEncoder.class);
 		Clock clock = new SystemClock();
 		validator = new BlogPostValidator(groupFactory, messageFactory,
-				blogFactory, clientHelper, metadataEncoder, clock);
+				blogFactory, clientHelper, bdfReaderFactory, metadataEncoder,
+				clock);
 		context.assertIsSatisfied();
 	}
 

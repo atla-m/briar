@@ -2,6 +2,7 @@ package org.briarproject.briar.blog;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.ClientHelper;
+import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
@@ -75,6 +76,8 @@ public class BlogManagerImplTest extends BrambleMockTestCase {
 			context.mock(IdentityManager.class);
 	private final ClientHelper clientHelper = context.mock(ClientHelper.class);
 	private final BlogFactory blogFactory = context.mock(BlogFactory.class);
+	private final CryptoComponent crypto =
+			context.mock(CryptoComponent.class);
 	private final BlogPostFactory blogPostFactory =
 			context.mock(BlogPostFactory.class);
 
@@ -91,7 +94,8 @@ public class BlogManagerImplTest extends BrambleMockTestCase {
 	public BlogManagerImplTest() {
 		MetadataParser metadataParser = context.mock(MetadataParser.class);
 		blogManager = new BlogManagerImpl(db, identityManager, authorManager,
-				clientHelper, metadataParser, blogFactory, blogPostFactory);
+				clientHelper, metadataParser, blogFactory, blogPostFactory,
+				crypto);
 
 		localAuthor1 = getLocalAuthor();
 		localAuthor2 = getLocalAuthor();

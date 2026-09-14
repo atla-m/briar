@@ -1,5 +1,6 @@
 package org.briarproject.briar.api.blog;
 
+import static java.util.concurrent.TimeUnit.DAYS;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 
 public interface BlogConstants {
@@ -18,6 +19,12 @@ public interface BlogConstants {
 	 * The maximum number of images and files a blog post can carry.
 	 */
 	int MAX_BLOG_POST_ATTACHMENTS = 10;
+
+	/**
+	 * How long to keep an image or file that no post references, before
+	 * deleting it.
+	 */
+	long MISSING_ATTACHMENT_CLEANUP_DURATION_MS = DAYS.toMillis(28);
 
 	// Metadata keys
 	String KEY_TYPE = "type";

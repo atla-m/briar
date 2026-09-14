@@ -7,7 +7,10 @@ import org.briarproject.bramble.api.client.BdfMessageValidator;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.data.BdfReader;
+import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.data.MetadataEncoder;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
@@ -15,13 +18,19 @@ import org.briarproject.bramble.api.sync.GroupFactory;
 import org.briarproject.bramble.api.sync.InvalidMessageException;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageFactory;
+import org.briarproject.bramble.api.sync.MessageContext;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.MessageType;
+import org.briarproject.briar.attachment.ChunkedFileStore;
+import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.security.GeneralSecurityException;
 import java.util.Collection;
 
@@ -30,8 +39,11 @@ import javax.annotation.concurrent.Immutable;
 
 import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_SIGNATURE_LENGTH;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
+import static org.briarproject.bramble.api.transport.TransportConstants.MAX_CLOCK_DIFFERENCE;
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_AUTHOR;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_COMMENT;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_ORIGINAL_MSG_ID;
@@ -46,6 +58,8 @@ import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_COMMENT_TEX
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_POST_ATTACHMENTS;
 import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_POST_TEXT_LENGTH;
@@ -54,6 +68,9 @@ import static org.briarproject.briar.api.blog.BlogManager.MAJOR_VERSION;
 import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_COMMENT;
 import static org.briarproject.briar.api.blog.BlogPostFactory.SIGNING_LABEL_POST;
 import static org.briarproject.briar.api.blog.MessageType.COMMENT;
+import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
+import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
+import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 
 @Immutable
@@ -63,15 +80,103 @@ class BlogPostValidator extends BdfMessageValidator {
 	private final GroupFactory groupFactory;
 	private final MessageFactory messageFactory;
 	private final BlogFactory blogFactory;
+	private final BdfReaderFactory bdfReaderFactory;
 
 	BlogPostValidator(GroupFactory groupFactory, MessageFactory messageFactory,
 			BlogFactory blogFactory, ClientHelper clientHelper,
+			BdfReaderFactory bdfReaderFactory,
 			MetadataEncoder metadataEncoder, Clock clock) {
 		super(clientHelper, metadataEncoder, clock);
 
 		this.groupFactory = groupFactory;
 		this.messageFactory = messageFactory;
 		this.blogFactory = blogFactory;
+		this.bdfReaderFactory = bdfReaderFactory;
+	}
+
+	@Override
+	public MessageContext validateMessage(Message m, Group g)
+			throws InvalidMessageException {
+		// Reject the message if it's too far in the future
+		long now = clock.currentTimeMillis();
+		if (m.getTimestamp() - now > MAX_CLOCK_DIFFERENCE) {
+			throw new InvalidMessageException(
+					"Timestamp is too far in the future");
+		}
+		try {
+			// An image or file chunk is a BDF list (the descriptor)
+			// followed by raw bytes, so the body can't be parsed as a
+			// single list. Read the first list and see what it is.
+			InputStream in = new ByteArrayInputStream(m.getBody());
+			CountingInputStream countIn =
+					new CountingInputStream(in, MAX_MESSAGE_BODY_LENGTH);
+			BdfReader reader = bdfReaderFactory.createReader(countIn);
+			BdfList list = reader.readList();
+			long bytesRead = countIn.getBytesRead();
+			BdfMessageContext context;
+			if (isType(list, ATTACHMENT)) {
+				context = validateAttachment(m, list, bytesRead);
+			} else if (isType(list, FILE_CHUNK)) {
+				context = validateFileChunk(m, list, bytesRead);
+			} else {
+				// Every other type is a single list
+				if (!reader.eof()) throw new FormatException();
+				context = validateMessage(m, g, list);
+			}
+			Metadata meta = metadataEncoder.encode(context.getDictionary());
+			return new MessageContext(meta, context.getDependencies());
+		} catch (IOException e) {
+			throw new InvalidMessageException(e);
+		}
+	}
+
+	private boolean isType(BdfList list, MessageType t)
+			throws FormatException {
+		if (list.isEmpty()) throw new FormatException();
+		Object type = list.get(0);
+		return type instanceof Number &&
+				((Number) type).intValue() == t.getInt();
+	}
+
+	private BdfMessageContext validateAttachment(Message m, BdfList descriptor,
+			long descriptorLength) throws FormatException {
+		// Message type, content type
+		checkSize(descriptor, 2);
+		String contentType = descriptor.getString(1);
+		checkLength(contentType, 1, MAX_CONTENT_TYPE_BYTES);
+		// An image isn't signed. It's authenticated by the signed post
+		// that references it, which covers its message ID, a hash of the
+		// image itself.
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(KEY_TYPE, ATTACHMENT.getInt());
+		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptorLength);
+		meta.put(MSG_KEY_CONTENT_TYPE, contentType);
+		return new BdfMessageContext(meta);
+	}
+
+	private BdfMessageContext validateFileManifest(Message m, BdfList body)
+			throws FormatException {
+		// The file's name, type, size and chunk hashes are checked by the
+		// shared file store, which the other clients use too
+		BdfDictionary meta = ChunkedFileStore.validateManifest(body);
+		meta.put(KEY_TYPE, FILE_MANIFEST.getInt());
+		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		return new BdfMessageContext(meta);
+	}
+
+	private BdfMessageContext validateFileChunk(Message m, BdfList descriptor,
+			long descriptorLength) throws FormatException {
+		BdfDictionary meta = ChunkedFileStore.validateChunk(descriptor,
+				m.getBody().length - descriptorLength);
+		MessageId manifestId =
+				new MessageId(meta.getRaw(KEY_FILE_MANIFEST_ID));
+		meta.put(KEY_TYPE, FILE_CHUNK.getInt());
+		meta.put(KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(MSG_KEY_DESCRIPTOR_LENGTH, descriptorLength);
+		// The chunk depends on its manifest, so it isn't delivered until
+		// the manifest is, and is then checked against it
+		return new BdfMessageContext(meta, singletonList(manifestId));
 	}
 
 	@Override
@@ -96,6 +201,11 @@ class BlogPostValidator extends BdfMessageValidator {
 				break;
 			case WRAPPED_COMMENT:
 				c = validateWrappedComment(body);
+				break;
+			case FILE_MANIFEST:
+				// Put the type back: the store reads the whole body
+				body.add(0, FILE_MANIFEST.getInt());
+				c = validateFileManifest(m, body);
 				break;
 			default:
 				throw new InvalidMessageException("Unknown Message Type");

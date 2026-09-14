@@ -10,6 +10,7 @@ import org.briarproject.bramble.test.TestDatabaseConfigModule;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.contact.Contact;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
 import org.briarproject.briar.api.blog.BlogPost;
@@ -43,10 +44,14 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
+import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
+import static org.briarproject.bramble.util.IoUtils.copyAndClose;
+import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -586,6 +591,46 @@ public class ChannelManagerIntegrationTest
 						tampered.getTimestamp(), tampered.getBody()))));
 		awaitPendingMessageValidation(1);
 		assertTrue(blogManager1.getPostHeaders(g).isEmpty());
+	}
+
+	@Test
+	public void testChannelCarriesAFileToASubscriber() throws Exception {
+		// The payoff of building chunking as a shared store: a channel
+		// gets files with the manifest-bound chunks already in place
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 2);
+		FileHeader file = blogManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "notice.pdf",
+				"application/pdf",
+				() -> new ByteArrayInputStream(fileBytes));
+		assertEquals(2, file.getChunkCount());
+
+		BlogPost post = blogPostFactory.createBlogPost(g,
+				c0.getClock().currentTimeMillis() + 1, null,
+				channel.getLocalAuthor(), "Here is the notice", emptyList(),
+				singletonList(file));
+		blogManager0.addLocalPost(post);
+		assertTrue(blogManager0.getFileStatus(file).isComplete());
+
+		// The subscriber has only the link, and gets the post, the
+		// manifest and both chunks from the published file
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, out);
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		assertEquals(4, channelManager1.importChannel(
+				new ByteArrayInputStream(out.toByteArray())));
+		awaitPendingMessageDelivery(4);
+
+		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
+		assertEquals(1, headers.size());
+		FileHeader received = blogManager1.getFileHeader(g,
+				file.getManifestId());
+		assertEquals("notice.pdf", received.getName());
+		assertTrue(blogManager1.getFileStatus(received).isComplete());
+		ByteArrayOutputStream read = new ByteArrayOutputStream();
+		copyAndClose(blogManager1.getFile(received), read);
+		assertArrayEquals(fileBytes, read.toByteArray());
 	}
 
 	private byte[] exportChannel(GroupId g) throws Exception {
