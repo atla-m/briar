@@ -26,6 +26,9 @@ public class BlogSharingValidatorTest extends SharingValidatorTest {
 	private final BdfList authorList = BdfList.of(author.getFormatVersion(),
 			author.getName(), author.getPublicKey());
 	private final BdfList descriptor = BdfList.of(authorList, false);
+	private final BdfList rssDescriptor = BdfList.of(authorList, true);
+	private final BdfList channelDescriptor =
+			BdfList.of(authorList, false, true);
 	private final String text = getRandomString(MAX_INVITATION_TEXT_LENGTH);
 
 	@Override
@@ -113,16 +116,26 @@ public class BlogSharingValidatorTest extends SharingValidatorTest {
 	public void testAcceptsInvitationForRssBlog() throws Exception {
 		expectCreateRssBlog();
 		expectEncodeMetadata(INVITE, NO_AUTO_DELETE_TIMER);
-		BdfList rssDescriptor = BdfList.of(authorList, true);
 		BdfMessageContext context = validator.validateMessage(message, group,
 				BdfList.of(INVITE.getValue(), previousMsgId, rssDescriptor,
 						text));
 		assertExpectedContext(context, previousMsgId);
 	}
 
+	@Test
+	public void testAcceptsInvitationForChannel() throws Exception {
+		expectParseBlog(channelDescriptor);
+		expectEncodeMetadata(INVITE, NO_AUTO_DELETE_TIMER);
+		BdfMessageContext context = validator.validateMessage(message, group,
+				BdfList.of(INVITE.getValue(), previousMsgId,
+						channelDescriptor, text));
+		assertExpectedContext(context, previousMsgId);
+	}
+
 	@Test(expected = FormatException.class)
 	public void testRejectsNullAuthor() throws Exception {
 		BdfList invalidDescriptor = BdfList.of(null, false);
+		expectRejectBlog(invalidDescriptor);
 		validator.validateMessage(message, group,
 				BdfList.of(INVITE.getValue(), previousMsgId, invalidDescriptor,
 						null));
@@ -131,6 +144,7 @@ public class BlogSharingValidatorTest extends SharingValidatorTest {
 	@Test(expected = FormatException.class)
 	public void testRejectsNonListAuthor() throws Exception {
 		BdfList invalidDescriptor = BdfList.of(123, false);
+		expectRejectBlog(invalidDescriptor);
 		validator.validateMessage(message, group,
 				BdfList.of(INVITE.getValue(), previousMsgId, invalidDescriptor,
 						null));
@@ -164,20 +178,24 @@ public class BlogSharingValidatorTest extends SharingValidatorTest {
 	}
 
 	private void expectCreateBlog() throws Exception {
+		expectParseBlog(descriptor);
+	}
+
+	private void expectCreateRssBlog() throws Exception {
+		expectParseBlog(rssDescriptor);
+	}
+
+	private void expectParseBlog(BdfList d) throws Exception {
 		context.checking(new Expectations() {{
-			oneOf(clientHelper).parseAndValidateAuthor(authorList);
-			will(returnValue(author));
-			oneOf(blogFactory).createBlog(author);
+			oneOf(blogFactory).parseBlog(d);
 			will(returnValue(blog));
 		}});
 	}
 
-	private void expectCreateRssBlog() throws Exception {
+	private void expectRejectBlog(BdfList d) throws Exception {
 		context.checking(new Expectations() {{
-			oneOf(clientHelper).parseAndValidateAuthor(authorList);
-			will(returnValue(author));
-			oneOf(blogFactory).createFeedBlog(author);
-			will(returnValue(blog));
+			oneOf(blogFactory).parseBlog(d);
+			will(throwException(new FormatException()));
 		}});
 	}
 }
