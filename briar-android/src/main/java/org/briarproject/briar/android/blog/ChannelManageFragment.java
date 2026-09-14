@@ -28,6 +28,9 @@ import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 
@@ -58,6 +61,8 @@ public class ChannelManageFragment extends BaseFragment
 
 	@Nullable
 	private GroupId publishing = null;
+	@Nullable
+	private GroupId editingMirrors = null;
 
 	private final ActivityResultLauncher<String> publishLauncher =
 			registerForActivityResult(new CreateDocumentAdvanced(),
@@ -114,6 +119,10 @@ public class ChannelManageFragment extends BaseFragment
 				this::showMessage);
 		viewModel.getSubscribed().observeEvent(getViewLifecycleOwner(),
 				this::openBlog);
+		viewModel.getMirrors().observeEvent(getViewLifecycleOwner(),
+				this::showMirrorsDialog);
+		viewModel.getFetched().observeEvent(getViewLifecycleOwner(),
+				this::showFetchResult);
 		return v;
 	}
 
@@ -191,6 +200,11 @@ public class ChannelManageFragment extends BaseFragment
 				} catch (ActivityNotFoundException e) {
 					showMessage(R.string.error_start_activity);
 				}
+			} else if (id == R.id.action_channel_mirrors) {
+				editingMirrors = channel.getBlogId();
+				viewModel.loadMirrors(channel.getBlogId());
+			} else if (id == R.id.action_channel_fetch) {
+				viewModel.fetch(channel.getBlogId());
 			} else if (id == R.id.action_channel_delete) {
 				confirmDelete(channel);
 			} else {
@@ -226,6 +240,42 @@ public class ChannelManageFragment extends BaseFragment
 		});
 		b.setNegativeButton(R.string.cancel, null);
 		b.show();
+	}
+
+	private void showMirrorsDialog(List<String> current) {
+		GroupId g = editingMirrors;
+		editingMirrors = null;
+		if (g == null) return;
+		View v = requireActivity().getLayoutInflater()
+				.inflate(R.layout.dialog_channel_mirrors, null);
+		EditText input = v.findViewById(R.id.channelMirrors);
+		StringBuilder sb = new StringBuilder();
+		for (String mirror : current) sb.append(mirror).append('\n');
+		input.setText(sb.toString().trim());
+		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
+				R.style.BriarDialogTheme);
+		b.setTitle(R.string.channels_mirrors);
+		b.setView(v);
+		b.setPositiveButton(R.string.save_file, (d, w) -> {
+			List<String> urls = new ArrayList<>();
+			for (String line : input.getText().toString().split("\n")) {
+				String trimmed = line.trim();
+				if (!trimmed.isEmpty()) urls.add(trimmed);
+			}
+			viewModel.setMirrors(g, urls);
+		});
+		b.setNegativeButton(R.string.cancel, null);
+		b.show();
+	}
+
+	private void showFetchResult(int count) {
+		if (count == 0) {
+			showMessage(R.string.channels_fetch_none);
+		} else {
+			Toast.makeText(requireContext(), getResources().getQuantityString(
+					R.plurals.channels_fetch_posts, count, count),
+					LENGTH_LONG).show();
+		}
 	}
 
 	private void showMessage(int stringId) {
