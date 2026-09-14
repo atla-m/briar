@@ -145,6 +145,9 @@ class ChannelViewModel extends DbViewModel {
 		dbExecutor.execute(() -> {
 			try {
 				Blog blog = channelManager.subscribeFromLink(link);
+				// Show it in the list straight away, not only after the
+				// screen is next opened
+				loadChannels();
 				subscribed.postEvent(blog.getId());
 			} catch (FormatException e) {
 				message.postEvent(R.string.channels_subscribe_error);
