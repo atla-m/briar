@@ -21,11 +21,13 @@ import org.briarproject.briar.R;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
+import org.briarproject.briar.api.channel.FetchResult;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
@@ -51,7 +53,7 @@ class ChannelViewModel extends DbViewModel {
 	private final Executor dbExecutor;
 	private final Executor ioExecutor;
 
-	private final MutableLiveData<LiveResult<List<Channel>>> channels =
+	private final MutableLiveData<LiveResult<List<ChannelItem>>> channels =
 			new MutableLiveData<>();
 	private final MutableLiveEvent<GroupId> channelCreated =
 			new MutableLiveEvent<>();
@@ -61,7 +63,7 @@ class ChannelViewModel extends DbViewModel {
 			new MutableLiveEvent<>();
 	private final MutableLiveEvent<Integer> message =
 			new MutableLiveEvent<>();
-	private final MutableLiveEvent<Integer> fetched =
+	private final MutableLiveEvent<FetchResult> fetched =
 			new MutableLiveEvent<>();
 	private final MutableLiveEvent<List<String>> mirrors =
 			new MutableLiveEvent<>();
@@ -80,7 +82,7 @@ class ChannelViewModel extends DbViewModel {
 		loadChannels();
 	}
 
-	LiveData<LiveResult<List<Channel>>> getChannels() {
+	LiveData<LiveResult<List<ChannelItem>>> getChannels() {
 		return channels;
 	}
 
@@ -93,9 +95,18 @@ class ChannelViewModel extends DbViewModel {
 	}
 
 	@DatabaseExecutor
-	private List<Channel> loadChannels(Transaction txn) throws DbException {
+	private List<ChannelItem> loadChannels(Transaction txn)
+			throws DbException {
 		long start = now();
-		List<Channel> loaded = channelManager.getChannels(txn);
+		List<ChannelItem> loaded = new ArrayList<>();
+		for (Channel c : channelManager.getChannels(txn)) {
+			loaded.add(ChannelItem.owned(c));
+		}
+		// Channels we only read are listed too, so their reader can fetch
+		// them and see where they are published
+		for (Blog b : channelManager.getSubscriptions(txn)) {
+			loaded.add(ChannelItem.subscribed(b));
+		}
 		logDuration(LOG, "Loading channels", start);
 		return loaded;
 	}
@@ -212,8 +223,19 @@ class ChannelViewModel extends DbViewModel {
 		});
 	}
 
-	LiveEvent<Integer> getFetched() {
+	LiveEvent<FetchResult> getFetched() {
 		return fetched;
+	}
+
+	void unsubscribe(GroupId g) {
+		dbExecutor.execute(() -> {
+			try {
+				channelManager.unsubscribe(g);
+				loadChannels();
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
 	}
 
 	void deleteChannel(GroupId g) {

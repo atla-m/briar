@@ -33,6 +33,10 @@ import java.util.List;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
@@ -325,7 +329,7 @@ public class ChannelManagerIntegrationTest
 					channelManager0.getChannelLink(g));
 			assertEquals(singletonList(url), channelManager1.getMirrors(g));
 
-			assertEquals(1, channelManager1.fetchChannel(g));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
 			awaitPendingMessageDelivery(1);
 
 			Collection<BlogPostHeader> headers =
@@ -352,12 +356,13 @@ public class ChannelManagerIntegrationTest
 		server.start();
 		try {
 			subscribeWithMirror(g, server.url("/c.briar").toString());
-			assertEquals(1, channelManager1.fetchChannel(g));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
 			awaitPendingMessageDelivery(1);
 
 			// The second fetch sends the tag the mirror gave us, and the
 			// mirror says nothing has changed, so nothing is downloaded
-			assertEquals(0, channelManager1.fetchChannel(g));
+			assertEquals(UNCHANGED,
+					channelManager1.fetchChannel(g).getOutcome());
 			server.takeRequest();
 			RecordedRequest second = server.takeRequest();
 			assertEquals("\"v1\"", second.getHeader("If-None-Match"));
@@ -385,7 +390,7 @@ public class ChannelManagerIntegrationTest
 					working.url("/c.briar").toString()));
 			channelManager1.subscribeFromLink(
 					channelManager0.getChannelLink(g));
-			assertEquals(1, channelManager1.fetchChannel(g));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
 			awaitPendingMessageDelivery(1);
 			assertEquals(1, blogManager1.getPostHeaders(g).size());
 		} finally {
@@ -413,12 +418,87 @@ public class ChannelManagerIntegrationTest
 		try {
 			channelManager1.setMirrors(g,
 					singletonList(server.url("/c.briar").toString()));
-			assertEquals(1, channelManager1.fetchChannel(g));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
 			awaitPendingMessageValidation(1);
 			assertTrue(blogManager1.getPostHeaders(g).isEmpty());
 		} finally {
 			server.shutdown();
 		}
+	}
+
+	@Test
+	public void testUnreachableMirrorIsNotReportedAsUpToDate()
+			throws Exception {
+		// A reader whose mirrors are blocked must not be told the channel
+		// is up to date: they may be missing everything since last time
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		MockWebServer server = new MockWebServer();
+		server.start();
+		String url = server.url("/c.briar").toString();
+		server.shutdown();
+
+		channelManager0.setMirrors(g, singletonList(url));
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		assertEquals(UNREACHABLE,
+				channelManager1.fetchChannel(g).getOutcome());
+	}
+
+	@Test
+	public void testChannelWithNoMirrorsSaysSo() throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		assertEquals(NO_MIRRORS, channelManager0
+				.fetchChannel(channel.getBlogId()).getOutcome());
+	}
+
+	@Test
+	public void testSubscriptionsAreListedSeparatelyFromOurOwnChannels()
+			throws Exception {
+		// A reader has to be able to find a channel they subscribe to, to
+		// fetch it or see where it is published
+		Channel ours = channelManager0.createChannel("Ours");
+		Channel theirs = channelManager1.createChannel("Theirs");
+		channelManager0.subscribeFromLink(
+				channelManager1.getChannelLink(theirs.getBlogId()));
+
+		// We own one and subscribe to the other
+		List<Channel> owned = channelManager0.getChannels();
+		assertEquals(1, owned.size());
+		assertEquals(ours.getBlogId(), owned.get(0).getBlogId());
+
+		List<Blog> subscriptions = channelManager0.getSubscriptions();
+		assertEquals(1, subscriptions.size());
+		assertEquals(theirs.getBlogId(), subscriptions.get(0).getId());
+
+		// Our own channel is not listed as a subscription, and a personal
+		// blog is not listed as a channel at all
+		for (Blog b : subscriptions) {
+			assertNotEquals(ours.getBlogId(), b.getId());
+			assertTrue(b.isChannel());
+		}
+	}
+
+	@Test
+	public void testUnsubscribingLeavesOurOwnChannelsAlone()
+			throws Exception {
+		Channel ours = channelManager0.createChannel("Ours");
+		Channel theirs = channelManager1.createChannel("Theirs");
+		channelManager0.subscribeFromLink(
+				channelManager1.getChannelLink(theirs.getBlogId()));
+
+		channelManager0.unsubscribe(theirs.getBlogId());
+		assertTrue(channelManager0.getSubscriptions().isEmpty());
+		assertEquals(1, channelManager0.getChannels().size());
+
+		// A channel we created is deleted, not unsubscribed from, so its
+		// key pair goes with it
+		try {
+			channelManager0.unsubscribe(ours.getBlogId());
+			fail();
+		} catch (IllegalArgumentException expected) {
+			// Expected
+		}
+		assertEquals(1, channelManager0.getChannels().size());
 	}
 
 	private byte[] exportChannel(GroupId g) throws Exception {

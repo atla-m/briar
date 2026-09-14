@@ -100,20 +100,32 @@ public interface ChannelManager {
 
 	/**
 	 * Fetches a channel from its mirrors, trying each in turn until one
-	 * answers, and stores any posts it carries that we don't have. Does
-	 * nothing if the channel has no mirrors, or if the mirror says the
-	 * file hasn't changed since we last fetched it.
-	 *
-	 * @return the number of messages read from the mirror, which is zero
-	 * if nothing had changed
+	 * answers, and stores any posts it carries that we don't have.
 	 */
-	int fetchChannel(GroupId g) throws DbException;
+	FetchResult fetchChannel(GroupId g) throws DbException;
 
 	/**
 	 * Fetches every channel that has mirrors. Called on a timer while Tor
 	 * is running, and when the user asks.
 	 */
 	void fetchAllChannels();
+
+	/**
+	 * Returns the channels we subscribe to but did not create, so cannot
+	 * post to.
+	 */
+	List<Blog> getSubscriptions() throws DbException;
+
+	List<Blog> getSubscriptions(Transaction txn) throws DbException;
+
+	/**
+	 * Unsubscribes from a channel we did not create. The posts we already
+	 * have are deleted with it.
+	 *
+	 * @throws IllegalArgumentException If we created the channel, which is
+	 * deleted with {@link #deleteChannel(GroupId)} instead
+	 */
+	void unsubscribe(GroupId g) throws DbException;
 
 	/**
 	 * Returns a link that can be given to anyone, carrying everything

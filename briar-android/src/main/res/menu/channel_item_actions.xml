@@ -22,6 +22,10 @@
 		android:title="@string/channels_fetch" />
 
 	<item
+		android:id="@+id/action_channel_unsubscribe"
+		android:title="@string/channels_unsubscribe" />
+
+	<item
 		android:id="@+id/action_channel_delete"
 		android:title="@string/delete" />
 

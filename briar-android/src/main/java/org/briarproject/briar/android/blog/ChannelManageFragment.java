@@ -24,7 +24,7 @@ import org.briarproject.briar.android.fragment.BaseFragment;
 import org.briarproject.briar.android.util.ActivityLaunchers.CreateDocumentAdvanced;
 import org.briarproject.briar.android.util.ActivityLaunchers.OpenAnyDocumentAdvanced;
 import org.briarproject.briar.android.view.BriarRecyclerView;
-import org.briarproject.briar.api.channel.Channel;
+import org.briarproject.briar.api.channel.FetchResult;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
@@ -176,37 +176,48 @@ public class ChannelManageFragment extends BaseFragment
 	}
 
 	@Override
-	public void onChannelClick(Channel channel) {
-		openBlog(channel.getBlogId());
+	public void onChannelClick(ChannelItem channel) {
+		openBlog(channel.getId());
 	}
 
 	@Override
-	public void onActionsClick(Channel channel, View anchor) {
+	public void onActionsClick(ChannelItem channel, View anchor) {
 		PopupMenu menu = new PopupMenu(requireContext(), anchor);
 		menu.inflate(R.menu.channel_item_actions);
+		// Only a channel's author can post to it or publish it, and only
+		// a reader can unsubscribe from it
+		boolean owned = channel.isOwned();
+		menu.getMenu().findItem(R.id.action_channel_write).setVisible(owned);
+		menu.getMenu().findItem(R.id.action_channel_publish)
+				.setVisible(owned);
+		menu.getMenu().findItem(R.id.action_channel_delete).setVisible(owned);
+		menu.getMenu().findItem(R.id.action_channel_unsubscribe)
+				.setVisible(!owned);
 		menu.setOnMenuItemClickListener(item -> {
 			int id = item.getItemId();
 			if (id == R.id.action_channel_write) {
 				Intent i = new Intent(getActivity(),
 						WriteBlogPostActivity.class);
-				i.putExtra(GROUP_ID, channel.getBlogId().getBytes());
+				i.putExtra(GROUP_ID, channel.getId().getBytes());
 				startActivity(i);
 			} else if (id == R.id.action_channel_copy_link) {
-				viewModel.copyLink(channel.getBlogId());
+				viewModel.copyLink(channel.getId());
 			} else if (id == R.id.action_channel_publish) {
-				publishing = channel.getBlogId();
+				publishing = channel.getId();
 				try {
 					publishLauncher.launch(channel.getTitle() + ".briar");
 				} catch (ActivityNotFoundException e) {
 					showMessage(R.string.error_start_activity);
 				}
 			} else if (id == R.id.action_channel_mirrors) {
-				editingMirrors = channel.getBlogId();
-				viewModel.loadMirrors(channel.getBlogId());
+				editingMirrors = channel.getId();
+				viewModel.loadMirrors(channel.getId());
 			} else if (id == R.id.action_channel_fetch) {
-				viewModel.fetch(channel.getBlogId());
+				viewModel.fetch(channel.getId());
 			} else if (id == R.id.action_channel_delete) {
 				confirmDelete(channel);
+			} else if (id == R.id.action_channel_unsubscribe) {
+				confirmUnsubscribe(channel);
 			} else {
 				return false;
 			}
@@ -215,13 +226,24 @@ public class ChannelManageFragment extends BaseFragment
 		menu.show();
 	}
 
-	private void confirmDelete(Channel channel) {
+	private void confirmDelete(ChannelItem channel) {
 		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
 				R.style.BriarDialogTheme);
 		b.setTitle(R.string.channels_delete_title);
 		b.setMessage(R.string.channels_delete_message);
 		b.setPositiveButton(R.string.delete,
-				(d, w) -> viewModel.deleteChannel(channel.getBlogId()));
+				(d, w) -> viewModel.deleteChannel(channel.getId()));
+		b.setNegativeButton(R.string.cancel, null);
+		b.show();
+	}
+
+	private void confirmUnsubscribe(ChannelItem channel) {
+		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
+				R.style.BriarDialogTheme);
+		b.setTitle(R.string.channels_unsubscribe_title);
+		b.setMessage(R.string.channels_unsubscribe_message);
+		b.setPositiveButton(R.string.channels_unsubscribe,
+				(d, w) -> viewModel.unsubscribe(channel.getId()));
 		b.setNegativeButton(R.string.cancel, null);
 		b.show();
 	}
@@ -268,13 +290,24 @@ public class ChannelManageFragment extends BaseFragment
 		b.show();
 	}
 
-	private void showFetchResult(int count) {
-		if (count == 0) {
-			showMessage(R.string.channels_fetch_none);
-		} else {
-			Toast.makeText(requireContext(), getResources().getQuantityString(
-					R.plurals.channels_fetch_posts, count, count),
-					LENGTH_LONG).show();
+	private void showFetchResult(FetchResult result) {
+		switch (result.getOutcome()) {
+			case NO_MIRRORS:
+				showMessage(R.string.channels_fetch_no_mirrors);
+				return;
+			case UNREACHABLE:
+				// Not the same as being up to date
+				showMessage(R.string.channels_fetch_unreachable);
+				return;
+			case UNCHANGED:
+				showMessage(R.string.channels_fetch_none);
+				return;
+			case FETCHED:
+				int n = result.getMessages();
+				Toast.makeText(requireContext(),
+						getResources().getQuantityString(
+								R.plurals.channels_fetch_posts, n, n),
+						LENGTH_LONG).show();
 		}
 	}
 
