@@ -13,6 +13,8 @@ import org.briarproject.briar.android.blog.BlogPostFragment;
 import org.briarproject.briar.android.blog.FeedFragment;
 import org.briarproject.briar.android.blog.ReblogActivity;
 import org.briarproject.briar.android.blog.ReblogFragment;
+import org.briarproject.briar.android.blog.ChannelActivity;
+import org.briarproject.briar.android.blog.ChannelManageFragment;
 import org.briarproject.briar.android.blog.RssFeedActivity;
 import org.briarproject.briar.android.blog.RssFeedDeleteFeedDialogFragment;
 import org.briarproject.briar.android.blog.RssFeedImportFailedDialogFragment;
@@ -170,6 +172,8 @@ public interface ActivityComponent {
 
 	void inject(IntroductionActivity activity);
 
+	void inject(ChannelActivity activity);
+
 	void inject(RssFeedActivity activity);
 
 	void inject(StartupFailureActivity activity);
@@ -243,6 +247,8 @@ public interface ActivityComponent {
 	void inject(ConversationSettingsDialog dialog);
 
 	void inject(RssFeedImportFragment fragment);
+
+	void inject(ChannelManageFragment fragment);
 
 	void inject(RssFeedManageFragment fragment);
 

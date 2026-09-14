@@ -537,6 +537,18 @@
 	<string name="blogs_rss_feeds_import_progress">Importing RSS Feed…</string>
 	<string name="blogs_rss_feeds_import_error">We are sorry! There was an error importing your feed.</string>
 	<string name="blogs_rss_feeds_import_title">Import feed from file</string>
+	<!-- Channels -->
+	<string name="channels">Channels</string>
+	<string name="channels_create">Create Channel</string>
+	<string name="channels_create_button">Create</string>
+	<string name="channels_create_explanation">A channel is a page you publish. Only you can post to it. People who subscribe can read your posts, and can\'t see who else subscribes.</string>
+	<string name="channels_title_hint">Channel name</string>
+	<string name="channels_created">Created:</string>
+	<string name="channels_write_post">Write post</string>
+	<string name="channels_manage_empty_state">You haven\'t created any channels yet. Tap the + button to create one.</string>
+	<string name="channels_manage_error">Your channels could not be loaded</string>
+	<string name="channels_delete_title">Delete channel?</string>
+	<string name="channels_delete_message">The channel\'s key will be deleted, so you will never be able to post to it again. People who already have your posts will keep them.</string>
 	<string name="blogs_rss_feeds">RSS Feeds</string>
 	<string name="blogs_rss_feeds_manage_imported">Imported:</string>
 	<string name="blogs_rss_feeds_manage_author">Author:</string>

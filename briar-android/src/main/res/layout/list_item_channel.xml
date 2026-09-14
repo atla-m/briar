@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	xmlns:tools="http://schemas.android.com/tools"
+	android:layout_width="match_parent"
+	android:layout_height="wrap_content"
+	android:background="?attr/selectableItemBackground">
+
+	<com.vanniktech.emoji.EmojiTextView
+		android:id="@+id/titleView"
+		android:layout_width="0dp"
+		android:layout_height="wrap_content"
+		android:layout_marginStart="@dimen/listitem_horizontal_margin"
+		android:layout_marginLeft="@dimen/listitem_horizontal_margin"
+		android:layout_marginTop="@dimen/listitem_horizontal_margin"
+		android:textColor="?android:attr/textColorPrimary"
+		android:textSize="@dimen/text_size_medium"
+		app:layout_constraintEnd_toStartOf="@+id/writeButton"
+		app:layout_constraintStart_toStartOf="parent"
+		app:layout_constraintTop_toTopOf="parent"
+		tools:text="Neighbourhood announcements" />
+
+	<androidx.appcompat.widget.AppCompatImageButton
+		android:id="@+id/writeButton"
+		android:layout_width="@dimen/button_size"
+		android:layout_height="@dimen/button_size"
+		android:layout_margin="@dimen/margin_medium"
+		android:background="?attr/selectableItemBackgroundBorderless"
+		android:contentDescription="@string/channels_write_post"
+		app:layout_constraintEnd_toStartOf="@+id/deleteButton"
+		app:layout_constraintTop_toTopOf="parent"
+		app:srcCompat="@drawable/forum_item_create_white"
+		app:tint="?attr/colorControlNormal" />
+
+	<androidx.appcompat.widget.AppCompatImageButton
+		android:id="@+id/deleteButton"
+		android:layout_width="@dimen/button_size"
+		android:layout_height="@dimen/button_size"
+		android:layout_margin="@dimen/margin_medium"
+		android:background="?attr/selectableItemBackgroundBorderless"
+		android:contentDescription="@string/delete"
+		app:layout_constraintEnd_toEndOf="parent"
+		app:layout_constraintTop_toTopOf="parent"
+		app:srcCompat="@drawable/action_delete_black"
+		app:tint="?attr/colorControlNormal" />
+
+	<TextView
+		android:id="@+id/created"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_marginTop="@dimen/margin_small"
+		android:text="@string/channels_created"
+		android:textColor="?android:attr/textColorSecondary"
+		android:textSize="@dimen/text_size_small"
+		app:layout_constraintStart_toStartOf="@+id/titleView"
+		app:layout_constraintTop_toBottomOf="@+id/titleView" />
+
+	<TextView
+		android:id="@+id/createdView"
+		android:layout_width="0dp"
+		android:layout_height="wrap_content"
+		android:layout_marginStart="@dimen/margin_small"
+		android:layout_marginLeft="@dimen/margin_small"
+		android:layout_marginEnd="@dimen/listitem_horizontal_margin"
+		android:layout_marginRight="@dimen/listitem_horizontal_margin"
+		android:textColor="?android:attr/textColorSecondary"
+		android:textSize="@dimen/text_size_small"
+		app:layout_constraintBaseline_toBaselineOf="@+id/created"
+		app:layout_constraintEnd_toEndOf="parent"
+		app:layout_constraintStart_toEndOf="@+id/created"
+		tools:text="July 4" />
+
+	<View
+		style="@style/Divider.ThreadItem"
+		android:layout_marginTop="@dimen/listitem_horizontal_margin"
+		app:layout_constraintStart_toStartOf="parent"
+		app:layout_constraintTop_toBottomOf="@+id/created" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

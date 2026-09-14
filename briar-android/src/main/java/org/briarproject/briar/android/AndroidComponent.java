@@ -69,6 +69,7 @@ import org.briarproject.briar.api.blog.BlogPostFactory;
 import org.briarproject.briar.api.blog.BlogSharingManager;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.conversation.ConversationManager;
+import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.feed.FeedManager;
 import org.briarproject.briar.api.forum.ForumManager;
 import org.briarproject.briar.api.forum.ForumSharingManager;
@@ -181,6 +182,8 @@ public interface AndroidComponent
 	IntroductionManager introductionManager();
 
 	AndroidExecutor androidExecutor();
+
+	ChannelManager channelManager();
 
 	FeedManager feedManager();
 
