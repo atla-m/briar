@@ -213,7 +213,10 @@ class WriteBlogPostViewModel extends DbViewModel
 					postId = channelManager.post(g, text, attachments, files);
 				} else {
 					LocalAuthor author = identityManager.getLocalAuthor();
-					long timestamp = clock.currentTimeMillis();
+					// After everything already in this blog, so the file
+					// it is published as only grows at the end
+					long timestamp = blogManager.getNextTimestamp(g,
+							clock.currentTimeMillis());
 					BlogPost p;
 					if (attachments.isEmpty() && files.isEmpty()) {
 						p = blogPostFactory.createBlogPost(g, timestamp, null,

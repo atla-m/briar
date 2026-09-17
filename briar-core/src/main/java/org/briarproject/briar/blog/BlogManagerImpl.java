@@ -66,6 +66,7 @@ import javax.inject.Inject;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_DO_NOT_SHARE;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_SHARE;
 import static java.util.Collections.emptyList;
+import static org.briarproject.briar.api.blog.BlogConstants.GROUP_KEY_LATEST_TIMESTAMP;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_AUTHOR;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_COMMENT;
@@ -253,9 +254,54 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	}
 
 	@Override
-	public AttachmentHeader addLocalAttachment(GroupId groupId, long timestamp,
-			String contentType, InputStream in)
+	public long getNextTimestamp(GroupId g, long earliest)
+			throws DbException {
+		return db.transactionWithResult(true,
+				txn -> getNextTimestamp(txn, g, earliest));
+	}
+
+	@Override
+	public long getNextTimestamp(Transaction txn, GroupId g, long earliest)
+			throws DbException {
+		// Only a channel is published as a file whose order matters. A
+		// personal blog syncs message by message, and an RSS post keeps
+		// the date its feed gave it.
+		if (!getBlog(txn, g).isChannel()) return earliest;
+		try {
+			BdfDictionary meta =
+					clientHelper.getGroupMetadataAsDictionary(txn, g);
+			long latest = meta.getLong(GROUP_KEY_LATEST_TIMESTAMP, 0L);
+			return Math.max(earliest, latest + 1);
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+	}
+
+	/**
+	 * Records the timestamp of a message we have just added, so the next
+	 * one we add is timestamped after it.
+	 */
+	private void recordTimestamp(Transaction txn, GroupId g, long timestamp)
+			throws DbException {
+		try {
+			BdfDictionary meta =
+					clientHelper.getGroupMetadataAsDictionary(txn, g);
+			long latest = meta.getLong(GROUP_KEY_LATEST_TIMESTAMP, 0L);
+			if (timestamp <= latest) return;
+			clientHelper.mergeGroupMetadata(txn, g, BdfDictionary.of(
+					new BdfEntry(GROUP_KEY_LATEST_TIMESTAMP, timestamp)));
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+	}
+
+	@Override
+	public AttachmentHeader addLocalAttachment(GroupId groupId,
+			long earliest, String contentType, InputStream in)
 			throws DbException, IOException {
+		// After everything already in this blog, so publishing again only
+		// adds to the end of the published file
+		long timestamp = getNextTimestamp(groupId, earliest);
 		// An image is a BDF descriptor followed by the raw bytes, and the
 		// whole thing must fit into a single message
 		ByteArrayOutputStream bodyOut = new ByteArrayOutputStream();
@@ -273,17 +319,29 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 		Message m = clientHelper.createMessage(groupId, timestamp,
 				bodyOut.toByteArray());
 		// Not shared until the post that references it is added
-		db.transaction(false, txn ->
-				clientHelper.addLocalMessage(txn, m, meta, false, true));
+		db.transaction(false, txn -> {
+			clientHelper.addLocalMessage(txn, m, meta, false, true);
+			if (getBlog(txn, groupId).isChannel()) {
+				recordTimestamp(txn, groupId, timestamp);
+			}
+		});
 		return new AttachmentHeader(groupId, m.getId(), contentType);
 	}
 
 	@Override
-	public FileHeader addLocalFile(GroupId groupId, long timestamp,
+	public FileHeader addLocalFile(GroupId groupId, long earliest,
 			String name, String contentType, StreamSource source)
 			throws DbException, IOException {
-		return fileStore.addLocalFile(groupId, timestamp, name, contentType,
-				source);
+		long timestamp = getNextTimestamp(groupId, earliest);
+		FileHeader header = fileStore.addLocalFile(groupId, timestamp, name,
+				contentType, source);
+		// The chunks take the timestamp after the manifest's
+		db.transaction(false, txn -> {
+			if (getBlog(txn, groupId).isChannel()) {
+				recordTimestamp(txn, groupId, timestamp + 1);
+			}
+		});
+		return header;
 	}
 
 	@Override
@@ -406,6 +464,10 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 			}
 			clientHelper.addLocalMessage(txn, p.getMessage(), meta, true,
 					false);
+			if (b.isChannel()) {
+				recordTimestamp(txn, groupId,
+						p.getMessage().getTimestamp());
+			}
 
 			// broadcast event about new post
 			MessageId postId = p.getMessage().getId();

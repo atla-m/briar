@@ -64,6 +64,31 @@ public interface BlogManager {
 	void removeBlog(Transaction txn, Blog b) throws DbException;
 
 	/**
+	 * Returns a timestamp for a new message in the given blog. For a
+	 * channel this is no earlier than the given timestamp and later than
+	 * every message we have already added to the channel; for any other
+	 * blog the given timestamp is returned unchanged.
+	 * <p/>
+	 * A channel is published as a file whose messages are ordered by
+	 * timestamp, and a reader can ask a mirror for only the part of that
+	 * file it does not have yet. That only works if publishing again
+	 * leaves the beginning of the file alone, which in turn needs each
+	 * new message to sort after the ones already there. Two messages
+	 * written in the same millisecond would otherwise be ordered by
+	 * their IDs, which are hashes and say nothing about time. A personal
+	 * blog syncs message by message, and an RSS post keeps the date its
+	 * feed gave it, so neither is touched.
+	 */
+	long getNextTimestamp(GroupId g, long earliest) throws DbException;
+
+	/**
+	 * Returns a timestamp for a new message in the given blog, with the
+	 * given {@link Transaction}.
+	 */
+	long getNextTimestamp(Transaction txn, GroupId g, long earliest)
+			throws DbException;
+
+	/**
 	 * Stores an image to be carried by a blog post, which must then
 	 * reference it by the returned header. The image is not sent until a
 	 * post does.

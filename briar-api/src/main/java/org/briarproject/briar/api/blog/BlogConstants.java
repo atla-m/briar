@@ -27,6 +27,14 @@ public interface BlogConstants {
 	long MISSING_ATTACHMENT_CLEANUP_DURATION_MS = DAYS.toMillis(28);
 
 	// Metadata keys
+	/**
+	 * Group metadata key for the timestamp of the newest message we have
+	 * added to a blog ourselves. A new message is timestamped after it,
+	 * so the messages we write are strictly ordered even when several are
+	 * written within the same millisecond.
+	 */
+	String GROUP_KEY_LATEST_TIMESTAMP = "latestTimestamp";
+
 	String KEY_TYPE = "type";
 	String KEY_TIMESTAMP = "timestamp";
 	String KEY_TIME_RECEIVED = "timeReceived";

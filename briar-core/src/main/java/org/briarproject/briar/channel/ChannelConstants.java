@@ -17,4 +17,12 @@ interface ChannelConstants {
 	String GROUP_KEY_MIRRORS = "channelMirrors";
 	String GROUP_KEY_ETAG = "channelEtag";
 	String GROUP_KEY_LAST_MODIFIED = "channelLastModified";
+
+	/**
+	 * Group metadata key for how many bytes of the channel's published
+	 * file we have read and imported, so the next fetch can ask for the
+	 * rest instead of the whole file again.
+	 */
+	String GROUP_KEY_FETCH_OFFSET = "channelFetchOffset";
+
 }
