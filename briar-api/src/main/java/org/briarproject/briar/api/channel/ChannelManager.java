@@ -3,9 +3,12 @@ package org.briarproject.briar.api.channel;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.crypto.PublicKey;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -65,7 +68,18 @@ public interface ChannelManager {
 	 * @throws NoSuchChannelException If we don't own a channel with the
 	 * given ID
 	 */
-	void post(GroupId g, String text) throws DbException;
+	MessageId post(GroupId g, String text) throws DbException;
+
+	/**
+	 * Posts to a channel we own, carrying images and files as well as
+	 * optional text. The headers are covered by the post's signature, so
+	 * whoever passes the post on cannot swap or drop them.
+	 *
+	 * @throws NoSuchChannelException if we do not own this channel
+	 */
+	MessageId post(GroupId g, @Nullable String text,
+			List<AttachmentHeader> attachments, List<FileHeader> files)
+			throws DbException;
 
 	/**
 	 * Deletes a channel we own, including its key pair, and unsubscribes
