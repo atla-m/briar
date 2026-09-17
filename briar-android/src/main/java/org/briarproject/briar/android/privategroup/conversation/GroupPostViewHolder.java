@@ -10,6 +10,7 @@ import android.widget.TextView;
 
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
+import org.briarproject.briar.android.attachment.ImageGridAdapter;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.attachment.FileRowBinder;
 import org.briarproject.briar.android.threaded.BaseThreadItemViewHolder;
@@ -40,7 +41,7 @@ import static org.briarproject.briar.api.identity.AuthorInfo.Status.OURSELVES;
 @NotNullByDefault
 class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 
-	interface Listener extends GroupImageAdapter.Listener {
+	interface Listener extends ImageGridAdapter.Listener<GroupMessageItem> {
 
 		/**
 		 * Returns the post with the given ID if it's in the list, so a
@@ -66,7 +67,7 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 	private final TextView quoteAuthor, quoteText, time;
 	private final RecyclerView imageList;
 	private final LinearLayout fileList;
-	private final GroupImageAdapter imageAdapter;
+	private final ImageGridAdapter<GroupMessageItem> imageAdapter;
 	private final Listener listener;
 	private final int marginTail, marginNonTail;
 
@@ -85,7 +86,7 @@ class GroupPostViewHolder extends BaseThreadItemViewHolder<GroupMessageItem> {
 		time = v.findViewById(R.id.time);
 		imageList = v.findViewById(R.id.imageList);
 		fileList = v.findViewById(R.id.fileList);
-		imageAdapter = new GroupImageAdapter(v.getContext(), listener);
+		imageAdapter = new ImageGridAdapter<>(v.getContext(), listener);
 		imageList.setAdapter(imageAdapter);
 		marginTail = v.getResources()
 				.getDimensionPixelSize(R.dimen.message_bubble_margin_tail);

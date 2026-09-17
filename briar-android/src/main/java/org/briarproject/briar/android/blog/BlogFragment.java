@@ -15,6 +15,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
+import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.blog.BaseViewModel.ListUpdate;
 import org.briarproject.briar.android.fragment.BaseFragment;
 import org.briarproject.briar.android.sharing.BlogSharingStatusActivity;
@@ -22,6 +23,7 @@ import org.briarproject.briar.android.sharing.ShareBlogActivity;
 import org.briarproject.briar.android.util.BriarSnackbarBuilder;
 import org.briarproject.briar.android.view.BriarRecyclerView;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
@@ -33,6 +35,7 @@ import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView.LayoutManager;
 
+import static androidx.recyclerview.widget.RecyclerView.NO_POSITION;
 import static android.app.Activity.RESULT_OK;
 import static android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP;
 import static android.widget.Toast.LENGTH_SHORT;
@@ -53,6 +56,8 @@ public class BlogFragment extends BaseFragment
 
 	private GroupId groupId;
 	private BlogViewModel viewModel;
+	private final BlogAttachmentBinder attachmentBinder =
+			new BlogAttachmentBinder(this);
 	private final BlogPostAdapter adapter = new BlogPostAdapter(false, this);
 	private BriarRecyclerView list;
 
@@ -71,6 +76,7 @@ public class BlogFragment extends BaseFragment
 		component.inject(this);
 		viewModel = new ViewModelProvider(requireActivity(), viewModelFactory)
 				.get(BlogViewModel.class);
+		attachmentBinder.setViewModel(viewModel);
 	}
 
 	@Nullable
@@ -96,6 +102,17 @@ public class BlogFragment extends BaseFragment
 				result.onError(this::handleException)
 						.onSuccess(this::onBlogPostsLoaded)
 		);
+		// redraw a post when one of its images or files has changed
+		viewModel.getAttachmentUpdated().observe(getViewLifecycleOwner(), id -> {
+			int position = adapter.findItemPosition(id);
+			if (position != NO_POSITION) adapter.notifyItemChanged(position);
+		});
+		viewModel.getSaveError().observeEvent(getViewLifecycleOwner(),
+				error -> Toast.makeText(requireContext(),
+						error ? R.string.save_file_error
+								: R.string.save_file_success,
+						LENGTH_SHORT).show());
+
 		viewModel.getBlogRemoved().observe(getViewLifecycleOwner(), removed -> {
 			if (removed) finish();
 		});
@@ -203,6 +220,18 @@ public class BlogFragment extends BaseFragment
 		i.putExtra(GROUP_ID, post.getGroupId().getBytes());
 		i.setFlags(FLAG_ACTIVITY_CLEAR_TOP);
 		getContext().startActivity(i);
+	}
+
+
+	@Override
+	public void onAttachmentClicked(View view, BlogPostItem post,
+			AttachmentItem attachment) {
+		attachmentBinder.onAttachmentClicked(view, post, attachment);
+	}
+
+	@Override
+	public void onFileClick(BlogPostItem post, FileHeader header) {
+		attachmentBinder.onFileClicked(post, header);
 	}
 
 	@Override

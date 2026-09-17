@@ -15,6 +15,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import org.briarproject.bramble.api.FeatureFlags;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
+import org.briarproject.briar.android.attachment.ImageGridAdapter;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.attachment.FileRowBinder;
@@ -75,7 +76,8 @@ import static org.briarproject.nullsafety.NullSafety.requireNonNull;
 @ParametersNotNullByDefault
 public class GroupActivity extends
 		ThreadListActivity<GroupMessageItem, GroupMessageAdapter>
-		implements AttachmentListener, GroupImageAdapter.Listener,
+		implements AttachmentListener,
+		ImageGridAdapter.Listener<GroupMessageItem>,
 		GroupMessageAdapter.QuoteListener, GroupMessageAdapter.FileListener {
 
 	@Inject
@@ -203,7 +205,7 @@ public class GroupActivity extends
 			i.putExtra(MediaActivity.NAME, header.getName());
 			i.putExtra(MediaActivity.CONTENT_TYPE, header.getContentType());
 			i.putExtra(MediaActivity.SIZE, header.getSize());
-			i.putExtra(MediaActivity.IS_GROUP, true);
+			i.putExtra(MediaActivity.CLIENT, MediaActivity.CLIENT_GROUP);
 			startActivity(i);
 		} else {
 			// Nothing to show for other files; let the user save it

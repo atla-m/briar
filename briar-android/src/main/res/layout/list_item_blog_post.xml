@@ -55,6 +55,38 @@
 			app:layout_constraintTop_toBottomOf="@+id/authorView"
 			tools:text="This is a body text that shows the content of a blog post.\n\nThis one is not short, but it is also not too long." />
 
+		<!-- The images the post carries, in a two-column grid -->
+		<androidx.recyclerview.widget.RecyclerView
+			android:id="@+id/imageList"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:layout_marginStart="@dimen/listitem_vertical_margin"
+			android:layout_marginEnd="@dimen/listitem_vertical_margin"
+			android:layout_marginBottom="@dimen/margin_small"
+			android:orientation="vertical"
+			android:visibility="gone"
+			app:layoutManager="androidx.recyclerview.widget.StaggeredGridLayoutManager"
+			app:layout_constraintStart_toStartOf="parent"
+			app:layout_constraintTop_toBottomOf="@+id/textView"
+			app:spanCount="2"
+			tools:ignore="ContentDescription"
+			tools:listitem="@layout/list_item_image" />
+
+		<!-- One row per file the post shares, added by the holder -->
+		<LinearLayout
+			android:id="@+id/fileList"
+			android:layout_width="0dp"
+			android:layout_height="wrap_content"
+			android:layout_marginStart="@dimen/listitem_vertical_margin"
+			android:layout_marginEnd="@dimen/listitem_vertical_margin"
+			android:layout_marginBottom="@dimen/margin_small"
+			android:orientation="vertical"
+			android:visibility="gone"
+			app:layout_constraintEnd_toEndOf="parent"
+			app:layout_constraintStart_toStartOf="parent"
+			app:layout_constraintTop_toBottomOf="@+id/imageList"
+			tools:visibility="visible" />
+
 		<!-- TODO replace with RecyclerView -->
 		<LinearLayout
 			android:id="@+id/commentContainer"
@@ -62,7 +94,7 @@
 			android:layout_height="wrap_content"
 			android:layout_marginTop="@dimen/listitem_vertical_margin"
 			android:orientation="vertical"
-			app:layout_constraintTop_toBottomOf="@+id/textView">
+			app:layout_constraintTop_toBottomOf="@+id/fileList">
 
 			<include
 				layout="@layout/list_item_blog_comment"

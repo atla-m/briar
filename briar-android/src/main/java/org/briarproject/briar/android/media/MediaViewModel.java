@@ -14,6 +14,7 @@ import org.briarproject.briar.android.viewmodel.DbViewModel;
 import org.briarproject.briar.android.viewmodel.LiveEvent;
 import org.briarproject.briar.android.viewmodel.MutableLiveEvent;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -35,6 +36,8 @@ import androidx.annotation.RequiresApi;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
+import static org.briarproject.briar.android.media.MediaActivity.CLIENT_MESSAGING;
+import static org.briarproject.briar.android.media.MediaActivity.CLIENT_BLOG;
 import static android.os.Build.VERSION.SDK_INT;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
@@ -77,6 +80,7 @@ public class MediaViewModel extends DbViewModel {
 
 	private final PrivateGroupManager privateGroupManager;
 	private final MessagingManager messagingManager;
+	private final BlogManager blogManager;
 	@IoExecutor
 	private final Executor ioExecutor;
 
@@ -102,36 +106,25 @@ public class MediaViewModel extends DbViewModel {
 			AndroidExecutor androidExecutor,
 			@IoExecutor Executor ioExecutor,
 			PrivateGroupManager privateGroupManager,
-			MessagingManager messagingManager) {
+			MessagingManager messagingManager,
+			BlogManager blogManager) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
 		this.ioExecutor = ioExecutor;
 		this.privateGroupManager = privateGroupManager;
 		this.messagingManager = messagingManager;
+		this.blogManager = blogManager;
 	}
 
 	/**
 	 * Sets the file to play. The file must have been fully received.
 	 *
-	 * @param isGroup true if the file belongs to a private group, false if
-	 * it belongs to a private conversation
+	 * @param client which client holds the file, one of the constants in
+	 * {@link MediaActivity}
 	 */
-	void setFile(FileHeader header, boolean isGroup) {
+	void setFile(FileHeader header, int client) {
 		if (this.header != null) return; // Already set
 		this.header = header;
-		if (isGroup) {
-			reader = new FileReader() {
-				@Override
-				public byte[] getFileChunk(FileHeader h, int index)
-						throws DbException {
-					return privateGroupManager.getFileChunk(h, index);
-				}
-
-				@Override
-				public InputStream getFile(FileHeader h) throws DbException {
-					return privateGroupManager.getFile(h);
-				}
-			};
-		} else {
+		if (client == CLIENT_MESSAGING) {
 			reader = new FileReader() {
 				@Override
 				public byte[] getFileChunk(FileHeader h, int index)
@@ -142,6 +135,32 @@ public class MediaViewModel extends DbViewModel {
 				@Override
 				public InputStream getFile(FileHeader h) throws DbException {
 					return messagingManager.getFile(h);
+				}
+			};
+		} else if (client == CLIENT_BLOG) {
+			reader = new FileReader() {
+				@Override
+				public byte[] getFileChunk(FileHeader h, int index)
+						throws DbException {
+					return blogManager.getFileChunk(h, index);
+				}
+
+				@Override
+				public InputStream getFile(FileHeader h) throws DbException {
+					return blogManager.getFile(h);
+				}
+			};
+		} else {
+			reader = new FileReader() {
+				@Override
+				public byte[] getFileChunk(FileHeader h, int index)
+						throws DbException {
+					return privateGroupManager.getFileChunk(h, index);
+				}
+
+				@Override
+				public InputStream getFile(FileHeader h) throws DbException {
+					return privateGroupManager.getFile(h);
 				}
 			};
 		}

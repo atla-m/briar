@@ -11,18 +11,22 @@ import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.identity.IdentityManager;
 import org.briarproject.bramble.api.identity.LocalAuthor;
+import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
 import org.briarproject.bramble.api.system.AndroidExecutor;
+import org.briarproject.briar.android.attachment.AttachmentRetriever;
 import org.briarproject.briar.android.sharing.SharingController;
 import org.briarproject.briar.android.sharing.SharingController.SharingInfo;
 import org.briarproject.briar.api.android.AndroidNotificationManager;
+import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogInvitationResponse;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
 import org.briarproject.briar.api.blog.event.BlogInvitationResponseReceivedEvent;
+import org.briarproject.briar.api.blog.event.BlogAttachmentReceivedEvent;
 import org.briarproject.briar.api.blog.event.BlogPostAddedEvent;
 import org.briarproject.briar.api.sharing.event.ContactLeftShareableEvent;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
@@ -70,17 +74,28 @@ class BlogViewModel extends BaseViewModel {
 			IdentityManager identityManager,
 			AndroidNotificationManager notificationManager,
 			BlogManager blogManager,
+			AttachmentRetriever attachmentRetriever,
+			@IoExecutor Executor ioExecutor,
 			BlogSharingManager blogSharingManager,
 			SharingController sharingController) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
-				eventBus, identityManager, notificationManager, blogManager);
+				eventBus, identityManager, notificationManager, blogManager,
+				attachmentRetriever, ioExecutor);
 		this.blogSharingManager = blogSharingManager;
 		this.sharingController = sharingController;
 	}
 
 	@Override
 	public void eventOccurred(Event e) {
-		if (e instanceof BlogPostAddedEvent) {
+		if (e instanceof FileProgressEvent) {
+			FileProgressEvent p = (FileProgressEvent) e;
+			if (p.getGroupId().equals(groupId)) onFileProgress(p);
+		} else if (e instanceof BlogAttachmentReceivedEvent) {
+			BlogAttachmentReceivedEvent a = (BlogAttachmentReceivedEvent) e;
+			if (a.getGroupId().equals(groupId)) {
+				onAttachmentReceived(a.getMessageId());
+			}
+		} else if (e instanceof BlogPostAddedEvent) {
 			BlogPostAddedEvent b = (BlogPostAddedEvent) e;
 			if (b.getGroupId().equals(groupId)) {
 				LOG.info("Blog post added");
@@ -151,7 +166,7 @@ class BlogViewModel extends BaseViewModel {
 			List<BlogPostItem> posts = loadBlogPosts(txn, groupId);
 			Collections.sort(posts);
 			return new ListUpdate(null, posts);
-		}, blogPosts::setValue);
+		}, this::setBlogPosts);
 	}
 
 	private void loadSharingContacts(GroupId groupId) {

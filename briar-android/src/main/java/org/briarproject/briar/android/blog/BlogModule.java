@@ -29,4 +29,10 @@ public interface BlogModule {
 	@IntoMap
 	@ViewModelKey(ChannelViewModel.class)
 	ViewModel bindChannelViewModel(ChannelViewModel channelViewModel);
+
+	@Binds
+	@IntoMap
+	@ViewModelKey(WriteBlogPostViewModel.class)
+	ViewModel bindWriteBlogPostViewModel(
+			WriteBlogPostViewModel writeBlogPostViewModel);
 }

@@ -1180,7 +1180,8 @@ public class ConversationActivity extends BriarActivity
 			i.putExtra(MediaActivity.NAME, header.getName());
 			i.putExtra(MediaActivity.CONTENT_TYPE, header.getContentType());
 			i.putExtra(MediaActivity.SIZE, header.getSize());
-			i.putExtra(MediaActivity.IS_GROUP, false);
+			i.putExtra(MediaActivity.CLIENT,
+					MediaActivity.CLIENT_MESSAGING);
 			startActivity(i);
 		} else {
 			// Nothing to show for other files; let the user save it

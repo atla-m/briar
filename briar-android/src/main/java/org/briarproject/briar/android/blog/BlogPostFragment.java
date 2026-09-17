@@ -9,12 +9,16 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ProgressBar;
 
+import android.widget.Toast;
+
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
+import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.fragment.BaseFragment;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
@@ -27,6 +31,7 @@ import androidx.annotation.UiThread;
 import androidx.lifecycle.LifecycleOwner;
 import androidx.lifecycle.ViewModelProvider;
 
+import static android.widget.Toast.LENGTH_SHORT;
 import static android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP;
 import static android.view.View.INVISIBLE;
 import static android.view.View.VISIBLE;
@@ -49,6 +54,8 @@ public class BlogPostFragment extends BaseFragment
 	private final Handler handler = new Handler(Looper.getMainLooper());
 
 	private ProgressBar progressBar;
+	private final BlogAttachmentBinder attachmentBinder =
+			new BlogAttachmentBinder(this);
 	private BlogPostViewHolder ui;
 	private BlogPostItem post;
 	private Runnable refresher;
@@ -70,6 +77,7 @@ public class BlogPostFragment extends BaseFragment
 		component.inject(this);
 		viewModel = new ViewModelProvider(requireActivity(), viewModelFactory)
 				.get(BlogViewModel.class);
+		attachmentBinder.setViewModel(viewModel);
 	}
 
 	@Nullable
@@ -93,6 +101,16 @@ public class BlogPostFragment extends BaseFragment
 				result.onError(this::handleException)
 						.onSuccess(this::onBlogPostLoaded)
 		);
+		// redraw the post when one of its images or files has changed
+		viewModel.getAttachmentUpdated().observe(owner, id -> {
+			BlogPostItem post = this.post;
+			if (post != null && post.getId().equals(id)) ui.bindItem(post);
+		});
+		viewModel.getSaveError().observeEvent(owner, error ->
+				Toast.makeText(requireContext(),
+						error ? R.string.save_file_error
+								: R.string.save_file_success,
+						LENGTH_SHORT).show());
 		return view;
 	}
 
@@ -112,6 +130,9 @@ public class BlogPostFragment extends BaseFragment
 	private void onBlogPostLoaded(BlogPostItem post) {
 		progressBar.setVisibility(INVISIBLE);
 		this.post = post;
+		// This post was loaded on its own, not as part of a list, so its
+		// images and files are loaded here
+		viewModel.loadAttachments(post);
 		ui.bindItem(post);
 	}
 
@@ -126,6 +147,17 @@ public class BlogPostFragment extends BaseFragment
 		i.putExtra(GROUP_ID, post.getGroupId().getBytes());
 		i.setFlags(FLAG_ACTIVITY_CLEAR_TOP);
 		requireContext().startActivity(i);
+	}
+
+	@Override
+	public void onAttachmentClicked(View view, BlogPostItem post,
+			AttachmentItem attachment) {
+		attachmentBinder.onAttachmentClicked(view, post, attachment);
+	}
+
+	@Override
+	public void onFileClick(BlogPostItem post, FileHeader header) {
+		attachmentBinder.onFileClicked(post, header);
 	}
 
 	@Override
