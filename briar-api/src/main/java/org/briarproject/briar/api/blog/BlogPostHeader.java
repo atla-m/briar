@@ -27,12 +27,13 @@ public class BlogPostHeader extends PostHeader {
 	private final boolean rssFeed;
 	private final List<AttachmentHeader> attachmentHeaders;
 	private final List<FileHeader> fileHeaders;
+	private final int attachmentsNotCarried;
 
 	public BlogPostHeader(MessageType type, GroupId groupId, MessageId id,
 			@Nullable MessageId parentId, long timestamp, long timeReceived,
 			Author author, AuthorInfo authorInfo, boolean rssFeed,
 			boolean read, List<AttachmentHeader> attachmentHeaders,
-			List<FileHeader> fileHeaders) {
+			List<FileHeader> fileHeaders, int attachmentsNotCarried) {
 		super(id, parentId, timestamp, author, authorInfo, read);
 		this.type = type;
 		this.groupId = groupId;
@@ -40,6 +41,16 @@ public class BlogPostHeader extends PostHeader {
 		this.rssFeed = rssFeed;
 		this.attachmentHeaders = attachmentHeaders;
 		this.fileHeaders = fileHeaders;
+		this.attachmentsNotCarried = attachmentsNotCarried;
+	}
+
+	public BlogPostHeader(MessageType type, GroupId groupId, MessageId id,
+			@Nullable MessageId parentId, long timestamp, long timeReceived,
+			Author author, AuthorInfo authorInfo, boolean rssFeed,
+			boolean read, List<AttachmentHeader> attachmentHeaders,
+			List<FileHeader> fileHeaders) {
+		this(type, groupId, id, parentId, timestamp, timeReceived, author,
+				authorInfo, rssFeed, read, attachmentHeaders, fileHeaders, 0);
 	}
 
 	public BlogPostHeader(MessageType type, GroupId groupId, MessageId id,
@@ -86,6 +97,17 @@ public class BlogPostHeader extends PostHeader {
 	 */
 	public List<FileHeader> getFileHeaders() {
 		return unmodifiableList(fileHeaders);
+	}
+
+	/**
+	 * Returns how many images and files the original post carried that
+	 * this copy of it does not. A reblogged post is a signed copy of the
+	 * original, and the signature covers its attachments, but they live
+	 * in the original blog's group and cannot be read from the blog the
+	 * copy is in. Zero for a post that is not a copy.
+	 */
+	public int getAttachmentsNotCarried() {
+		return attachmentsNotCarried;
 	}
 
 }

@@ -87,6 +87,25 @@
 			app:layout_constraintTop_toBottomOf="@+id/imageList"
 			tools:visibility="visible" />
 
+		<!-- How many images and files the original of a reblogged post
+		     carried, which stay in the blog it was reblogged from -->
+		<TextView
+			android:id="@+id/attachmentsNotCarried"
+			android:layout_width="0dp"
+			android:layout_height="wrap_content"
+			android:layout_marginStart="@dimen/listitem_vertical_margin"
+			android:layout_marginEnd="@dimen/listitem_vertical_margin"
+			android:layout_marginBottom="@dimen/margin_small"
+			android:textColor="?android:attr/textColorTertiary"
+			android:textSize="@dimen/text_size_small"
+			android:textStyle="italic"
+			android:visibility="gone"
+			app:layout_constraintEnd_toEndOf="parent"
+			app:layout_constraintStart_toStartOf="parent"
+			app:layout_constraintTop_toBottomOf="@+id/fileList"
+			tools:text="2 attachments stay in the original blog"
+			tools:visibility="visible" />
+
 		<!-- TODO replace with RecyclerView -->
 		<LinearLayout
 			android:id="@+id/commentContainer"
@@ -94,7 +113,7 @@
 			android:layout_height="wrap_content"
 			android:layout_marginTop="@dimen/listitem_vertical_margin"
 			android:orientation="vertical"
-			app:layout_constraintTop_toBottomOf="@+id/fileList">
+			app:layout_constraintTop_toBottomOf="@+id/attachmentsNotCarried">
 
 			<include
 				layout="@layout/list_item_blog_comment"

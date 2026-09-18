@@ -3,6 +3,7 @@ package org.briarproject.briar.blog;
 import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
+import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogCommentHeader;
 import org.briarproject.briar.api.blog.BlogManager;
@@ -16,10 +17,14 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 
+import java.io.ByteArrayInputStream;
 import java.util.Collection;
 import java.util.Iterator;
 
+import static java.util.Collections.emptyList;
+import static java.util.Collections.singletonList;
 import static junit.framework.Assert.assertNotNull;
+import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_AUTHOR_NAME_LENGTH;
 import static org.briarproject.briar.api.identity.AuthorInfo.Status.NONE;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
@@ -455,6 +460,97 @@ public class BlogManagerIntegrationTest
 			assertEquals(COMMENT, h.getType());
 			assertTrue(((BlogCommentHeader) h).getRootPost().isRssFeed());
 		}
+	}
+
+	@Test
+	public void testReblogOfPostWithAttachmentsCarriesItsText()
+			throws Exception {
+		// 0 posts a file to blog0
+		String text = getRandomString(42);
+		byte[] fileBytes = getRandomBytes(1234);
+		FileHeader file = blogManager0.addLocalFile(blog0.getId(),
+				c0.getClock().currentTimeMillis(), "notice.pdf",
+				"application/pdf",
+				() -> new ByteArrayInputStream(fileBytes));
+		BlogPost p = blogPostFactory.createBlogPost(blog0.getId(),
+				c0.getClock().currentTimeMillis() + 1, null, author0, text,
+				emptyList(), singletonList(file));
+		blogManager0.addLocalPost(p);
+
+		// sync the post, the manifest and the chunk over
+		sync0To1(3, true);
+		Collection<BlogPostHeader> headers1 =
+				blogManager1.getPostHeaders(blog0.getId());
+		assertEquals(1, headers1.size());
+		BlogPostHeader original = headers1.iterator().next();
+		assertEquals(1, original.getFileHeaders().size());
+
+		// 1 reblogs the post. The copy is signed by 0 over the text and
+		// the file's header, so it must carry both
+		blogManager1.addLocalComment(author1, blog1.getId(), null, original);
+		sync1To0(2, true);
+
+		// 0 sees the reblog as valid: the text is there, and the copy
+		// says the original carried a file without claiming to hold it
+		Collection<BlogPostHeader> headers0 =
+				blogManager0.getPostHeaders(blog1.getId());
+		assertEquals(1, headers0.size());
+		BlogCommentHeader reblog =
+				(BlogCommentHeader) headers0.iterator().next();
+		BlogPostHeader wrapped = reblog.getParent();
+		assertEquals(WRAPPED_POST, wrapped.getType());
+		assertEquals(text, blogManager0.getPostText(wrapped.getId()));
+		assertEquals(1, wrapped.getAttachmentsNotCarried());
+		assertTrue(wrapped.getFileHeaders().isEmpty());
+		assertTrue(wrapped.getAttachmentHeaders().isEmpty());
+
+		// 1 sees the same on the copy it made
+		headers1 = blogManager1.getPostHeaders(blog1.getId());
+		assertEquals(1, headers1.size());
+		wrapped = ((BlogCommentHeader) headers1.iterator().next()).getParent();
+		assertEquals(1, wrapped.getAttachmentsNotCarried());
+		assertEquals(text, blogManager1.getPostText(wrapped.getId()));
+	}
+
+	@Test
+	public void testReblogOfReblogKeepsThePostsAttachmentHeaders()
+			throws Exception {
+		// 0 posts a file with no text to blog0
+		byte[] fileBytes = getRandomBytes(1234);
+		FileHeader file = blogManager0.addLocalFile(blog0.getId(),
+				c0.getClock().currentTimeMillis(), "notice.pdf",
+				"application/pdf",
+				() -> new ByteArrayInputStream(fileBytes));
+		BlogPost p = blogPostFactory.createBlogPost(blog0.getId(),
+				c0.getClock().currentTimeMillis() + 1, null, author0, null,
+				emptyList(), singletonList(file));
+		blogManager0.addLocalPost(p);
+		sync0To1(3, true);
+
+		// 1 reblogs it, and 0 reblogs 1's reblog to blog0, which rewraps
+		// the copy rather than wrapping it again
+		blogManager1.addLocalComment(author1, blog1.getId(), null,
+				blogManager1.getPostHeaders(blog0.getId()).iterator().next());
+		sync1To0(2, true);
+		BlogCommentHeader reblog = (BlogCommentHeader) blogManager0
+				.getPostHeaders(blog1.getId()).iterator().next();
+		blogManager0.addLocalComment(author0, blog0.getId(), null, reblog);
+		// the rewrapped post, the wrapped reblog and the new comment
+		sync0To1(3, true);
+
+		// 1 verifies the rewrapped copy and sees what it does not carry
+		Collection<BlogPostHeader> headers =
+				blogManager1.getPostHeaders(blog0.getId());
+		assertEquals(2, headers.size());
+		BlogCommentHeader c = null;
+		for (BlogPostHeader h : headers) {
+			if (h instanceof BlogCommentHeader) c = (BlogCommentHeader) h;
+		}
+		assertNotNull(c);
+		BlogPostHeader root = c.getRootPost();
+		assertEquals(WRAPPED_POST, root.getType());
+		assertEquals(1, root.getAttachmentsNotCarried());
+		assertEquals("", blogManager1.getPostText(root.getId()));
 	}
 
 	@Test

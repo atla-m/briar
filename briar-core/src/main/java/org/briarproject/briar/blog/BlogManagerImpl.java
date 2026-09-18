@@ -78,6 +78,7 @@ import static org.briarproject.briar.api.blog.BlogConstants.KEY_RSS_FEED;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIMESTAMP;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIME_RECEIVED;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TYPE;
+import static org.briarproject.briar.api.blog.BlogConstants.KEY_WRAPPED_ATTACHMENTS;
 import static org.briarproject.briar.api.blog.MessageType.COMMENT;
 import static org.briarproject.briar.api.blog.BlogConstants.MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
@@ -568,6 +569,11 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 					timestamp, body);
 			meta.put(KEY_TYPE, WRAPPED_POST.getInt());
 			meta.put(KEY_RSS_FEED, header.isRssFeed());
+			// The copy carries the headers of the original's images and
+			// files, but not the images and files themselves
+			int attachments = header.getAttachmentHeaders().size() +
+					header.getFileHeaders().size();
+			if (attachments > 0) meta.put(KEY_WRAPPED_ATTACHMENTS, attachments);
 		} else if (type == COMMENT) {
 			// Recursively wrap parent
 			BlogCommentHeader commentHeader = (BlogCommentHeader) header;
@@ -590,6 +596,10 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 			wrappedMessage = blogPostFactory.rewrapWrappedPost(groupId, body);
 			meta.put(KEY_TYPE, WRAPPED_POST.getInt());
 			meta.put(KEY_RSS_FEED, header.isRssFeed());
+			if (header.getAttachmentsNotCarried() > 0) {
+				meta.put(KEY_WRAPPED_ATTACHMENTS,
+						header.getAttachmentsNotCarried());
+			}
 		} else if (type == WRAPPED_COMMENT) {
 			// Recursively wrap parent
 			BlogCommentHeader commentHeader = (BlogCommentHeader) header;
@@ -722,12 +732,16 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	private String getPostText(BdfList message) throws FormatException {
 		MessageType type = MessageType.valueOf(message.getInt(0));
 		if (type == POST) {
-			// Type, text, signature
-			return message.getString(1);
+			// Type, text, signature, or type, text, headers, signature.
+			// A post with attachments may have no text
+			String text = message.getOptionalString(1);
+			return text == null ? "" : text;
 		} else if (type == WRAPPED_POST) {
 			// Type, copied group descriptor, copied timestamp, copied text,
-			// copied signature
-			return message.getString(3);
+			// then the copied headers if the original had attachments, then
+			// the copied signature
+			String text = message.getOptionalString(3);
+			return text == null ? "" : text;
 		} else {
 			throw new FormatException();
 		}
@@ -935,10 +949,12 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 			return new BlogCommentHeader(type, groupId, comment, parent, id,
 					timestamp, timeReceived, author, authorInfo, read);
 		} else {
+			int notCarried = meta.getLong(KEY_WRAPPED_ATTACHMENTS, 0L)
+					.intValue();
 			return new BlogPostHeader(type, groupId, id, null, timestamp,
 					timeReceived, author, authorInfo, isFeedPost, read,
 					parseAttachmentHeaders(groupId, meta),
-					parseFileHeaders(groupId, meta));
+					parseFileHeaders(groupId, meta), notCarried);
 		}
 	}
 

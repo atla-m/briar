@@ -52,6 +52,7 @@ import static org.briarproject.briar.api.blog.BlogConstants.KEY_PARENT_MSG_ID;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_READ;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_RSS_FEED;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIMESTAMP;
+import static org.briarproject.briar.api.blog.BlogConstants.KEY_WRAPPED_ATTACHMENTS;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIME_RECEIVED;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TYPE;
 import static org.briarproject.briar.api.blog.BlogConstants.MAX_BLOG_COMMENT_TEXT_LENGTH;
@@ -351,8 +352,11 @@ class BlogPostValidator extends BdfMessageValidator {
 			throws InvalidMessageException, FormatException {
 
 		// Copied group descriptor, copied timestamp, copied text, copied
-		// signature
-		checkSize(body, 4);
+		// signature. Client version 0.2: a copy of a post with attachments
+		// also carries the copied attachment headers before the signature,
+		// which covers them
+		checkSize(body, 4, 5);
+		boolean hasAttachments = body.size() == 5;
 
 		// Copied group descriptor of original post
 		byte[] descriptor = body.getRaw(0);
@@ -361,31 +365,39 @@ class BlogPostValidator extends BdfMessageValidator {
 		long wTimestamp = body.getLong(1);
 		if (wTimestamp < 0) throw new FormatException();
 
-		// Copied text of original post
-		String text = body.getString(2);
-		checkLength(text, 0, MAX_BLOG_POST_TEXT_LENGTH);
-
-		// Copied signature of original post
-		byte[] signature = body.getRaw(3);
-		checkLength(signature, 1, MAX_SIGNATURE_LENGTH);
+		// Copied text, headers and signature of original post. They are
+		// checked when the original is validated below
+		BdfList wBodyList;
+		if (hasAttachments) {
+			wBodyList = BdfList.of(POST.getInt(), body.getOptionalString(2),
+					body.getList(3), body.getRaw(4));
+		} else {
+			wBodyList = BdfList.of(POST.getInt(), body.getString(2),
+					body.getRaw(3));
+		}
 
 		// Reconstruct and validate the original post
 		Group wGroup = groupFactory.createGroup(CLIENT_ID, MAJOR_VERSION,
 				descriptor);
 		Blog wBlog = blogFactory.parseBlog(wGroup);
-		BdfList wBodyList = BdfList.of(POST.getInt(), text, signature);
 		byte[] wBody = clientHelper.toByteArray(wBodyList);
 		Message wMessage =
 				messageFactory.createMessage(wGroup.getId(), wTimestamp, wBody);
 		wBodyList.remove(0);
 		BdfMessageContext c = validatePost(wMessage, wGroup, wBodyList);
 
-		// Return the metadata and dependencies
+		// Return the metadata and dependencies. The attachments live in
+		// the original blog's group, so the copy records only how many
+		// there were
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(KEY_ORIGINAL_MSG_ID, wMessage.getId());
 		meta.put(KEY_TIMESTAMP, wTimestamp);
 		meta.put(KEY_AUTHOR, c.getDictionary().getList(KEY_AUTHOR));
 		meta.put(KEY_RSS_FEED, wBlog.isRssFeed());
+		if (hasAttachments) {
+			meta.put(KEY_WRAPPED_ATTACHMENTS,
+					c.getDictionary().getList(KEY_ATTACHMENT_HEADERS).size());
+		}
 		return new BdfMessageContext(meta);
 	}
 

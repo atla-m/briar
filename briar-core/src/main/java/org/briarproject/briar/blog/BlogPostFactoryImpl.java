@@ -139,11 +139,23 @@ class BlogPostFactoryImpl implements BlogPostFactory {
 		if (getType(body) != POST)
 			throw new IllegalArgumentException("Needs to wrap a POST");
 
-		// Serialise the message
-		String text = body.getString(1);
-		byte[] signature = body.getRaw(2);
-		BdfList message = BdfList.of(WRAPPED_POST.getInt(), descriptor,
-				timestamp, text, signature);
+		// Serialise the message. A post with attachments carries their
+		// headers between the text and the signature, and the signature
+		// covers them, so the copy has to carry them too or nobody could
+		// verify it
+		BdfList message;
+		if (body.size() == 4) {
+			String text = body.getOptionalString(1);
+			BdfList headers = body.getList(2);
+			byte[] signature = body.getRaw(3);
+			message = BdfList.of(WRAPPED_POST.getInt(), descriptor,
+					timestamp, text, headers, signature);
+		} else {
+			String text = body.getString(1);
+			byte[] signature = body.getRaw(2);
+			message = BdfList.of(WRAPPED_POST.getInt(), descriptor,
+					timestamp, text, signature);
+		}
 		return clientHelper
 				.createMessage(groupId, clock.currentTimeMillis(), message);
 	}
@@ -155,13 +167,23 @@ class BlogPostFactoryImpl implements BlogPostFactory {
 		if (getType(body) != WRAPPED_POST)
 			throw new IllegalArgumentException("Needs to wrap a WRAPPED_POST");
 
-		// Serialise the message
+		// Serialise the message, keeping the attachment headers if the
+		// original post carried any
 		byte[] descriptor = body.getRaw(1);
 		long timestamp = body.getLong(2);
-		String text = body.getString(3);
-		byte[] signature = body.getRaw(4);
-		BdfList message = BdfList.of(WRAPPED_POST.getInt(), descriptor,
-				timestamp, text, signature);
+		BdfList message;
+		if (body.size() == 6) {
+			String text = body.getOptionalString(3);
+			BdfList headers = body.getList(4);
+			byte[] signature = body.getRaw(5);
+			message = BdfList.of(WRAPPED_POST.getInt(), descriptor,
+					timestamp, text, headers, signature);
+		} else {
+			String text = body.getString(3);
+			byte[] signature = body.getRaw(4);
+			message = BdfList.of(WRAPPED_POST.getInt(), descriptor,
+					timestamp, text, signature);
+		}
 		return clientHelper
 				.createMessage(groupId, clock.currentTimeMillis(), message);
 	}
