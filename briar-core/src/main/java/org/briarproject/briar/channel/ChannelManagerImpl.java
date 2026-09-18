@@ -89,6 +89,7 @@ import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_AUTHOR_NAME_LENGTH;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
@@ -100,10 +101,12 @@ import static org.briarproject.briar.api.channel.ChannelConstants.LINK_REGEX;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_LINK_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRRORS;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRROR_LENGTH;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_ETAG;
+import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_MESSAGES;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_LAST_MODIFIED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
@@ -447,7 +450,8 @@ class ChannelManagerImpl
 			state = new FetchState(
 					meta.getOptionalString(GROUP_KEY_ETAG),
 					meta.getOptionalString(GROUP_KEY_LAST_MODIFIED),
-					meta.getLong(GROUP_KEY_FETCH_OFFSET, 0L));
+					meta.getLong(GROUP_KEY_FETCH_OFFSET, 0L),
+					meta.getLong(GROUP_KEY_FETCH_MESSAGES, 0L).intValue());
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
@@ -468,20 +472,24 @@ class ChannelManagerImpl
 
 	/**
 	 * What we know about the channel's published file from the last
-	 * fetch: the validators the mirror gave us, and how many bytes of it
-	 * we have read and stored.
+	 * fetch: the validators the mirror gave us, and how many bytes and
+	 * messages of it we have read and stored. The counts are kept so
+	 * that the limits on what a file may cost us apply to the whole
+	 * file, not to each fetch that carries part of it.
 	 */
 	private static class FetchState {
 
 		@Nullable
 		private final String etag, lastModified;
 		private final long offset;
+		private final int messages;
 
 		private FetchState(@Nullable String etag,
-				@Nullable String lastModified, long offset) {
+				@Nullable String lastModified, long offset, int messages) {
 			this.etag = etag;
 			this.lastModified = lastModified;
 			this.offset = offset;
+			this.messages = messages;
 		}
 	}
 
@@ -492,10 +500,16 @@ class ChannelManagerImpl
 				return fetchFrom(g, mirror, state, true);
 			} catch (ChangedFileException e) {
 				// The file we were reading is not the file being served
-				// now, so read it from the beginning
+				// now, so read it from the beginning, forgetting what we
+				// knew about the old one. We must forget the validators
+				// as well as the offset: a mirror that gave the same tag
+				// or date for a file we can't continue would otherwise
+				// answer that there was nothing new, and we would never
+				// read the file it is actually serving.
 				if (LOG.isLoggable(INFO)) {
 					LOG.info("Channel file changed, fetching in full");
 				}
+				return fetchFrom(g, mirror, new FetchState(null, null, 0, 0));
 			}
 		}
 		try {
@@ -531,18 +545,19 @@ class ChannelManagerImpl
 				if (LOG.isLoggable(INFO)) LOG.info("Channel unchanged");
 				return new FetchResult(UNCHANGED, 0);
 			}
-			// The file is no longer than the part we already have
-			if (code == 416) {
-				if (LOG.isLoggable(INFO)) LOG.info("Channel has nothing new");
-				return new FetchResult(UNCHANGED, 0);
-			}
+			// A mirror that has less of the file than we do is not
+			// serving the file we were reading: it has been replaced by
+			// a shorter one. Read that from the beginning, rather than
+			// asking for ever for a range it will never have.
+			if (code == 416 && resume) throw new ChangedFileException();
 			if (!response.isSuccessful() || body == null)
 				throw new IOException("Response " + code);
 			// A mirror that doesn't do ranges answers 200 with the whole
 			// file, which is the first fetch all over again
 			boolean ranged = resume && code == 206;
 			return importFrom(g, body.byteStream(),
-					ranged ? state.offset : 0, !ranged,
+					ranged ? state.offset : 0,
+					ranged ? state.messages : 0, !ranged,
 					response.header("ETag"),
 					lastModifiedIfSettled(response));
 		} catch (FormatException e) {
@@ -586,14 +601,14 @@ class ChannelManagerImpl
 	 * again.
 	 *
 	 * @param offset how many bytes of the file the stream starts after
+	 * @param messages how many of the file's messages we already stored
 	 */
 	private FetchResult importFrom(GroupId g, InputStream in, long offset,
-			boolean expectHeader, @Nullable String etag,
+			int messages, boolean expectHeader, @Nullable String etag,
 			@Nullable String lastModified)
 			throws DbException, IOException, FormatException {
-		CountingInputStream counted =
-				new CountingInputStream(in, Long.MAX_VALUE);
-		Progress p = new Progress();
+		Progress p = new Progress(MAX_STREAM_BYTES - offset, messages);
+		CountingInputStream counted = countUpTo(in, p);
 		try {
 			importEntries(g, counted, expectHeader, p);
 		} finally {
@@ -603,7 +618,7 @@ class ChannelManagerImpl
 			// The validators are only remembered once the whole file has
 			// been read, or the next fetch would be told there is nothing
 			// new while we are still missing the end of it.
-			storeFetchState(g, offset + p.bytes,
+			storeFetchState(g, offset + p.bytes, p.messagesBefore + p.messages,
 					p.complete ? etag : null,
 					p.complete ? lastModified : null);
 		}
@@ -611,20 +626,42 @@ class ChannelManagerImpl
 	}
 
 	/**
-	 * How far an import got: the messages stored, and the byte count and
-	 * trailing bytes at the end of the last whole message.
+	 * Wraps a stream so that it can be read no further than the budget
+	 * the file has left, plus one byte: reading that byte is how a file
+	 * too large to accept is told apart from one that fills the budget
+	 * exactly.
+	 */
+	private static CountingInputStream countUpTo(InputStream in,
+			Progress p) {
+		return new CountingInputStream(in, p.budget + 1);
+	}
+
+	/**
+	 * How far an import got: the messages stored and the byte count at
+	 * the end of the last whole message, along with what earlier fetches
+	 * of the same file already spent of the limits it has to keep to.
 	 */
 	private static class Progress {
+
+		private final long budget;
+		private final int messagesBefore;
 
 		private int messages = 0;
 		private long bytes = 0;
 		private boolean complete = false;
+
+		private Progress(long budget, int messagesBefore) {
+			this.budget = budget;
+			this.messagesBefore = messagesBefore;
+		}
 	}
 
-	private void storeFetchState(GroupId g, long offset, @Nullable String etag,
-			@Nullable String lastModified) throws DbException {
+	private void storeFetchState(GroupId g, long offset, int messages,
+			@Nullable String etag, @Nullable String lastModified)
+			throws DbException {
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(GROUP_KEY_FETCH_OFFSET, offset);
+		meta.put(GROUP_KEY_FETCH_MESSAGES, (long) messages);
 		if (etag != null) meta.put(GROUP_KEY_ETAG, etag);
 		if (lastModified != null) {
 			meta.put(GROUP_KEY_LAST_MODIFIED, lastModified);
@@ -711,26 +748,16 @@ class ChannelManagerImpl
 		Collections.sort(sorted, (a, b) -> {
 			int c = Long.compare(requireNonNull(timestamps.get(a)),
 					requireNonNull(timestamps.get(b)));
-			return c != 0 ? c : compareIds(a, b);
+			return c != 0 ? c : a.compareTo(b);
 		});
 		return sorted;
-	}
-
-	private int compareIds(MessageId a, MessageId b) {
-		byte[] x = a.getBytes(), y = b.getBytes();
-		for (int i = 0; i < x.length; i++) {
-			int c = Integer.compare(x[i] & 0xFF, y[i] & 0xFF);
-			if (c != 0) return c;
-		}
-		return 0;
 	}
 
 	@Override
 	public int importChannel(InputStream in)
 			throws DbException, IOException, FormatException {
-		CountingInputStream counted =
-				new CountingInputStream(in, Long.MAX_VALUE);
-		Progress p = new Progress();
+		Progress p = new Progress(MAX_STREAM_BYTES, 0);
+		CountingInputStream counted = countUpTo(in, p);
 		importEntries(null, counted, true, p);
 		return p.messages;
 	}
@@ -770,12 +797,20 @@ class ChannelManagerImpl
 			g = requireNonNull(expected);
 		}
 		while (!r.eof()) {
-			if (++p.messages > MAX_STREAM_MESSAGES)
-				throw new FormatException();
+			// The limits apply to the file, so what earlier fetches of
+			// it stored counts against them too. Going over one is not a
+			// malformed stream but a file we will not store, so we give
+			// up on this mirror rather than reading the file again.
+			if (p.messagesBefore + ++p.messages > MAX_STREAM_MESSAGES)
+				throw new IOException("Channel has too many messages");
 			BdfList entry = r.readList();
 			checkSize(entry, 2);
 			long timestamp = entry.getLong(0);
 			byte[] body = entry.getRaw(1);
+			// A stream is served by someone we don't trust, so a message
+			// it can't have carried is a malformed stream, not a bug
+			if (timestamp < 0) throw new FormatException();
+			checkLength(body, 1, MAX_MESSAGE_BODY_LENGTH);
 			// The message ID is a hash of the group, timestamp and body,
 			// so a stream can't claim a message it didn't carry
 			Message m = messageFactory.createMessage(g, timestamp, body);
@@ -788,6 +823,10 @@ class ChannelManagerImpl
 			// is exactly where the message ended
 			p.bytes = in.getBytesRead();
 		}
+		// The stream was allowed one byte beyond the budget, so having
+		// read that byte means the file is larger than we will store
+		if (in.getBytesRead() > p.budget)
+			throw new IOException("Channel is too large");
 		p.complete = true;
 	}
 

@@ -50,6 +50,8 @@ import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.blog.MessageType.POST;
+import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -856,24 +858,120 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
-	public void testNothingNewWhenTheFileIsNoLongerThanWhatWeHave()
-			throws Exception {
+	public void testStartsAgainWhenTheFileGotShorter() throws Exception {
+		// The owner rebuilds the channel, or restores an older backup,
+		// and publishes a file shorter than the part we already read.
+		// Asking again for a range that file will never have would leave
+		// us being told there is nothing new for ever.
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
 		channelManager0.post(g, getRandomString(42));
+		byte[] shorter = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] longer = exportChannel(g);
 
 		MockWebServer server = new MockWebServer();
 		server.enqueue(new MockResponse()
-				.setBody(new Buffer().write(exportChannel(g))));
-		// Asking for bytes past the end of the file
+				.setHeader("ETag", "\"one\"")
+				.setBody(new Buffer().write(longer)));
+		// Asking for bytes past the end of the file now being served
 		server.enqueue(new MockResponse().setResponseCode(416));
+		// So the file is read from the beginning instead. The mirror
+		// gives the tag of the file we could not continue, which it must
+		// not be offered, or it would answer that nothing had changed
+		server.enqueue(new MockResponse()
+				.setHeader("ETag", "\"one\"")
+				.setBody(new Buffer().write(shorter)));
 		server.start();
 		try {
 			subscribeWithMirror(g, server.url("/c.briar").toString());
 			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
-			awaitPendingMessageDelivery(1);
-			assertEquals(UNCHANGED,
+			awaitPendingMessageDelivery(2);
+			assertEquals(2, blogManager1.getPostHeaders(g).size());
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+
+			server.takeRequest();
+			assertEquals("bytes=" + longer.length + "-",
+					server.takeRequest().getHeader("Range"));
+			RecordedRequest full = server.takeRequest();
+			assertNull(full.getHeader("Range"));
+			assertNull(full.getHeader("If-None-Match"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testCountsMessagesAcrossFetchesOfTheSameFile()
+			throws Exception {
+		// The limit on how many messages a file may make us store counts
+		// the whole file. A mirror that could spend the limit again on
+		// every fetch could go on filling our database for ever.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		Blog subscribed = channelManager1.subscribe("Announcements",
+				channel.getLocalAuthor().getPublicKey());
+		byte[] head = buildStream(subscribed, MAX_STREAM_MESSAGES);
+		byte[] tail = c1.getClientHelper()
+				.toByteArray(BdfList.of(1L, getRandomBytes(8)));
+
+		MockWebServer server = new MockWebServer();
+		// As many messages as a file may carry, which is allowed
+		server.enqueue(new MockResponse().setBody(new Buffer().write(head)));
+		// One more, which is not, however it is spread over fetches
+		server.enqueue(new MockResponse().setResponseCode(206)
+				.setBody(new Buffer().write(tail)));
+		server.start();
+		try {
+			channelManager1.setMirrors(g,
+					singletonList(server.url("/c.briar").toString()));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			// The mirror is dropped rather than the file read again:
+			// there is nothing wrong with the file, we just won't store
+			// it, so asking for it once more would be wasted work
+			assertEquals(UNREACHABLE,
 					channelManager1.fetchChannel(g).getOutcome());
+
+			server.takeRequest();
+			assertEquals("bytes=" + head.length + "-",
+					server.takeRequest().getHeader("Range"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testRejectsAMessageAMirrorCouldNotHaveCarried()
+			throws Exception {
+		// A stream is written by someone we don't trust, so it can claim
+		// messages that no real message could be. Each must be turned
+		// away, not allowed to bring the fetch down
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		Blog subscribed = channelManager1.subscribe("Announcements",
+				channel.getLocalAuthor().getPublicKey());
+
+		MockWebServer server = new MockWebServer();
+		// Dated before the epoch
+		server.enqueue(new MockResponse().setBody(new Buffer()
+				.write(buildStream(subscribed, -1L, getRandomBytes(8)))));
+		// Carrying no body at all
+		server.enqueue(new MockResponse().setBody(new Buffer()
+				.write(buildStream(subscribed, 1L, new byte[0]))));
+		// Carrying more than a message may
+		server.enqueue(new MockResponse().setBody(new Buffer()
+				.write(buildStream(subscribed, 1L,
+						getRandomBytes(MAX_MESSAGE_BODY_LENGTH + 1)))));
+		server.start();
+		try {
+			channelManager1.setMirrors(g,
+					singletonList(server.url("/c.briar").toString()));
+			for (int i = 0; i < 3; i++) {
+				assertEquals(UNREACHABLE,
+						channelManager1.fetchChannel(g).getOutcome());
+			}
+			assertTrue(blogManager1.getPostHeaders(g).isEmpty());
 		} finally {
 			server.shutdown();
 		}
@@ -1041,6 +1139,17 @@ public class ChannelManagerIntegrationTest
 				STREAM_FORMAT_VERSION, blog.getGroup().getDescriptor())));
 		out.write(c1.getClientHelper()
 				.toByteArray(BdfList.of(timestamp, body)));
+		return out.toByteArray();
+	}
+
+	private byte[] buildStream(Blog blog, int messages) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		out.write(c1.getClientHelper().toByteArray(BdfList.of(
+				STREAM_FORMAT_VERSION, blog.getGroup().getDescriptor())));
+		for (int i = 0; i < messages; i++) {
+			out.write(c1.getClientHelper()
+					.toByteArray(BdfList.of((long) i + 1, getRandomBytes(8))));
+		}
 		return out.toByteArray();
 	}
 
