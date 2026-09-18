@@ -453,11 +453,12 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 			GroupMessage msg = groupMessageFactory.createGroupMessage(groupId,
 					timestamp, parentId, author, text, attachmentHeaders,
 					fileHeaders, previousMsgId);
-			storePost(msg, text == null ? "" : text);
+			storePost(msg, text == null ? "" : text, fileHeaders);
 		});
 	}
 
-	private void storePost(GroupMessage msg, String text) {
+	private void storePost(GroupMessage msg, String text,
+			List<FileHeader> fileHeaders) {
 		runOnDbThread(false, txn -> {
 			long start = now();
 			GroupMessageHeader header =
@@ -469,7 +470,20 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 					attachmentCreator.onAttachmentsSent(header.getId());
 				addItem(buildItem(header, text), true);
 			});
-		}, this::handleException);
+		}, e -> {
+			handleException(e);
+			// A file is stored before the post that reveals it, so if the
+			// post can't be stored the file is left with nothing to
+			// reveal it and nothing to delete it
+			for (FileHeader f : fileHeaders) {
+				try {
+					privateGroupManager.removeFile(f);
+				} catch (DbException ignored) {
+				}
+			}
+			if (!fileHeaders.isEmpty())
+				fileError.postEvent(R.string.file_send_failed);
+		});
 	}
 
 	// Attachment loading. Attachments may arrive before or after the post

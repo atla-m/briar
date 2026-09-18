@@ -54,6 +54,7 @@ import androidx.annotation.UiThread;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
+import static java.util.Collections.singletonList;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logException;
@@ -93,6 +94,13 @@ class WriteBlogPostViewModel extends DbViewModel
 			new MutableLiveEvent<>();
 	private final MutableLiveEvent<Boolean> published =
 			new MutableLiveEvent<>();
+	// UI thread only. Set when this screen has gone away, so a file that
+	// finishes being stored after that is deleted rather than attached to
+	// nothing
+	private boolean cleared = false;
+	// UI thread only. Set when a post referencing the attached files has
+	// been written, so they are no longer ours to delete
+	private boolean filesPublished = false;
 
 	@Inject
 	WriteBlogPostViewModel(Application application,
@@ -123,6 +131,29 @@ class WriteBlogPostViewModel extends DbViewModel
 		super.onCleared();
 		// Deletes the images that were never published
 		attachmentCreator.cancel();
+		// A file is stored as soon as it's picked, so one attached to a
+		// post that was never published would be left in the database
+		// with nothing to reveal it and nothing to delete it
+		cleared = true;
+		if (!filesPublished) deleteFiles(new ArrayList<>(fileHeaders));
+		fileHeaders.clear();
+	}
+
+	/**
+	 * Deletes files that were stored for a post that will never be
+	 * published, along with their chunks.
+	 */
+	private void deleteFiles(List<FileHeader> files) {
+		if (files.isEmpty()) return;
+		runOnDbThread(() -> {
+			for (FileHeader f : files) {
+				try {
+					blogManager.removeFile(f);
+				} catch (DbException e) {
+					logException(LOG, WARNING, e);
+				}
+			}
+		});
 	}
 
 	@UiThread
@@ -179,6 +210,12 @@ class WriteBlogPostViewModel extends DbViewModel
 				FileHeader header = blogManager.addLocalFile(g,
 						clock.currentTimeMillis(), name, contentType, source);
 				androidExecutor.runOnUiThread(() -> {
+					if (cleared) {
+						// The screen went away while the file was being
+						// stored, so there will be no post to reveal it
+						deleteFiles(singletonList(header));
+						return;
+					}
 					fileHeaders.add(header);
 					attachedFiles.setValue(fileHeaders);
 				});
@@ -228,10 +265,12 @@ class WriteBlogPostViewModel extends DbViewModel
 					blogManager.addLocalPost(p);
 					postId = p.getMessage().getId();
 				}
-				// The images have been published, so they are no longer
-				// deleted when this screen goes away
-				androidExecutor.runOnUiThread(() ->
-						attachmentCreator.onAttachmentsSent(postId));
+				// The images and files have been published, so they are no
+				// longer deleted when this screen goes away
+				androidExecutor.runOnUiThread(() -> {
+					attachmentCreator.onAttachmentsSent(postId);
+					filesPublished = true;
+				});
 				published.postEvent(true);
 			} catch (DbException | GeneralSecurityException
 					| FormatException e) {
