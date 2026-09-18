@@ -903,6 +903,68 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testForgetsTheTagOfAFileItCouldNotContinue()
+			throws Exception {
+		// Starting a file again has to forget the tag we stored for the
+		// file we gave up on, and forget it in the database, not just
+		// for the request that follows. If the fetch that starts again
+		// is itself cut off, a tag left behind would go out with the
+		// next request, and a mirror still giving that tag for the file
+		// it has now would answer that there was nothing new, for ever.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] one = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] two = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] three = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse()
+				.setHeader("ETag", "\"three\"")
+				.setBody(new Buffer().write(three)));
+		// The file is replaced by a shorter one, so the range we ask for
+		// is one it will never have
+		server.enqueue(new MockResponse().setResponseCode(416));
+		// We start again, and that fetch dies in the middle of the
+		// second post, so its tag is not ours to keep either
+		int cut = one.length + (two.length - one.length) / 2;
+		server.enqueue(new MockResponse()
+				.setHeader("ETag", "\"two\"")
+				.setBody(new Buffer().write(two, 0, cut)));
+		server.enqueue(new MockResponse().setResponseCode(206)
+				.setHeader("ETag", "\"two\"")
+				.setBody(new Buffer().write(two, one.length,
+						two.length - one.length)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(3);
+			assertEquals(3, blogManager1.getPostHeaders(g).size());
+
+			// The file got shorter, we started again, and that was cut off
+			assertEquals(UNREACHABLE,
+					channelManager1.fetchChannel(g).getOutcome());
+
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+
+			server.takeRequest();
+			server.takeRequest();
+			server.takeRequest();
+			// Carries on from the post that did arrive whole, and offers
+			// no tag, because we have none for the file being served now
+			RecordedRequest resumed = server.takeRequest();
+			assertEquals("bytes=" + one.length + "-",
+					resumed.getHeader("Range"));
+			assertNull(resumed.getHeader("If-None-Match"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
 	public void testCountsMessagesAcrossFetchesOfTheSameFile()
 			throws Exception {
 		// The limit on how many messages a file may make us store counts
