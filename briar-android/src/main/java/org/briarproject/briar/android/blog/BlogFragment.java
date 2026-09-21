@@ -235,6 +235,14 @@ public class BlogFragment extends BaseFragment
 	}
 
 	@Override
+	public void onShareChannelClick(BlogPostItem post) {
+		Intent i = new Intent(getActivity(), ShareBlogActivity.class);
+		i.setFlags(FLAG_ACTIVITY_CLEAR_TOP);
+		i.putExtra(GROUP_ID, post.getGroupId().getBytes());
+		startActivityForResult(i, REQUEST_SHARE_BLOG);
+	}
+
+	@Override
 	public void onLinkClick(String url) {
 		LinkDialogFragment f = LinkDialogFragment.newInstance(url);
 		f.show(getParentFragmentManager(), f.getUniqueTag());

@@ -17,6 +17,7 @@ import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.fragment.BaseFragment;
+import org.briarproject.briar.android.sharing.ShareBlogActivity;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
@@ -38,6 +39,7 @@ import static android.view.View.VISIBLE;
 import static java.util.Objects.requireNonNull;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.briar.android.activity.BriarActivity.GROUP_ID;
+import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_SHARE_BLOG;
 import static org.briarproject.briar.android.util.UiUtils.MIN_DATE_RESOLUTION;
 
 @MethodsNotNullByDefault
@@ -158,6 +160,14 @@ public class BlogPostFragment extends BaseFragment
 	@Override
 	public void onFileClick(BlogPostItem post, FileHeader header) {
 		attachmentBinder.onFileClicked(post, header);
+	}
+
+	@Override
+	public void onShareChannelClick(BlogPostItem post) {
+		Intent i = new Intent(getActivity(), ShareBlogActivity.class);
+		i.setFlags(FLAG_ACTIVITY_CLEAR_TOP);
+		i.putExtra(GROUP_ID, post.getGroupId().getBytes());
+		startActivityForResult(i, REQUEST_SHARE_BLOG);
 	}
 
 	@Override

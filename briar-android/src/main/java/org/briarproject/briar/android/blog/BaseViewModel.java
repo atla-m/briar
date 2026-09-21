@@ -42,6 +42,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
 
@@ -86,6 +87,10 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	// The posts that share files, keyed by manifest ID, so progress events
 	// for a file can be routed to the post that shares it. UiThread
 	private final Map<MessageId, BlogPostItem> filePosts = new HashMap<>();
+	// Whether each blog we've loaded a post from is a channel. Written
+	// on the database thread and read there too, but a ViewModel can
+	// outlive the thread that made it, so keep it concurrent
+	private final Map<GroupId, Boolean> channels = new ConcurrentHashMap<>();
 	// true if there was an error, false if the file was saved
 	private final MutableLiveEvent<Boolean> saveError =
 			new MutableLiveEvent<>();
@@ -276,17 +281,33 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	@DatabaseExecutor
 	protected BlogPostItem getItem(Transaction txn, BlogPostHeader h)
 			throws DbException {
+		boolean channel = isChannel(txn, h.getGroupId());
 		String text;
 		if (h instanceof BlogCommentHeader) {
 			BlogCommentHeader c = (BlogCommentHeader) h;
-			BlogCommentItem item = new BlogCommentItem(c);
+			BlogCommentItem item = new BlogCommentItem(c, channel);
 			text = getPostText(txn, item.getPostHeader().getId());
 			item.setText(text);
 			return item;
 		} else {
 			text = getPostText(txn, h.getId());
-			return new BlogPostItem(h, text);
+			return new BlogPostItem(h, text, channel);
 		}
+	}
+
+	/**
+	 * Returns true if the given group is a channel. Whether a blog is a
+	 * channel is fixed when it's created, so the answer is cached: the
+	 * feed loads every post of every blog and would otherwise look the
+	 * same blog up once per post.
+	 */
+	@DatabaseExecutor
+	private boolean isChannel(Transaction txn, GroupId g) throws DbException {
+		Boolean cached = channels.get(g);
+		if (cached != null) return cached;
+		boolean channel = blogManager.getBlog(txn, g).isChannel();
+		channels.put(g, channel);
+		return channel;
 	}
 
 	@DatabaseExecutor
@@ -329,6 +350,11 @@ abstract class BaseViewModel extends DbViewModel implements EventListener {
 	}
 
 	void repeatPost(BlogPostItem item, @Nullable String comment) {
+		// A channel post is shared by sharing the channel. Reblogging it
+		// would sign it into the reblogger's own blog and carry their
+		// identity to everyone downstream, including people who are
+		// contacts of nobody else in the chain
+		if (item.isChannel()) throw new IllegalArgumentException();
 		runOnDbThread(() -> {
 			try {
 				LocalAuthor a = identityManager.getLocalAuthor();

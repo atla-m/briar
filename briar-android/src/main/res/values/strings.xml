@@ -516,6 +516,7 @@
 	<string name="blogs_blog_removed">Blog removed</string>
 	<string name="blogs_reblog_comment_hint">Add a comment (optional)</string>
 	<string name="blogs_reblog_button">Reblog</string>
+	<string name="blogs_share_channel">Share this channel</string>
 	<plurals name="blogs_reblog_attachments_not_carried">
 		<item quantity="one">%d attachment stays in the original blog</item>
 		<item quantity="other">%d attachments stay in the original blog</item>

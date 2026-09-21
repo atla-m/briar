@@ -17,6 +17,7 @@ import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.blog.BaseViewModel.ListUpdate;
 import org.briarproject.briar.android.fragment.BaseFragment;
+import org.briarproject.briar.android.sharing.ShareBlogActivity;
 import org.briarproject.briar.android.util.BriarSnackbarBuilder;
 import org.briarproject.briar.android.view.BriarRecyclerView;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
@@ -36,6 +37,7 @@ import static androidx.recyclerview.widget.RecyclerView.NO_POSITION;
 import static android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP;
 import static com.google.android.material.snackbar.Snackbar.LENGTH_LONG;
 import static org.briarproject.briar.android.activity.BriarActivity.GROUP_ID;
+import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_SHARE_BLOG;
 import static org.briarproject.briar.android.blog.BlogPostFragment.POST_ID;
 
 @MethodsNotNullByDefault
@@ -187,6 +189,14 @@ public class FeedFragment extends BaseFragment
 	@Override
 	public void onFileClick(BlogPostItem post, FileHeader header) {
 		attachmentBinder.onFileClicked(post, header);
+	}
+
+	@Override
+	public void onShareChannelClick(BlogPostItem post) {
+		Intent i = new Intent(getActivity(), ShareBlogActivity.class);
+		i.setFlags(FLAG_ACTIVITY_CLEAR_TOP);
+		i.putExtra(GROUP_ID, post.getGroupId().getBytes());
+		startActivityForResult(i, REQUEST_SHARE_BLOG);
 	}
 
 	@Override

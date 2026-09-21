@@ -150,13 +150,26 @@ class BlogPostViewHolder extends RecyclerView.ViewHolder {
 			attachmentsNotCarried.setVisibility(GONE);
 		}
 
-		// reblog button
-		reblogButton.setOnClickListener(v -> {
-			Intent i = new Intent(ctx, ReblogActivity.class);
-			i.putExtra(GROUP_ID, item.getGroupId().getBytes());
-			i.putExtra(POST_ID, item.getId().getBytes());
-			ctx.startActivity(i);
-		});
+		// A channel post is shared by sharing the channel. Reblogging it
+		// would sign it into the reblogger's own blog, attaching their
+		// identity to it and carrying that to everyone downstream
+		if (item.isChannel()) {
+			reblogButton.setImageResource(R.drawable.social_share_white);
+			reblogButton.setContentDescription(
+					ctx.getString(R.string.blogs_share_channel));
+			reblogButton.setOnClickListener(
+					v -> listener.onShareChannelClick(item));
+		} else {
+			reblogButton.setImageResource(R.drawable.ic_repeat);
+			reblogButton.setContentDescription(
+					ctx.getString(R.string.blogs_reblog_button));
+			reblogButton.setOnClickListener(v -> {
+				Intent i = new Intent(ctx, ReblogActivity.class);
+				i.putExtra(GROUP_ID, item.getGroupId().getBytes());
+				i.putExtra(POST_ID, item.getId().getBytes());
+				ctx.startActivity(i);
+			});
+		}
 
 		// comments
 		commentContainer.removeAllViews();
