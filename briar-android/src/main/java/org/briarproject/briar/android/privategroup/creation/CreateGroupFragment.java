@@ -8,6 +8,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ProgressBar;
 
@@ -37,6 +38,7 @@ public class CreateGroupFragment extends BaseFragment {
 
 	private CreateGroupListener listener;
 	private EditText nameEntry;
+	private CheckBox creatorOnlyCheckBox;
 	private Button createGroupButton;
 	private TextInputLayout nameLayout;
 	private ProgressBar progress;
@@ -89,6 +91,8 @@ public class CreateGroupFragment extends BaseFragment {
 		createGroupButton = v.findViewById(R.id.button);
 		createGroupButton.setOnClickListener(v1 -> createGroup());
 
+		creatorOnlyCheckBox = v.findViewById(R.id.creatorOnlyCheckBox);
+
 		progress = v.findViewById(R.id.progressBar);
 
 		return v;
@@ -120,6 +124,7 @@ public class CreateGroupFragment extends BaseFragment {
 		hideSoftKeyboard(nameEntry);
 		createGroupButton.setVisibility(GONE);
 		progress.setVisibility(VISIBLE);
-		listener.onGroupNameChosen(nameEntry.getText().toString());
+		listener.onGroupNameChosen(nameEntry.getText().toString(),
+				creatorOnlyCheckBox.isChecked());
 	}
 }

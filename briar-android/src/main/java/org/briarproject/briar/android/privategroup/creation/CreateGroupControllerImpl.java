@@ -99,12 +99,12 @@ class CreateGroupControllerImpl extends ContactSelectorControllerImpl
 	}
 
 	@Override
-	public void createGroup(String name,
+	public void createGroup(String name, boolean creatorOnly,
 			ResultExceptionHandler<GroupId, DbException> handler) {
 		runOnDbThread(() -> {
 			try {
 				LocalAuthor author = identityManager.getLocalAuthor();
-				createGroupAndMessages(author, name, handler);
+				createGroupAndMessages(author, name, creatorOnly, handler);
 			} catch (DbException e) {
 				logException(LOG, WARNING, e);
 				handler.onException(e);
@@ -113,11 +113,13 @@ class CreateGroupControllerImpl extends ContactSelectorControllerImpl
 	}
 
 	private void createGroupAndMessages(LocalAuthor author, String name,
+			boolean creatorOnly,
 			ResultExceptionHandler<GroupId, DbException> handler) {
 		cryptoExecutor.execute(() -> {
-			LOG.info("Creating group...");
+			LOG.info(creatorOnly ? "Creating announcement group..."
+					: "Creating group...");
 			PrivateGroup group =
-					groupFactory.createPrivateGroup(name, author);
+					groupFactory.createPrivateGroup(name, author, creatorOnly);
 			LOG.info("Creating new join announcement...");
 			GroupMessage joinMsg =
 					groupMessageFactory.createJoinMessage(group.getId(),

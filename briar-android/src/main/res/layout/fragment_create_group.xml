@@ -28,6 +28,25 @@
 
 	</com.google.android.material.textfield.TextInputLayout>
 
+	<CheckBox
+		android:id="@+id/creatorOnlyCheckBox"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginTop="@dimen/margin_medium"
+		android:checked="false"
+		android:text="@string/groups_create_creator_only_checkbox" />
+
+	<TextView
+		android:id="@+id/creatorOnlyExplanation"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginStart="@dimen/margin_large"
+		android:layout_marginLeft="@dimen/margin_large"
+		android:layout_marginBottom="@dimen/margin_medium"
+		android:text="@string/groups_create_creator_only_explanation"
+		android:textColor="?android:attr/textColorSecondary"
+		android:textSize="@dimen/text_size_small" />
+
 	<Button
 		android:id="@+id/button"
 		style="@style/BriarButton"

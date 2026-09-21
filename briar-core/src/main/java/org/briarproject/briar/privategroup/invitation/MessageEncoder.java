@@ -42,6 +42,16 @@ interface MessageEncoder {
 			@Nullable String text, byte[] signature, long autoDeleteTimer);
 
 	/**
+	 * Encodes an invite message with an optional auto-delete timer and a
+	 * creator-only flag. This needs the contact to support version 0.2
+	 * or higher.
+	 */
+	Message encodeInviteMessage(GroupId contactGroupId, GroupId privateGroupId,
+			long timestamp, String groupName, Author creator, byte[] salt,
+			@Nullable String text, byte[] signature, long autoDeleteTimer,
+			boolean creatorOnly);
+
+	/**
 	 * Encodes a join message without an auto-delete timer.
 	 */
 	Message encodeJoinMessage(GroupId contactGroupId, GroupId privateGroupId,

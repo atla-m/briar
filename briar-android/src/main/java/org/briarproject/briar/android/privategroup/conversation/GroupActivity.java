@@ -8,6 +8,7 @@ import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -103,6 +104,12 @@ public class GroupActivity extends
 
 	private GroupViewModel viewModel;
 	private boolean groupEnabled = false;
+	private TextView readOnlyNotice;
+	// Null until the group, our role in it and the dissolved flag have all
+	// loaded. The composer stays hidden until then: showing it and taking
+	// it away again is worse than showing it a moment late
+	@Nullable
+	private Boolean canPost = null;
 
 	@Override
 	public void injectActivity(ActivityComponent component) {
@@ -154,11 +161,20 @@ public class GroupActivity extends
 			startActivity(i);
 		});
 
+		readOnlyNotice = findViewById(R.id.readOnlyNotice);
+
 		String groupName = getIntent().getStringExtra(GROUP_NAME);
 		if (groupName != null) setTitle(groupName);
 		observeOnce(viewModel.getPrivateGroup(), this, privateGroup ->
 				setTitle(privateGroup.getName())
 		);
+		// In a group where only the creator can post, a member's post would
+		// be rejected by every member's validator, so don't offer a composer
+		// that can only produce invalid messages
+		viewModel.canPost().observe(this, canPost -> {
+			this.canPost = canPost;
+			updateComposer();
+		});
 		observeOnce(viewModel.isCreator(), this, adapter::setIsCreator);
 
 		// start with group disabled and enable when not dissolved
@@ -351,6 +367,7 @@ public class GroupActivity extends
 
 	@Override
 	public void onReplyClick(GroupMessageItem item) {
+		if (canPost == null || !canPost) return;
 		Boolean isDissolved = viewModel.isDissolved().getValue();
 		if (isDissolved != null && !isDissolved) super.onReplyClick(item);
 	}
@@ -364,15 +381,23 @@ public class GroupActivity extends
 	private void setGroupEnabled(boolean enabled) {
 		groupEnabled = enabled;
 		invalidateOptionsMenu();
-		sendController.setReady(enabled);
 		list.getRecyclerView().setAlpha(enabled ? 1f : 0.5f);
+		updateComposer();
+	}
 
-		if (!enabled) {
+	private void updateComposer() {
+		boolean show = canPost != null && canPost;
+		sendController.setReady(show);
+		if (show) {
+			textInput.setVisibility(VISIBLE);
+		} else {
 			textInput.setVisibility(GONE);
 			if (textInput.isKeyboardOpen()) textInput.hideSoftKeyboard();
-		} else {
-			textInput.setVisibility(VISIBLE);
 		}
+		// Tell members why there's no composer. A dissolved group has no
+		// composer either, but it says so for itself
+		boolean readOnly = groupEnabled && canPost != null && !canPost;
+		readOnlyNotice.setVisibility(readOnly ? VISIBLE : GONE);
 	}
 
 	private void showLeaveGroupDialog() {

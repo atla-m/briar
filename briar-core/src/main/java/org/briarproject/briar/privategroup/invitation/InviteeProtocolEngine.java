@@ -253,7 +253,8 @@ class InviteeProtocolEngine extends AbstractProtocolEngine<InviteeSession> {
 		receiveAutoDeleteTimer(txn, m);
 		// Broadcast an event
 		PrivateGroup privateGroup = privateGroupFactory.createPrivateGroup(
-				m.getGroupName(), m.getCreator(), m.getSalt());
+				m.getGroupName(), m.getCreator(), m.getSalt(),
+				m.isCreatorOnly());
 		txn.attach(new GroupInvitationRequestReceivedEvent(
 				createInvitationRequest(m, privateGroup), contactId));
 		// Move to the INVITED state

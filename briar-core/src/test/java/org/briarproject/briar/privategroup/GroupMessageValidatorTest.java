@@ -1094,6 +1094,56 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 		}});
 	}
 
+	// POST in an announcement group
+
+	@Test
+	public void testAcceptsPostFromCreatorInCreatorOnlyGroup()
+			throws Exception {
+		// The posting member is the creator, so the post is accepted
+		PrivateGroup pg = new PrivateGroup(group,
+				getRandomString(MAX_GROUP_NAME_LENGTH), member,
+				getRandomBytes(GROUP_SALT_LENGTH), true);
+		assertTrue(pg.isCreatorOnly());
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, memberSignature);
+		expectPostMessage(null, true, pg);
+		BdfMessageContext messageContext =
+				validator.validateMessage(message, group, body);
+		assertExpectedMessageContext(messageContext, POST, memberList,
+				Collections.singletonList(previousMsgId));
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostFromNonCreatorInCreatorOnlyGroup()
+			throws Exception {
+		// The group was created by someone other than the posting member,
+		// so the post must be rejected before the signature is even checked
+		PrivateGroup pg = new PrivateGroup(group,
+				getRandomString(MAX_GROUP_NAME_LENGTH), creator,
+				getRandomBytes(GROUP_SALT_LENGTH), true);
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, memberSignature);
+		expectParseAuthor(memberList, member);
+		expectParsePrivateGroup(pg);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsPostWithAttachmentsFromNonCreatorInCreatorOnlyGroup()
+			throws Exception {
+		// A post carrying attachments is refused on the same grounds. The
+		// attachments themselves are unsigned and are only reachable through
+		// a post that names them, so refusing the post keeps them out
+		PrivateGroup pg = new PrivateGroup(group,
+				getRandomString(MAX_GROUP_NAME_LENGTH), creator,
+				getRandomBytes(GROUP_SALT_LENGTH), true);
+		BdfList body = BdfList.of(POST.getInt(), memberList, null,
+				previousMsgId, text, attachmentHeaders, memberSignature);
+		expectParseAuthor(memberList, member);
+		expectParsePrivateGroup(pg);
+		validator.validateMessage(message, group, body);
+	}
+
 	private void expectPostWithAttachments(MessageId parentId, String text,
 			BdfList headers, boolean sigValid) throws Exception {
 		BdfList signed = BdfList.of(
@@ -1106,6 +1156,7 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 				headers
 		);
 		expectParseAuthor(memberList, member);
+		expectParsePrivateGroup(privateGroup);
 		context.checking(new Expectations() {{
 			oneOf(clientHelper).verifySignature(memberSignature,
 					SIGNING_LABEL_POST, signed, member.getPublicKey());
@@ -1116,6 +1167,11 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 
 	private void expectPostMessage(MessageId parentId, boolean sigValid)
 			throws Exception {
+		expectPostMessage(parentId, sigValid, privateGroup);
+	}
+
+	private void expectPostMessage(MessageId parentId, boolean sigValid,
+			PrivateGroup pg) throws Exception {
 		BdfList signed = BdfList.of(
 				group.getId(),
 				message.getTimestamp(),
@@ -1125,11 +1181,19 @@ public class GroupMessageValidatorTest extends ValidatorTestCase {
 				text
 		);
 		expectParseAuthor(memberList, member);
+		expectParsePrivateGroup(pg);
 		context.checking(new Expectations() {{
 			oneOf(clientHelper).verifySignature(memberSignature,
 					SIGNING_LABEL_POST, signed, member.getPublicKey());
 			if (!sigValid)
 				will(throwException(new GeneralSecurityException()));
+		}});
+	}
+
+	private void expectParsePrivateGroup(PrivateGroup pg) throws Exception {
+		context.checking(new Expectations() {{
+			oneOf(privateGroupFactory).parsePrivateGroup(group);
+			will(returnValue(pg));
 		}});
 	}
 

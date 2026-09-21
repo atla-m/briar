@@ -24,9 +24,13 @@ class GroupInvitationViewHolder
 		super.onBind(item, listener);
 		if (item == null) return;
 
-		sharedBy.setText(
-				sharedBy.getContext().getString(R.string.groups_created_by,
-						getContactDisplayName(item.getCreator())));
+		// Say so before they join: in an announcement group they'll be able
+		// to read but not post, and that can't be changed afterwards
+		int createdBy = item.getShareable().isCreatorOnly()
+				? R.string.groups_creator_only_created_by
+				: R.string.groups_created_by;
+		sharedBy.setText(sharedBy.getContext().getString(createdBy,
+				getContactDisplayName(item.getCreator())));
 	}
 
 }

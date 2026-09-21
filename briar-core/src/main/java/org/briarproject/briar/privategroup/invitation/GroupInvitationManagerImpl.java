@@ -490,7 +490,7 @@ class GroupInvitationManagerImpl extends ConversationClientImpl
 		InviteMessage invite = messageParser.getInviteMessage(txn, m);
 		PrivateGroup pg = privateGroupFactory
 				.createPrivateGroup(invite.getGroupName(), invite.getCreator(),
-						invite.getSalt());
+						invite.getSalt(), invite.isCreatorOnly());
 		// Find out whether the private group can be opened
 		boolean canBeOpened = meta.wasAccepted() &&
 				db.containsGroup(txn, invite.getPrivateGroupId());
@@ -556,6 +556,12 @@ class GroupInvitationManagerImpl extends ConversationClientImpl
 			StoredSession ss = getSession(txn, contactGroupId, sessionId);
 			// The group can't be shared unless the contact supports the client
 			if (client != SHARED) return SharingStatus.NOT_SUPPORTED;
+			// Can't invite a contact whose client doesn't know the flag
+			PrivateGroup pg =
+					privateGroupManager.getPrivateGroup(txn, privateGroupId);
+			if (pg.isCreatorOnly() &&
+					!contactSupportsCreatorOnly(txn, c.getId()))
+				return SharingStatus.NOT_SUPPORTED;
 			// If there's no session, the contact can be invited
 			if (ss == null) return SharingStatus.SHAREABLE;
 			// If the session's in the start state, the contact can be invited
@@ -581,7 +587,8 @@ class GroupInvitationManagerImpl extends ConversationClientImpl
 			Contact c, MessageId m) throws DbException, FormatException {
 		InviteMessage invite = messageParser.getInviteMessage(txn, m);
 		PrivateGroup privateGroup = privateGroupFactory.createPrivateGroup(
-				invite.getGroupName(), invite.getCreator(), invite.getSalt());
+				invite.getGroupName(), invite.getCreator(), invite.getSalt(),
+				invite.isCreatorOnly());
 		return new GroupInvitationItem(privateGroup, c);
 	}
 
@@ -946,6 +953,14 @@ class GroupInvitationManagerImpl extends ConversationClientImpl
 			if (!meta.isRead()) unreadCount++;
 		}
 		messageTracker.resetGroupCount(txn, g, msgCount, unreadCount);
+	}
+
+	private boolean contactSupportsCreatorOnly(Transaction txn, ContactId c)
+			throws DbException {
+		int minorVersion = clientVersioningManager.getClientMinorVersion(txn, c,
+				CLIENT_ID, MAJOR_VERSION);
+		// The creator-only flag was added in client version 0.2
+		return minorVersion >= 2;
 	}
 
 	private static class StoredSession {

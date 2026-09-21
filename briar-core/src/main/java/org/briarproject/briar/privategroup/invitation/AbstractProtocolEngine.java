@@ -18,6 +18,7 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.bramble.api.versioning.ClientVersioningManager;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
+import org.briarproject.briar.api.client.ProtocolStateException;
 import org.briarproject.briar.api.client.SessionId;
 import org.briarproject.briar.api.conversation.ConversationManager;
 import org.briarproject.briar.api.privategroup.GroupMessage;
@@ -126,7 +127,23 @@ abstract class AbstractProtocolEngine<S extends Session<?>>
 		}
 		Message m;
 		ContactId c = clientHelper.getContactId(txn, s.getContactGroupId());
-		if (contactSupportsAutoDeletion(txn, c)) {
+		if (privateGroup.isCreatorOnly()) {
+			// A creator-only invite can only be understood by contacts that
+			// support client version 0.2 or higher. The UI shouldn't offer
+			// to invite contacts that don't, so treat this as an error.
+			if (!contactSupportsCreatorOnly(txn, c)) {
+				throw new ProtocolStateException();
+			}
+			m = messageEncoder.encodeInviteMessage(s.getContactGroupId(),
+					privateGroup.getId(), timestamp, privateGroup.getName(),
+					privateGroup.getCreator(), privateGroup.getSalt(), text,
+					signature, timer, true);
+			sendMessage(txn, m, INVITE, privateGroup.getId(), true, timer);
+			// Set the auto-delete timer duration on the message
+			if (timer != NO_AUTO_DELETE_TIMER) {
+				db.setCleanupTimerDuration(txn, m.getId(), timer);
+			}
+		} else if (contactSupportsAutoDeletion(txn, c)) {
 			m = messageEncoder.encodeInviteMessage(s.getContactGroupId(),
 					privateGroup.getId(), timestamp, privateGroup.getName(),
 					privateGroup.getCreator(), privateGroup.getSalt(), text,
@@ -285,7 +302,8 @@ abstract class AbstractProtocolEngine<S extends Session<?>>
 			throws DbException, FormatException {
 		InviteMessage invite = messageParser.getInviteMessage(txn, inviteId);
 		PrivateGroup privateGroup = privateGroupFactory.createPrivateGroup(
-				invite.getGroupName(), invite.getCreator(), invite.getSalt());
+				invite.getGroupName(), invite.getCreator(), invite.getSalt(),
+				invite.isCreatorOnly());
 		long timestamp =
 				max(clock.currentTimeMillis(), invite.getTimestamp() + 1);
 		// TODO: Create the join message on the crypto executor
@@ -362,5 +380,14 @@ abstract class AbstractProtocolEngine<S extends Session<?>>
 				GroupInvitationManager.MAJOR_VERSION);
 		// Auto-delete was added in client version 0.1
 		return minorVersion >= 1;
+	}
+
+	private boolean contactSupportsCreatorOnly(Transaction txn, ContactId c)
+			throws DbException {
+		int minorVersion = clientVersioningManager.getClientMinorVersion(txn, c,
+				GroupInvitationManager.CLIENT_ID,
+				GroupInvitationManager.MAJOR_VERSION);
+		// The creator-only flag was added in client version 0.2
+		return minorVersion >= 2;
 	}
 }

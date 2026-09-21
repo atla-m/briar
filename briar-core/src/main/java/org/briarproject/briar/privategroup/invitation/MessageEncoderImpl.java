@@ -126,6 +126,25 @@ class MessageEncoderImpl implements MessageEncoder {
 	}
 
 	@Override
+	public Message encodeInviteMessage(GroupId contactGroupId,
+			GroupId privateGroupId, long timestamp, String groupName,
+			Author creator, byte[] salt, @Nullable String text,
+			byte[] signature, long autoDeleteTimer, boolean creatorOnly) {
+		BdfList creatorList = clientHelper.toList(creator);
+		BdfList body = BdfList.of(
+				INVITE.getValue(),
+				creatorList,
+				groupName,
+				salt,
+				text,
+				signature,
+				encodeTimer(autoDeleteTimer),
+				creatorOnly
+		);
+		return createMessage(contactGroupId, timestamp, body);
+	}
+
+	@Override
 	public Message encodeJoinMessage(GroupId contactGroupId,
 			GroupId privateGroupId, long timestamp,
 			@Nullable MessageId previousMessageId) {

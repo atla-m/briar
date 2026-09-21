@@ -14,9 +14,28 @@ public interface PrivateGroupFactory {
 	PrivateGroup createPrivateGroup(String name, Author creator);
 
 	/**
+	 * Creates a private group with the given name and author. If
+	 * {@code creatorOnly} is true, only the creator can post in it.
+	 */
+	PrivateGroup createPrivateGroup(String name, Author creator,
+			boolean creatorOnly);
+
+	/**
 	 * Creates a private group with the given name, author and salt.
 	 */
 	PrivateGroup createPrivateGroup(String name, Author creator, byte[] salt);
+
+	/**
+	 * Creates a private group with the given name, author and salt. If
+	 * {@code creatorOnly} is true, only the creator can post in it.
+	 * <p>
+	 * Such a group has a different
+	 * {@link org.briarproject.bramble.api.sync.GroupId} from a regular group
+	 * with the same name, creator and salt, because the flag is part of the
+	 * group descriptor.
+	 */
+	PrivateGroup createPrivateGroup(String name, Author creator, byte[] salt,
+			boolean creatorOnly);
 
 	/**
 	 * Parses a group and returns the corresponding PrivateGroup.

@@ -378,6 +378,10 @@
 	<string name="groups_remove">Remove</string>
 	<string name="groups_create_group_title">Create Private Group</string>
 	<string name="groups_create_group_button">Create Group</string>
+	<string name="groups_create_creator_only_checkbox">Only I can post</string>
+	<string name="groups_create_creator_only_explanation">An announcement group. Members can read your posts but can\'t reply or post their own.</string>
+	<string name="groups_creator_only_notice">Only the creator can post in this group</string>
+	<string name="groups_creator_only_created_by">Announcement group created by %s</string>
 	<string name="groups_create_group_invitation_button">Send Invitation</string>
 	<string name="groups_create_group_hint">Choose a name for your private group</string>
 	<string name="groups_quote_photo">Photo</string>
@@ -550,7 +554,7 @@
 	<string name="channels">Channels</string>
 	<string name="channels_create">Create Channel</string>
 	<string name="channels_create_button">Create</string>
-	<string name="channels_create_explanation">A channel is a page you publish. Only you can post to it. People who subscribe can read your posts, and can\'t see who else subscribes.</string>
+	<string name="channels_create_explanation">A channel is a page you publish for anyone who has its link. Readers fetch it over Tor, and nobody, not even you, can see who subscribes.</string>
 	<string name="channels_title_hint">Channel name</string>
 	<string name="channels_created">Created:</string>
 	<string name="channels_write_post">Write post</string>

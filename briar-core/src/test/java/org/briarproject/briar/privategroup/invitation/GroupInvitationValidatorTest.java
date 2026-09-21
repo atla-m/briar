@@ -76,7 +76,7 @@ public class GroupInvitationValidatorTest extends ValidatorTestCase {
 	@Test(expected = FormatException.class)
 	public void testRejectsTooLongInviteMessage() throws Exception {
 		BdfList body = BdfList.of(INVITE.getValue(), creatorList, groupName,
-				salt, text, signature, NO_AUTO_DELETE_TIMER, null);
+				salt, text, signature, NO_AUTO_DELETE_TIMER, false, null);
 		validator.validateMessage(message, group, body);
 	}
 
@@ -296,6 +296,59 @@ public class GroupInvitationValidatorTest extends ValidatorTestCase {
 		testAcceptsInviteMessage(body, MAX_AUTO_DELETE_TIMER_MS, metadata);
 	}
 
+	@Test
+	public void testAcceptsInviteMessageWithFalseCreatorOnlyFlag()
+			throws Exception {
+		BdfList body = BdfList.of(INVITE.getValue(), creatorList, groupName,
+				salt, text, signature, null, false);
+		testAcceptsInviteMessage(body, NO_AUTO_DELETE_TIMER, meta);
+	}
+
+	@Test
+	public void testAcceptsCreatorOnlyInviteMessage() throws Exception {
+		PrivateGroup pg =
+				new PrivateGroup(group, groupName, creator, salt, true);
+		BdfList body = BdfList.of(INVITE.getValue(), creatorList, groupName,
+				salt, text, signature, null, true);
+		expectInviteMessage(false, true, pg);
+		expectEncodeMetadata(INVITE, NO_AUTO_DELETE_TIMER, meta);
+		BdfMessageContext messageContext =
+				validator.validateMessage(message, group, body);
+		assertEquals(emptyList(), messageContext.getDependencies());
+	}
+
+	@Test
+	public void testAcceptsCreatorOnlyInviteMessageWithAutoDeleteTimer()
+			throws Exception {
+		PrivateGroup pg =
+				new PrivateGroup(group, groupName, creator, salt, true);
+		BdfList body = BdfList.of(INVITE.getValue(), creatorList, groupName,
+				salt, text, signature, MIN_AUTO_DELETE_TIMER_MS, true);
+		BdfDictionary metadata = new BdfDictionary(meta);
+		metadata.put(MSG_KEY_AUTO_DELETE_TIMER, MIN_AUTO_DELETE_TIMER_MS);
+		expectInviteMessage(false, true, pg);
+		expectEncodeMetadata(INVITE, MIN_AUTO_DELETE_TIMER_MS, metadata);
+		BdfMessageContext messageContext =
+				validator.validateMessage(message, group, body);
+		assertEquals(emptyList(), messageContext.getDependencies());
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsInviteMessageWithNullCreatorOnlyFlag()
+			throws Exception {
+		BdfList body = BdfList.of(INVITE.getValue(), creatorList, groupName,
+				salt, text, signature, null, null);
+		validator.validateMessage(message, group, body);
+	}
+
+	@Test(expected = FormatException.class)
+	public void testRejectsInviteMessageWithNonBooleanCreatorOnlyFlag()
+			throws Exception {
+		BdfList body = BdfList.of(INVITE.getValue(), creatorList, groupName,
+				salt, text, signature, null, "true");
+		validator.validateMessage(message, group, body);
+	}
+
 	private void testAcceptsInviteMessage(BdfList body, long autoDeleteTimer,
 			BdfDictionary metadata) throws Exception {
 		expectInviteMessage(false);
@@ -307,17 +360,22 @@ public class GroupInvitationValidatorTest extends ValidatorTestCase {
 	}
 
 	private void expectInviteMessage(boolean exception) throws Exception {
+		expectInviteMessage(exception, false, privateGroup);
+	}
+
+	private void expectInviteMessage(boolean exception, boolean creatorOnly,
+			PrivateGroup pg) throws Exception {
 		BdfList signed = BdfList.of(
 				message.getTimestamp(),
 				message.getGroupId(),
-				privateGroup.getId()
+				pg.getId()
 		);
 		context.checking(new Expectations() {{
 			oneOf(clientHelper).parseAndValidateAuthor(creatorList);
 			will(returnValue(creator));
 			oneOf(privateGroupFactory).createPrivateGroup(groupName, creator,
-					salt);
-			will(returnValue(privateGroup));
+					salt, creatorOnly);
+			will(returnValue(pg));
 			oneOf(clientHelper).verifySignature(signature, SIGNING_LABEL_INVITE,
 					signed, creator.getPublicKey());
 			if (exception) {
