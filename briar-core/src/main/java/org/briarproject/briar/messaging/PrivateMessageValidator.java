@@ -39,6 +39,7 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCR
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
+import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_FORWARDED_LINK_LENGTH;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
@@ -46,6 +47,7 @@ import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_CHANNEL_LINK;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_HAS_TEXT;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_LOCAL;
@@ -136,7 +138,9 @@ class PrivateMessageValidator implements MessageValidator {
 		// attachment headers, optional auto-delete timer.
 		// Client version 0.4: As 0.3, but an attachment header may also
 		// describe a chunked file (see below).
-		checkSize(body, 3, 4);
+		// Client version 0.5: As 0.4, plus the link of the channel a
+		// forwarded post came from.
+		checkSize(body, 3, 5);
 		String text = body.getOptionalString(1);
 		checkLength(text, 0, MAX_PRIVATE_MESSAGE_TEXT_LENGTH);
 		BdfList headers = body.getList(2);
@@ -161,8 +165,16 @@ class PrivateMessageValidator implements MessageValidator {
 			}
 		}
 		long timer = NO_AUTO_DELETE_TIMER;
-		if (body.size() == 4) {
+		if (body.size() >= 4) {
 			timer = validateAutoDeleteTimer(body.getOptionalLong(3));
+		}
+		// The link is only included when the message is a forward, so a
+		// null in that position is not a valid encoding: a sender with
+		// nothing to forward sends the shorter body instead
+		String channelLink = null;
+		if (body.size() == 5) {
+			channelLink = body.getString(4);
+			checkLength(channelLink, 1, MAX_FORWARDED_LINK_LENGTH);
 		}
 		// Return the metadata
 		BdfDictionary meta = new BdfDictionary();
@@ -172,6 +184,7 @@ class PrivateMessageValidator implements MessageValidator {
 		meta.put(MSG_KEY_MSG_TYPE, PRIVATE_MESSAGE);
 		meta.put(MSG_KEY_HAS_TEXT, text != null);
 		meta.put(MSG_KEY_ATTACHMENT_HEADERS, headers);
+		if (channelLink != null) meta.put(MSG_KEY_CHANNEL_LINK, channelLink);
 		if (timer != NO_AUTO_DELETE_TIMER) {
 			meta.put(MSG_KEY_AUTO_DELETE_TIMER, timer);
 		}

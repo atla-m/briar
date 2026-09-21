@@ -79,6 +79,7 @@ import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES;
+import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_ONLY;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
@@ -87,6 +88,7 @@ import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MISSING_ATTACHMENT_CLEANUP_DURATION_MS;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_CHANNEL_LINK;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_AUTO_DELETE_TIMER;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_HAS_TEXT;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_LOCAL;
@@ -233,9 +235,11 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		boolean read = meta.getBoolean(MSG_KEY_READ);
 		long timer = meta.getLong(MSG_KEY_AUTO_DELETE_TIMER,
 				NO_AUTO_DELETE_TIMER);
+		String link = meta.getOptionalString(MSG_KEY_CHANNEL_LINK);
 		PrivateMessageHeader header =
 				new PrivateMessageHeader(m.getId(), groupId, timestamp, local,
-						read, false, false, hasText, headers, files, timer);
+						read, false, false, hasText, headers, files, timer,
+						link);
 		ContactId contactId = getContactId(txn, groupId);
 		PrivateMessageReceivedEvent event =
 				new PrivateMessageReceivedEvent(header, contactId);
@@ -374,6 +378,10 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 				if (m.getFormat().supportsAutoDelete()
 						&& timer != NO_AUTO_DELETE_TIMER) {
 					meta.put(MSG_KEY_AUTO_DELETE_TIMER, timer);
+				}
+				String link = m.getChannelLink();
+				if (m.getFormat().supportsForwarding() && link != null) {
+					meta.put(MSG_KEY_CHANNEL_LINK, link);
 				}
 			}
 			// Mark attachments and files as shared and permanent now we're
@@ -565,10 +573,12 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 					boolean hasText = meta.getBoolean(MSG_KEY_HAS_TEXT);
 					long timer = meta.getLong(MSG_KEY_AUTO_DELETE_TIMER,
 							NO_AUTO_DELETE_TIMER);
+					String link =
+							meta.getOptionalString(MSG_KEY_CHANNEL_LINK);
 					headers.add(new PrivateMessageHeader(id, g, timestamp,
 							local, read, s.isSent(), s.isSeen(), hasText,
 							parseAttachmentHeaders(g, meta),
-							parseFileHeaders(g, meta), timer));
+							parseFileHeaders(g, meta), timer, link));
 				}
 			} catch (FormatException e) {
 				throw new DbException(e);
@@ -619,7 +629,8 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			ContactId c) throws DbException {
 		int minorVersion = clientVersioningManager
 				.getClientMinorVersion(txn, c, CLIENT_ID, 0);
-		if (minorVersion >= 4) return TEXT_IMAGES_AUTO_DELETE_FILES;
+		if (minorVersion >= 5) return TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+		else if (minorVersion >= 4) return TEXT_IMAGES_AUTO_DELETE_FILES;
 		else if (minorVersion >= 3) return TEXT_IMAGES_AUTO_DELETE;
 		else if (minorVersion >= 1) return TEXT_IMAGES;
 		else return TEXT_ONLY;

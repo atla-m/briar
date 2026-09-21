@@ -11,6 +11,11 @@ interface MessagingConstants {
 	String MSG_KEY_HAS_TEXT = "hasText";
 	String MSG_KEY_ATTACHMENT_HEADERS = "attachmentHeaders";
 	String MSG_KEY_AUTO_DELETE_TIMER = "autoDeleteTimer";
+	/**
+	 * The link of the channel a forwarded post came from, if the message
+	 * is a forward.
+	 */
+	String MSG_KEY_CHANNEL_LINK = "channelLink";
 
 	/**
 	 * How long to keep incoming attachments that aren't listed by any private
