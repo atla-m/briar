@@ -527,10 +527,10 @@
 	</plurals>
 
 	<!-- Blog Sharing -->
-	<string name="blogs_sharing_share">Share Blog</string>
+	<string name="blogs_sharing_share">Share</string>
 	<string name="blogs_sharing_error">There was an error sharing this blog.</string>
-	<string name="blogs_sharing_button">Share Blog</string>
-	<string name="blogs_sharing_snackbar">Blog shared with chosen contacts</string>
+	<string name="blogs_sharing_button">Share</string>
+	<string name="blogs_sharing_snackbar">Shared with chosen contacts</string>
 	<string name="blogs_sharing_response_accepted_sent">You accepted the invitation from %s.</string>
 	<string name="blogs_sharing_response_declined_sent">You declined the invitation from %s.</string>
 	<string name="blogs_sharing_response_declined_auto">The invitation from %s was automatically declined.</string>
@@ -540,10 +540,10 @@
 	<string name="blogs_sharing_invitation_sent">You have shared the blog \"%1$s\" with %2$s.</string>
 	<string name="channels_sharing_invitation_received">%1$s has shared the channel \"%2$s\" with you.</string>
 	<string name="channels_sharing_invitation_sent">You have shared the channel \"%1$s\" with %2$s.</string>
-	<string name="blogs_sharing_invitations_title">Blog Invitations</string>
-	<string name="blogs_sharing_joined_toast">Subscribed to blog</string>
+	<string name="blogs_sharing_invitations_title">Invitations</string>
+	<string name="blogs_sharing_joined_toast">Subscribed</string>
 	<string name="blogs_sharing_declined_toast">Invitation declined</string>
-	<string name="sharing_status_blog">Anyone who subscribes to a blog can share it with their contacts. You are sharing this blog with the following contacts. There may also be other subscribers who you can\'t see.</string>
+	<string name="sharing_status_blog">Anyone who subscribes can share this with their contacts. You are sharing it with the following contacts. There may also be other subscribers who you can\'t see.</string>
 
 	<!-- RSS Feeds -->
 	<string name="blogs_rss_feeds_import">Import RSS Feed</string>
