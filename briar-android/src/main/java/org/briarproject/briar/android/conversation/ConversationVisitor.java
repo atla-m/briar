@@ -81,15 +81,22 @@ class ConversationVisitor implements
 	@Override
 	public ConversationItem visitBlogInvitationRequest(
 			BlogInvitationRequest r) {
+		// A channel is a blog published under a key pair of its own, so it
+		// arrives as a blog invitation. Say which one it is: what the
+		// recipient gets, and what it tells the sharer's contacts, differ
+		boolean channel = r.getNameable().isChannel();
 		if (r.isLocal()) {
-			String text = ctx.getString(R.string.blogs_sharing_invitation_sent,
+			String text = ctx.getString(channel
+							? R.string.channels_sharing_invitation_sent
+							: R.string.blogs_sharing_invitation_sent,
 					r.getName(), contactName.getValue());
 			return new ConversationNoticeItem(
 					R.layout.list_item_conversation_notice_out, text,
 					contactName, r);
 		} else {
-			String text = ctx.getString(
-					R.string.blogs_sharing_invitation_received,
+			String text = ctx.getString(channel
+							? R.string.channels_sharing_invitation_received
+							: R.string.blogs_sharing_invitation_received,
 					contactName.getValue(), r.getName());
 			return new ConversationRequestItem(
 					R.layout.list_item_conversation_request, text, contactName,
