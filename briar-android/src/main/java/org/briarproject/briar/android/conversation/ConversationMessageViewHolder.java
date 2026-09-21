@@ -101,7 +101,8 @@ class ConversationMessageViewHolder extends ConversationItemViewHolder {
 		adapter.clear();
 		textView.setVisibility(item.getText() == null ? GONE : VISIBLE);
 		FileRowBinder.bind(fileList, item.getFileHeaders(),
-				item::getFileStatus, h -> listener.onFileClick(item, h));
+				item::getFileStatus, h -> listener.onFileClick(item, h),
+				!isIncoming());
 	}
 
 	private void bindImageItem(ConversationMessageItem item) {

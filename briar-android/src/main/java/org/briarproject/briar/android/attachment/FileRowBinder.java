@@ -58,16 +58,25 @@ public class FileRowBinder {
 	public static void bindAttached(LinearLayout fileList,
 			List<FileHeader> headers) {
 		bind(fileList, headers, header -> null, header -> {
-		}, true);
+		}, true, true);
 	}
 
+	/**
+	 * Fills a container with one row per file the message carries.
+	 *
+	 * @param ours whether we sent the message. A file we sent is never
+	 * arriving, so if its chunks are missing from our own database, which
+	 * happens to a file stored by an older version of the app, the row
+	 * shows the size alone rather than claiming to be receiving it.
+	 */
 	public static void bind(LinearLayout fileList, List<FileHeader> headers,
-			StatusLookup statuses, Listener listener) {
-		bind(fileList, headers, statuses, listener, false);
+			StatusLookup statuses, Listener listener, boolean ours) {
+		bind(fileList, headers, statuses, listener, false, ours);
 	}
 
 	private static void bind(LinearLayout fileList, List<FileHeader> headers,
-			StatusLookup statuses, Listener listener, boolean attached) {
+			StatusLookup statuses, Listener listener, boolean attached,
+			boolean ours) {
 		fileList.removeAllViews();
 		if (headers.isEmpty()) {
 			fileList.setVisibility(GONE);
@@ -87,7 +96,7 @@ public class FileRowBinder {
 			name.setText(h.getName());
 			String size = Formatter.formatShortFileSize(ctx, h.getSize());
 			FileStatus s = statuses.getFileStatus(h);
-			if (attached) {
+			if (attached || (ours && (s == null || !s.isComplete()))) {
 				status.setText(size);
 				progress.setVisibility(GONE);
 			} else if (s != null && s.isComplete()) {
