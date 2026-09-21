@@ -78,6 +78,7 @@ import org.briarproject.briar.api.android.AndroidNotificationManager;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.autodelete.event.ConversationMessagesDeletedEvent;
 import org.briarproject.briar.api.blog.BlogSharingManager;
+import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.client.ProtocolStateException;
 import org.briarproject.briar.api.client.SessionId;
 import org.briarproject.briar.api.conversation.ConversationManager;
@@ -197,6 +198,8 @@ public class ConversationActivity extends BriarActivity
 	volatile ForumSharingManager forumSharingManager;
 	@Inject
 	volatile BlogSharingManager blogSharingManager;
+	@Inject
+	volatile ChannelManager channelManager;
 	@Inject
 	volatile GroupInvitationManager groupInvitationManager;
 
@@ -498,6 +501,27 @@ public class ConversationActivity extends BriarActivity
 	public void onDestroyActionMode(ActionMode mode) {
 		tracker.clearSelection();
 		actionMode = null;
+	}
+
+	@Override
+	public void onForwardedChannelClick(String channelLink) {
+		// Subscribing tells nobody, not even the contact who forwarded the
+		// post, and gives us the channel's future posts rather than this
+		// one copy of one of them
+		runOnDbThread(() -> {
+			try {
+				channelManager.subscribeFromLink(channelLink);
+				runOnUiThreadUnlessDestroyed(() -> Toast.makeText(this,
+						R.string.blogs_forwarded_subscribed, LENGTH_SHORT)
+						.show());
+			} catch (FormatException e) {
+				runOnUiThreadUnlessDestroyed(() -> Toast.makeText(this,
+						R.string.blogs_forwarded_bad_link, LENGTH_SHORT)
+						.show());
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
 	}
 
 	@Override

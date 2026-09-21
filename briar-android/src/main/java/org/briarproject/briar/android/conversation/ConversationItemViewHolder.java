@@ -108,6 +108,17 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 			topNotice.setText(text);
 			topNotice.setOnClickListener(
 					v -> listener.onAutoDeleteTimerNoticeClicked());
+		} else if (item.getChannelLink() != null) {
+			// A forwarded channel post says so above the bubble, in the
+			// same place as a timer notice. A timer notice wins if both
+			// apply: it is about to delete the message, which matters more
+			String link = item.getChannelLink();
+			Context ctx = itemView.getContext();
+			topNotice.setVisibility(VISIBLE);
+			topNotice.setText(ctx.getString(R.string.blogs_forwarded_from,
+					ctx.getString(R.string.blogs_forwarded_subscribe)));
+			topNotice.setOnClickListener(
+					v -> listener.onForwardedChannelClick(link));
 		} else {
 			topNotice.setVisibility(GONE);
 		}

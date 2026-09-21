@@ -538,6 +538,14 @@
 	<string name="blogs_sharing_response_declined_received">%s declined the invitation.</string>
 	<string name="blogs_sharing_invitation_received">%1$s has shared the blog \"%2$s\" with you.</string>
 	<string name="blogs_sharing_invitation_sent">You have shared the blog \"%1$s\" with %2$s.</string>
+	<string name="blogs_forward_post">Forward this post to a contact</string>
+	<string name="blogs_forward_title">Forward Post</string>
+	<string name="blogs_forward_sent">Post forwarded</string>
+	<string name="blogs_forward_error">The post could not be forwarded</string>
+	<string name="blogs_forwarded_from">Forwarded from a channel. %s</string>
+	<string name="blogs_forwarded_subscribe">Tap to subscribe.</string>
+	<string name="blogs_forwarded_subscribed">Subscribed to the channel</string>
+	<string name="blogs_forwarded_bad_link">That channel link could not be read</string>
 	<string name="channels_sharing_invitation_received">%1$s has shared the channel \"%2$s\" with you.</string>
 	<string name="channels_sharing_invitation_sent">You have shared the channel \"%1$s\" with %2$s.</string>
 	<string name="blogs_sharing_invitations_title">Invitations</string>

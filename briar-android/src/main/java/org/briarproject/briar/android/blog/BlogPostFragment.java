@@ -50,7 +50,7 @@ public class BlogPostFragment extends BaseFragment
 	private static final String TAG = BlogPostFragment.class.getName();
 	private static final Logger LOG = getLogger(TAG);
 
-	static final String POST_ID = "briar.POST_ID";
+	public static final String POST_ID = "briar.POST_ID";
 
 	protected BlogViewModel viewModel;
 	private final Handler handler = new Handler(Looper.getMainLooper());

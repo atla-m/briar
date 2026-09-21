@@ -27,6 +27,9 @@ abstract class ConversationItem {
 	private final boolean isIncoming;
 	private final LiveData<String> contactName;
 	private boolean read, sent, seen, showTimerNotice;
+	// The channel a forwarded post came from, or null if this isn't one
+	@Nullable
+	private String channelLink;
 
 	ConversationItem(@LayoutRes int layoutRes, ConversationMessageHeader h,
 			LiveData<String> contactName) {
@@ -137,6 +140,15 @@ abstract class ConversationItem {
 			return true;
 		}
 		return false;
+	}
+
+	@Nullable
+	String getChannelLink() {
+		return channelLink;
+	}
+
+	void setChannelLink(@Nullable String channelLink) {
+		this.channelLink = channelLink;
 	}
 
 	boolean isTimerNoticeVisible() {
