@@ -20,6 +20,10 @@
 			android:id="@+id/nav_btn_blogs"
 			android:icon="@drawable/blogs"
 			android:title="@string/blogs_button" />
+		<item
+			android:id="@+id/nav_btn_channels"
+			android:icon="@drawable/ic_channels"
+			android:title="@string/channels" />
 	</group>
 
 	<group android:checkableBehavior="single">

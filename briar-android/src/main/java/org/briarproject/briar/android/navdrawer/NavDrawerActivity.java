@@ -30,6 +30,7 @@ import org.briarproject.briar.android.BriarApplication;
 import org.briarproject.briar.android.StartupFailureActivity;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.activity.BriarActivity;
+import org.briarproject.briar.android.blog.ChannelManageFragment;
 import org.briarproject.briar.android.blog.FeedFragment;
 import org.briarproject.briar.android.contact.ContactListFragment;
 import org.briarproject.briar.android.forum.ForumListFragment;
@@ -275,6 +276,8 @@ public class NavDrawerActivity extends BriarActivity implements
 			startFragment(ForumListFragment.newInstance());
 		} else if (fragmentId == R.id.nav_btn_blogs) {
 			startFragment(FeedFragment.newInstance());
+		} else if (fragmentId == R.id.nav_btn_channels) {
+			startFragment(ChannelManageFragment.newInstance());
 		} else if (fragmentId == R.id.nav_btn_settings) {
 			startActivity(new Intent(this, SettingsActivity.class));
 		} else if (fragmentId == R.id.nav_btn_signout) {
