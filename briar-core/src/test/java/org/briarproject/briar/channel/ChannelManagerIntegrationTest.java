@@ -279,6 +279,100 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testReadingAStreamHeaderStoresNothing() throws Exception {
+		// The app reads the header to say which channel a file holds
+		// before asking whether to subscribe, so reading it must not
+		// subscribe or store anything
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, out);
+
+		Blog read = channelManager1.readChannelHeader(
+				new ByteArrayInputStream(out.toByteArray()));
+		assertEquals(g, read.getId());
+		assertTrue(read.isChannel());
+		assertEquals("Announcements", read.getName());
+
+		assertTrue(channelManager1.getSubscriptions().isEmpty());
+	}
+
+	@Test
+	public void testAFileAloneIsEnoughToSubscribe() throws Exception {
+		// In a blackout the file may be the only thing that can be handed
+		// over, so once the user has agreed it must be enough on its own:
+		// its header carries the channel's title and public key
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		String text = getRandomString(42);
+		channelManager0.post(g, text);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, out);
+
+		assertEquals(1, channelManager1.importChannel(
+				new ByteArrayInputStream(out.toByteArray()), true));
+		awaitPendingMessageDelivery(1);
+
+		Collection<BlogPostHeader> headers = blogManager1.getPostHeaders(g);
+		assertEquals(1, headers.size());
+		BlogPostHeader h = headers.iterator().next();
+		assertEquals(channel.getLocalAuthor().getId(), h.getAuthor().getId());
+		assertEquals(text, blogManager1.getPostText(h.getId()));
+
+		// Subscribed, but not the owner
+		assertEquals(1, channelManager1.getSubscriptions().size());
+		assertNull(channelManager1.getChannel(g));
+	}
+
+	@Test
+	public void testSubscribingFromAFileStillRejectsAForgedPost()
+			throws Exception {
+		// Subscribing from a file must not weaken what the file's posts
+		// are checked against: a post not signed by the channel is still
+		// rejected, even though the same file supplied the channel
+		Channel channel = channelManager0.createChannel("Announcements");
+		Blog blog = channel.getBlog();
+		BlogPost forged = blogPostFactory.createBlogPost(blog.getId(),
+				c1.getClock().currentTimeMillis(), null, author1,
+				"I am not the owner");
+
+		assertEquals(1, channelManager1.importChannel(
+				new ByteArrayInputStream(buildStream(blog,
+						forged.getMessage().getTimestamp(),
+						forged.getMessage().getBody())), true));
+		awaitPendingMessageValidation(1);
+
+		assertEquals(1, channelManager1.getSubscriptions().size());
+		assertTrue(blogManager1.getPostHeaders(blog.getId()).isEmpty());
+	}
+
+	@Test
+	public void testASubscriberCanPassAChannelOnByFile() throws Exception {
+		// If the owner is out of reach, whoever holds the channel's posts
+		// must be able to hand them on. The file holds only the channel's
+		// own signed messages, so passing it through a subscriber changes
+		// nothing about what a reader can trust
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		String text = getRandomString(42);
+		channelManager0.post(g, text);
+		ByteArrayOutputStream fromOwner = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, fromOwner);
+		channelManager1.importChannel(
+				new ByteArrayInputStream(fromOwner.toByteArray()), true);
+		awaitPendingMessageDelivery(1);
+
+		ByteArrayOutputStream fromSubscriber = new ByteArrayOutputStream();
+		channelManager1.exportChannel(g, fromSubscriber);
+
+		// The subscriber's file is the owner's file: same signed messages
+		// in the same order, so a reader can't tell who made it
+		assertArrayEquals(fromOwner.toByteArray(),
+				fromSubscriber.toByteArray());
+	}
+
+	@Test
 	public void testSubscribingFromALinkGivesTheSameChannel()
 			throws Exception {
 		// A link carries a channel's title and public key, which is all

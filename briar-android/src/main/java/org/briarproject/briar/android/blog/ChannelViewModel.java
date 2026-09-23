@@ -73,6 +73,8 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 			new MutableLiveEvent<>();
 	private final MutableLiveEvent<List<String>> mirrors =
 			new MutableLiveEvent<>();
+	private final MutableLiveEvent<PendingImport> confirmImport =
+			new MutableLiveEvent<>();
 
 	@Inject
 	ChannelViewModel(Application application,
@@ -199,18 +201,87 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 		});
 	}
 
+	/**
+	 * Reads a channel file the user picked. If we already hold its channel
+	 * the posts are imported straight away; if not, the user is asked
+	 * first, since a file must not add channels nobody asked for.
+	 */
 	void importFile(Uri uri) {
 		ioExecutor.execute(() -> {
-			try (InputStream in = getApplication().getContentResolver()
-					.openInputStream(uri)) {
-				if (in == null) throw new IOException("Cannot open " + uri);
-				channelManager.importChannel(in);
-				message.postEvent(R.string.channels_imported);
-			} catch (IOException | DbException e) {
+			Blog blog;
+			try (InputStream in = open(uri)) {
+				blog = channelManager.readChannelHeader(in);
+			} catch (IOException e) {
+				logException(LOG, WARNING, e);
+				message.postEvent(R.string.channels_import_error);
+				return;
+			}
+			try {
+				if (holds(blog.getId())) {
+					importFile(uri, false);
+				} else {
+					confirmImport.postEvent(new PendingImport(uri,
+							blog.getName()));
+				}
+			} catch (DbException e) {
 				logException(LOG, WARNING, e);
 				message.postEvent(R.string.channels_import_error);
 			}
 		});
+	}
+
+	/**
+	 * Subscribes to the channel a file holds and reads its posts, once the
+	 * user has seen which channel it is and agreed.
+	 */
+	void confirmImport(PendingImport pending) {
+		ioExecutor.execute(() -> importFile(pending.uri, true));
+	}
+
+	// IoExecutor
+	private void importFile(Uri uri, boolean subscribe) {
+		try (InputStream in = open(uri)) {
+			channelManager.importChannel(in, subscribe);
+			message.postEvent(R.string.channels_imported);
+		} catch (IOException | DbException e) {
+			logException(LOG, WARNING, e);
+			message.postEvent(R.string.channels_import_error);
+		}
+	}
+
+	private InputStream open(Uri uri) throws IOException {
+		InputStream in =
+				getApplication().getContentResolver().openInputStream(uri);
+		if (in == null) throw new IOException("Cannot open " + uri);
+		return in;
+	}
+
+	private boolean holds(GroupId g) throws DbException {
+		if (channelManager.getChannel(g) != null) return true;
+		for (Blog b : channelManager.getSubscriptions()) {
+			if (b.getId().equals(g)) return true;
+		}
+		return false;
+	}
+
+	LiveEvent<PendingImport> getConfirmImport() {
+		return confirmImport;
+	}
+
+	/**
+	 * A channel file whose channel we don't hold yet, waiting for the user
+	 * to agree to subscribe. The name is what the file claims; the
+	 * channel's identity is its public key.
+	 */
+	static class PendingImport {
+
+		final Uri uri;
+		final String name;
+
+		private PendingImport(Uri uri, String name) {
+			this.uri = uri;
+			this.name = name;
+		}
 	}
 
 	LiveEvent<List<String>> getMirrors() {

@@ -178,4 +178,38 @@ public interface ChannelManager {
 	 */
 	int importChannel(InputStream in)
 			throws DbException, IOException, FormatException;
+
+	/**
+	 * Reads the header of a channel stream and returns the channel it
+	 * carries, without storing anything. The header holds the channel's
+	 * title and public key, the same identity a channel link carries, so
+	 * a file on its own is enough to subscribe from; this lets the app say
+	 * which channel a file holds before asking whether to subscribe.
+	 *
+	 * @throws FormatException If the stream doesn't start with a valid
+	 * channel header
+	 */
+	Blog readChannelHeader(InputStream in)
+			throws IOException, FormatException;
+
+	/**
+	 * Reads a channel stream as {@link #importChannel(InputStream)} does,
+	 * but if {@code subscribe} is true and we don't hold the channel the
+	 * stream carries, subscribes to it first.
+	 * <p>
+	 * A file must not add channels nobody asked for, so the caller passes
+	 * true only after the user has seen which channel the file holds, from
+	 * {@link #readChannelHeader(InputStream)}, and agreed. Like subscribing
+	 * from a link, this tells no one. The stream carries no mirrors, so a
+	 * channel subscribed to this way can be updated by file or by
+	 * contacts, and from mirrors only once a link arrives.
+	 *
+	 * @return the number of messages read from the stream, including any
+	 * we already had
+	 * @throws NoSuchChannelException If {@code subscribe} is false and we
+	 * are not subscribed to the channel the stream belongs to
+	 * @throws FormatException If the stream is malformed
+	 */
+	int importChannel(InputStream in, boolean subscribe)
+			throws DbException, IOException, FormatException;
 }
