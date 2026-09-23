@@ -35,7 +35,7 @@ public interface MessagingManager extends ConversationClient {
 	/**
 	 * The current minor version of the messaging client.
 	 */
-	int MINOR_VERSION = 5;
+	int MINOR_VERSION = 6;
 
 	/**
 	 * Stores a local private message.
@@ -84,6 +84,14 @@ public interface MessagingManager extends ConversationClient {
 	 * Returns how much of the given file has been received.
 	 */
 	FileStatus getFileStatus(FileHeader header) throws DbException;
+
+	/**
+	 * Asks for the chunks of a file the contact held back because it is
+	 * larger than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE}.
+	 * The contact's device shares them when the request arrives.
+	 */
+	void requestFile(FileHeader header) throws DbException;
 
 	/**
 	 * Returns how much of the given file has been received.

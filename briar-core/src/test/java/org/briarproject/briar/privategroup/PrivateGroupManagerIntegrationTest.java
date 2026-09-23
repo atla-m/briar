@@ -53,6 +53,7 @@ import static org.briarproject.briar.api.privategroup.Visibility.VISIBLE;
 import static org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory.SIGNING_LABEL_INVITE;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -653,6 +654,39 @@ public class PrivateGroupManagerIntegrationTest
 		// The receiver reads it through the attachment reader too
 		Attachment a1 = c1.getAttachmentReader().getAttachment(attachment);
 		assertArrayEquals(imageBytes, readFully(a1.getStream()));
+	}
+
+	@Test
+	public void testHoldsBackALargeFileUntilAMemberAsks() throws Exception {
+		addGroup();
+
+		// A file too large to send without being asked for
+		byte[] fileBytes = getRandomBytes((int) MAX_PUSHED_FILE_SIZE + 1);
+		int chunks = (int) ((fileBytes.length + FILE_CHUNK_PAYLOAD_LENGTH - 1)
+				/ FILE_CHUNK_PAYLOAD_LENGTH);
+		long time = c0.getClock().currentTimeMillis();
+		FileHeader file = groupManager0.addLocalFile(groupId0, time,
+				"clip.mp4", "video/mp4",
+				() -> new ByteArrayInputStream(fileBytes));
+		MessageId previousMsgId = groupManager0.getPreviousMsgId(groupId0);
+		GroupMessage msg = groupMessageFactory.createGroupMessage(groupId0,
+				time + 100, null, author0, "A long one", emptyList(),
+				singletonList(file), previousMsgId);
+		groupManager0.addLocalMessage(msg);
+
+		// The post and the manifest arrive, and no chunks
+		sync0To1(2, true);
+		FileStatus before = groupManager1.getFileStatus(file);
+		assertTrue(before.isAwaitingRequest());
+
+		// The member asks, which releases the chunks
+		groupManager1.requestFile(file);
+		assertTrue(groupManager1.getFileStatus(file).isRequested());
+		sync1To0(1, true);
+		sync0To1(chunks, true);
+
+		assertTrue(groupManager1.getFileStatus(file).isComplete());
+		assertArrayEquals(fileBytes, readFully(groupManager1.getFile(file)));
 	}
 
 	@Test(expected = FileTooBigException.class)

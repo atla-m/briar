@@ -45,6 +45,7 @@ import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_REQUEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_CHANNEL_LINK;
@@ -105,6 +106,9 @@ class PrivateMessageValidator implements MessageValidator {
 					context = validateFileManifest(m, list);
 				} else if (messageType == FILE_CHUNK) {
 					context = validateFileChunk(m, list, bytesRead);
+				} else if (messageType == FILE_REQUEST) {
+					if (!reader.eof()) throw new FormatException();
+					context = validateFileRequest(m, list);
 				} else {
 					throw new InvalidMessageException();
 				}
@@ -201,6 +205,18 @@ class PrivateMessageValidator implements MessageValidator {
 		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
 		meta.put(MSG_KEY_LOCAL, false);
 		meta.put(MSG_KEY_MSG_TYPE, FILE_MANIFEST);
+		return new BdfMessageContext(meta);
+	}
+
+	private BdfMessageContext validateFileRequest(Message m, BdfList body)
+			throws FormatException {
+		// The manifest ID is checked by the shared file store. A request
+		// has no dependencies: it is wanted by whoever holds the file,
+		// whether or not the manifest is here
+		BdfDictionary meta = ChunkedFileStore.validateRequest(body);
+		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
+		meta.put(MSG_KEY_LOCAL, false);
+		meta.put(MSG_KEY_MSG_TYPE, FILE_REQUEST);
 		return new BdfMessageContext(meta);
 	}
 

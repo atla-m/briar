@@ -38,7 +38,18 @@ public enum PrivateMessageFormat {
 	 * rather than take the sender's word for where it came from. Support
 	 * for this format was added in client version 0.5.
 	 */
-	TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+	TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD,
+
+	/**
+	 * Sixth version of the private message format, which additionally
+	 * supports files up to
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_FILE_SIZE}.
+	 * A file larger than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE}
+	 * is held back until the recipient asks for it. Support for this format
+	 * was added in client version 0.6.
+	 */
+	TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
 
 	/**
 	 * Returns true if this format supports image attachments.
@@ -60,13 +71,24 @@ public enum PrivateMessageFormat {
 	 */
 	public boolean supportsFiles() {
 		return this == TEXT_IMAGES_AUTO_DELETE_FILES ||
-				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD ||
+				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
 	}
 
 	/**
 	 * Returns true if this format can carry a forwarded channel post.
 	 */
 	public boolean supportsForwarding() {
-		return this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD;
+		return this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD ||
+				this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
+	}
+
+	/**
+	 * Returns true if this format supports files larger than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE},
+	 * which an older client would reject.
+	 */
+	public boolean supportsLargeFiles() {
+		return this == TEXT_IMAGES_AUTO_DELETE_FILES_FORWARD_LARGE;
 	}
 }

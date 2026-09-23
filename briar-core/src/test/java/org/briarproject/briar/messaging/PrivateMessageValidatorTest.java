@@ -50,6 +50,7 @@ import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ
 import static org.briarproject.briar.messaging.MessageTypes.ATTACHMENT;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_CHUNK;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_REQUEST;
 import static org.briarproject.briar.messaging.MessageTypes.PRIVATE_MESSAGE;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_ATTACHMENT_HEADERS;
 import static org.briarproject.briar.messaging.MessagingConstants.MSG_KEY_CHANNEL_LINK;
@@ -443,7 +444,7 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 	@Test(expected = InvalidMessageException.class)
 	public void testRejectsUnknownMessageType() throws Exception {
 		expectCheckTimestamp(now);
-		expectParseList(BdfList.of(FILE_CHUNK + 1, contentType));
+		expectParseList(BdfList.of(FILE_REQUEST + 1, contentType));
 
 		validator.validateMessage(message, group);
 	}
@@ -556,6 +557,46 @@ public class PrivateMessageValidatorTest extends BrambleMockTestCase {
 
 		MessageContext result = validator.validateMessage(message, group);
 		assertEquals(0, result.getDependencies().size());
+	}
+
+	@Test
+	public void testAcceptsFileRequest() throws Exception {
+		// A request is unsigned, names only the manifest and depends on
+		// nothing, so whoever holds the file can act on it
+		byte[] requested = getRandomId();
+		BdfDictionary meta = BdfDictionary.of(
+				new BdfEntry(KEY_FILE_MANIFEST_ID, requested),
+				new BdfEntry(MSG_KEY_TIMESTAMP, message.getTimestamp()),
+				new BdfEntry(MSG_KEY_LOCAL, false),
+				new BdfEntry(MSG_KEY_MSG_TYPE, FILE_REQUEST)
+		);
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_REQUEST, requested));
+		expectReadEof(true);
+		expectEncodeMetadata(meta);
+
+		MessageContext result = validator.validateMessage(message, group);
+		assertEquals(0, result.getDependencies().size());
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileRequestWithShortManifestId() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_REQUEST,
+				getRandomBytes(UniqueId.LENGTH - 1)));
+		expectReadEof(true);
+
+		validator.validateMessage(message, group);
+	}
+
+	@Test(expected = InvalidMessageException.class)
+	public void testRejectsFileRequestWithExtraElement() throws Exception {
+		expectCheckTimestamp(now);
+		expectParseList(BdfList.of(FILE_REQUEST,
+				new MessageId(getRandomId()), 1));
+		expectReadEof(true);
+
+		validator.validateMessage(message, group);
 	}
 
 	@Test(expected = InvalidMessageException.class)

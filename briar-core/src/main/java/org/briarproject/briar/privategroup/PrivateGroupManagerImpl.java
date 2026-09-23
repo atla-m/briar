@@ -417,6 +417,11 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 	}
 
 	@Override
+	public void requestFile(FileHeader header) throws DbException {
+		db.transaction(false, txn -> fileStore.requestFile(txn, header));
+	}
+
+	@Override
 	public FileStatus getFileStatus(Transaction txn, FileHeader header)
 			throws DbException {
 		return fileStore.getFileStatus(txn, header);
@@ -789,6 +794,10 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				return ACCEPT_SHARE;
 			case FILE_MANIFEST:
 				fileStore.incomingManifest(txn, m, meta);
+				return ACCEPT_SHARE;
+			case FILE_REQUEST:
+				// Shared onwards, so it reaches whoever holds the file
+				fileStore.incomingRequest(txn, m, meta);
 				return ACCEPT_SHARE;
 			default:
 				// the validator should only let valid types pass

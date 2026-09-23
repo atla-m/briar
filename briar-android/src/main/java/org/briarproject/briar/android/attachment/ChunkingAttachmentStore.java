@@ -20,7 +20,7 @@ import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.bramble.util.LogUtils.logException;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CHUNKED_IMAGE_SIZE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_IMAGE_SIZE;
 
 /**
@@ -106,7 +106,8 @@ abstract class ChunkingAttachmentStore implements AttachmentStore {
 		// Large images are chunked, so only very large ones need
 		// compressing; unless the other side can't receive chunks
 		try {
-			return supportsFiles(groupId) ? MAX_FILE_SIZE : MAX_IMAGE_SIZE;
+			return supportsFiles(groupId) ? MAX_CHUNKED_IMAGE_SIZE
+					: MAX_IMAGE_SIZE;
 		} catch (DbException e) {
 			// Fall back to the single-message limit, so the image is
 			// compressed more than it needs to be but the send succeeds

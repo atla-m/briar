@@ -118,6 +118,13 @@ public interface BlogManager {
 	FileStatus getFileStatus(FileHeader header) throws DbException;
 
 	/**
+	 * Asks for the chunks of a file its author held back because it is
+	 * larger than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_PUSHED_FILE_SIZE}.
+	 */
+	void requestFile(FileHeader header) throws DbException;
+
+	/**
 	 * Returns a stream for reading a file that has fully arrived.
 	 */
 	InputStream getFile(FileHeader header) throws DbException;
