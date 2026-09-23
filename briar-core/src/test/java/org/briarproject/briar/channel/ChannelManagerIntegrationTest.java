@@ -11,6 +11,7 @@ import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
 import org.briarproject.briar.api.blog.BlogPost;
@@ -24,6 +25,7 @@ import org.briarproject.briar.test.DaggerBriarIntegrationTestComponent;
 import org.junit.Before;
 import org.junit.Test;
 
+import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -32,6 +34,9 @@ import okio.Buffer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.Collection;
+import java.util.Locale;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.List;
 
 import static java.util.Arrays.asList;
@@ -56,6 +61,7 @@ import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MES
 import static org.briarproject.briar.api.channel.ChannelConstants.MIN_HONEST_MESSAGE_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
+import static org.briarproject.bramble.util.StringUtils.toHexString;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -69,6 +75,7 @@ public class ChannelManagerIntegrationTest
 
 	private ChannelManager channelManager0, channelManager1;
 	private BlogManager blogManager0, blogManager1;
+	private long lastPostTime = 0;
 	private BlogSharingManager blogSharingManager0;
 
 	@Before
@@ -731,6 +738,128 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testTheChannelFileLeavesOutChunks() throws Exception {
+		// The file a mirror serves carries the posts and the manifests of
+		// their files, so a video can't fill the limit on what a reader
+		// takes from mirrors over the channel's life
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader file = postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH * 2);
+
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		assertEquals(2, channelManager1.importChannel(
+				new ByteArrayInputStream(exportChannel(g))));
+		awaitPendingMessageDelivery(2);
+
+		FileStatus status = blogManager1.getFileStatus(file);
+		assertTrue(status.isManifestReceived());
+		assertEquals(0, status.getChunksReceived());
+	}
+
+	@Test
+	public void testAMirrorServesEachFileSeparately() throws Exception {
+		// A small file is fetched from its own file beside the channel's
+		// as soon as its manifest arrives, without being asked for
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH * 2 + 5);
+		FileHeader file = postFile(channel, fileBytes);
+
+		MockWebServer server = serveChannel(g, file);
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitComplete(file);
+
+			ByteArrayOutputStream read = new ByteArrayOutputStream();
+			copyAndClose(blogManager1.getFile(file), read);
+			assertArrayEquals(fileBytes, read.toByteArray());
+			assertEquals("/files/" + toHexString(
+					file.getManifestId().getBytes()).toLowerCase(Locale.US)
+					+ ".briar", findFileRequest(server));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testFetchesALargeFileFromAMirrorOnlyWhenAsked()
+			throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader file =
+				postFile(channel, (int) MAX_PUSHED_FILE_SIZE + 1);
+
+		MockWebServer server = serveChannel(g, file);
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(2);
+			assertTrue(blogManager1.getFileStatus(file).isAwaitingRequest());
+
+			// Asking for it fetches it from the mirror, as well as asking
+			// any contacts who share the channel
+			blogManager1.requestFile(file);
+			awaitComplete(file);
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testRefusesAnotherFilesChunks() throws Exception {
+		// A mirror serving the chunks of a different file at a file's
+		// address gets nothing stored: every chunk must name the manifest
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader wanted = postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH);
+		FileHeader other = postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH);
+		ByteArrayOutputStream otherFile = new ByteArrayOutputStream();
+		channelManager0.exportChannelFile(g, other.getManifestId(),
+				otherFile);
+		byte[] main = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				if ("/c.briar".equals(request.getPath())) {
+					return new MockResponse().setBody(new Buffer().write(main));
+				}
+				// Whatever file is asked for, the other file's chunks
+				return new MockResponse().setBody(
+						new Buffer().write(otherFile.toByteArray()));
+			}
+		});
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			channelManager1.fetchChannel(g);
+			awaitPendingMessageDelivery(4);
+			assertEquals(UNREACHABLE, channelManager1.fetchChannelFile(g,
+					wanted.getManifestId()).getOutcome());
+			assertEquals(0,
+					blogManager1.getFileStatus(wanted).getChunksReceived());
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testAHandedOverFileCanCarryItsFiles() throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader file = postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH * 3);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, out, true);
+
+		assertEquals(5, channelManager1.importChannel(
+				new ByteArrayInputStream(out.toByteArray()), true));
+		awaitPendingMessageDelivery(5);
+		assertTrue(blogManager1.getFileStatus(file).isComplete());
+	}
+
+	@Test
 	public void testChannelCarriesAFileToASubscriber() throws Exception {
 		// The payoff of building chunking as a shared store: a channel
 		// gets files with the manifest-bound chunks already in place
@@ -751,9 +880,9 @@ public class ChannelManagerIntegrationTest
 		assertTrue(blogManager0.getFileStatus(file).isComplete());
 
 		// The subscriber has only the link, and gets the post, the
-		// manifest and both chunks from the published file
+		// manifest and both chunks from a file handed over with its files
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		channelManager0.exportChannel(g, out);
+		channelManager0.exportChannel(g, out, true);
 		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
 		assertEquals(4, channelManager1.importChannel(
 				new ByteArrayInputStream(out.toByteArray())));
@@ -1352,6 +1481,76 @@ public class ChannelManagerIntegrationTest
 					conditional.getHeader("If-Modified-Since"));
 		} finally {
 			server.shutdown();
+		}
+	}
+
+	private FileHeader postFile(Channel channel, int size) throws Exception {
+		return postFile(channel, getRandomBytes(size));
+	}
+
+	private FileHeader postFile(Channel channel, byte[] bytes)
+			throws Exception {
+		GroupId g = channel.getBlogId();
+		long now = c0.getClock().currentTimeMillis();
+		long time = Math.max(now, lastPostTime + 10);
+		lastPostTime = time;
+		FileHeader file = blogManager0.addLocalFile(g, time, "clip.bin",
+				"application/octet-stream",
+				() -> new ByteArrayInputStream(bytes));
+		BlogPost post = blogPostFactory.createBlogPost(g, time + 2, null,
+				channel.getLocalAuthor(), "A file", emptyList(),
+				singletonList(file));
+		blogManager0.addLocalPost(post);
+		return file;
+	}
+
+	/**
+	 * Serves a channel's file at /c.briar and each of the given files at
+	 * its own path beside it, as a mirror would after the owner publishes.
+	 */
+	private MockWebServer serveChannel(GroupId g, FileHeader... files)
+			throws Exception {
+		byte[] main = exportChannel(g);
+		Map<String, byte[]> served = new HashMap<>();
+		for (FileHeader f : files) {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			channelManager0.exportChannelFile(g, f.getManifestId(), out);
+			served.put("/" + channelManager0.getFilePath(f.getManifestId()),
+					out.toByteArray());
+		}
+		MockWebServer server = new MockWebServer();
+		server.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				if ("/c.briar".equals(request.getPath())) {
+					return new MockResponse().setBody(new Buffer().write(main));
+				}
+				byte[] file = served.get(request.getPath());
+				if (file == null) return new MockResponse().setResponseCode(404);
+				return new MockResponse().setBody(new Buffer().write(file));
+			}
+		});
+		server.start();
+		return server;
+	}
+
+	private String findFileRequest(MockWebServer server) throws Exception {
+		for (int i = 0; i < server.getRequestCount(); i++) {
+			String path = server.takeRequest().getPath();
+			if (path != null && path.startsWith("/files/")) return path;
+		}
+		throw new AssertionError("No file was fetched");
+	}
+
+	/**
+	 * Waits for a file fetched in the background to be complete.
+	 */
+	private void awaitComplete(FileHeader file) throws Exception {
+		long deadline = System.currentTimeMillis() + 20_000;
+		while (!blogManager1.getFileStatus(file).isComplete()) {
+			if (System.currentTimeMillis() > deadline)
+				throw new AssertionError("File did not arrive");
+			Thread.sleep(100);
 		}
 	}
 

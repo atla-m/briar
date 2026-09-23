@@ -1,8 +1,11 @@
 package org.briarproject.briar.android.blog;
 
 import android.app.Application;
-
+import android.content.ContentResolver;
+import android.database.Cursor;
 import android.net.Uri;
+import android.provider.DocumentsContract;
+import android.provider.DocumentsContract.Document;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.db.DatabaseExecutor;
@@ -17,6 +20,7 @@ import org.briarproject.bramble.api.sync.event.GroupAddedEvent;
 import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.sync.GroupId;
+import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.system.AndroidExecutor;
 import org.briarproject.briar.android.viewmodel.DbViewModel;
 import org.briarproject.briar.android.viewmodel.LiveEvent;
@@ -33,16 +37,20 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
 
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
 import static java.util.logging.Level.WARNING;
+import static org.briarproject.briar.api.channel.ChannelConstants.FILES_DIRECTORY;
+import static org.briarproject.briar.api.channel.ChannelConstants.FILE_EXTENSION;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.LogUtils.logDuration;
@@ -50,6 +58,8 @@ import static org.briarproject.bramble.util.LogUtils.now;
 
 @NotNullByDefault
 class ChannelViewModel extends DbViewModel implements EventListener {
+
+	private static final String OCTET_STREAM = "application/octet-stream";
 
 	private static final Logger LOG =
 			getLogger(ChannelViewModel.class.getName());
@@ -187,18 +197,110 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 		return subscribed;
 	}
 
-	void publish(GroupId g, Uri uri) {
+	/**
+	 * Saves a channel to one file, for handing over. With files, the file
+	 * carries every image and file we hold as well, so the receiver gets
+	 * everything at once.
+	 */
+	void publish(GroupId g, Uri uri, boolean withFiles) {
 		ioExecutor.execute(() -> {
 			try (OutputStream out = getApplication().getContentResolver()
 					.openOutputStream(uri)) {
 				if (out == null) throw new IOException("Cannot open " + uri);
-				channelManager.exportChannel(g, out);
+				channelManager.exportChannel(g, out, withFiles);
 				message.postEvent(R.string.channels_published);
 			} catch (IOException | DbException e) {
 				logException(LOG, WARNING, e);
 				message.postEvent(R.string.channels_publish_error);
 			}
 		});
+	}
+
+	/**
+	 * Writes what a mirror serves into a folder the user picked: the
+	 * channel's file, named after the channel, and a "files" folder with
+	 * one file for each image or file we hold in full. The user uploads the
+	 * folder's contents to their mirrors. Publishing again into the same
+	 * folder replaces the channel's file and adds only the new files, whose
+	 * names follow from their content.
+	 */
+	void publishToFolder(GroupId g, Uri tree, String title) {
+		ioExecutor.execute(() -> {
+			try {
+				ContentResolver resolver =
+						getApplication().getContentResolver();
+				String rootId = DocumentsContract.getTreeDocumentId(tree);
+				Uri main = findOrCreate(resolver, tree, rootId,
+						title + FILE_EXTENSION, OCTET_STREAM);
+				try (OutputStream out =
+						resolver.openOutputStream(main, "wt")) {
+					if (out == null) throw new IOException("Cannot open");
+					channelManager.exportChannel(g, out);
+				}
+				Collection<MessageId> files =
+						channelManager.getCompleteFiles(g);
+				if (!files.isEmpty()) {
+					String dirName = FILES_DIRECTORY.substring(0,
+							FILES_DIRECTORY.length() - 1);
+					Uri dir = findOrCreate(resolver, tree, rootId, dirName,
+							Document.MIME_TYPE_DIR);
+					String dirId = DocumentsContract.getDocumentId(dir);
+					for (MessageId id : files) {
+						String name = channelManager.getFilePath(id)
+								.substring(FILES_DIRECTORY.length());
+						// Named after its content, so one already there
+						// is this file
+						if (findChild(resolver, tree, dirId, name) != null)
+							continue;
+						Uri f = DocumentsContract.createDocument(resolver,
+								dir, OCTET_STREAM, name);
+						if (f == null) throw new IOException("Cannot create");
+						try (OutputStream out = resolver.openOutputStream(f)) {
+							if (out == null)
+								throw new IOException("Cannot open");
+							channelManager.exportChannelFile(g, id, out);
+						}
+					}
+				}
+				message.postEvent(R.string.channels_published_folder);
+			} catch (IOException | DbException | RuntimeException e) {
+				logException(LOG, WARNING, e);
+				message.postEvent(R.string.channels_publish_error);
+			}
+		});
+	}
+
+	private static Uri findOrCreate(ContentResolver resolver, Uri tree,
+			String parentId, String name, String mimeType)
+			throws IOException {
+		Uri existing = findChild(resolver, tree, parentId, name);
+		if (existing != null) return existing;
+		Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree,
+				parentId);
+		Uri created = DocumentsContract.createDocument(resolver, parent,
+				mimeType, name);
+		if (created == null) throw new IOException("Cannot create " + name);
+		return created;
+	}
+
+	@Nullable
+	private static Uri findChild(ContentResolver resolver, Uri tree,
+			String parentId, String name) {
+		Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree,
+				parentId);
+		String[] columns = {Document.COLUMN_DOCUMENT_ID,
+				Document.COLUMN_DISPLAY_NAME};
+		try (Cursor c = resolver.query(children, columns, null, null,
+				null)) {
+			if (c == null) return null;
+			while (c.moveToNext()) {
+				if (name.equals(c.getString(1))) {
+					return DocumentsContract.buildDocumentUriUsingTree(tree,
+							c.getString(0));
+				}
+			}
+		}
+		return null;
 	}
 
 	/**

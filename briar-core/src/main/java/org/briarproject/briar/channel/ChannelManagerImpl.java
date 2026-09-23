@@ -1,12 +1,13 @@
 package org.briarproject.briar.channel;
 
 import org.briarproject.bramble.api.FormatException;
+import org.briarproject.bramble.api.WeakSingletonProvider;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.client.ContactGroupFactory;
 import org.briarproject.bramble.api.crypto.PrivateKey;
 import org.briarproject.bramble.api.crypto.PublicKey;
-import org.briarproject.bramble.api.crypto.SignaturePublicKey;
 import org.briarproject.bramble.api.crypto.SignaturePrivateKey;
+import org.briarproject.bramble.api.crypto.SignaturePublicKey;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
@@ -16,98 +17,116 @@ import org.briarproject.bramble.api.data.BdfWriter;
 import org.briarproject.bramble.api.data.BdfWriterFactory;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
-import org.briarproject.briar.api.attachment.AttachmentHeader;
-import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.identity.AuthorFactory;
 import org.briarproject.bramble.api.identity.LocalAuthor;
+import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager.OpenDatabaseHook;
+import org.briarproject.bramble.api.plugin.TorConstants;
+import org.briarproject.bramble.api.plugin.TransportId;
+import org.briarproject.bramble.api.plugin.event.TransportActiveEvent;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageFactory;
 import org.briarproject.bramble.api.sync.MessageId;
-import org.briarproject.bramble.api.lifecycle.IoExecutor;
-import org.briarproject.bramble.api.plugin.TorConstants;
-import org.briarproject.bramble.api.plugin.TransportId;
-import org.briarproject.bramble.api.plugin.event.TransportActiveEvent;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.bramble.api.system.TaskScheduler;
-import org.briarproject.bramble.api.WeakSingletonProvider;
 import org.briarproject.bramble.util.Base32;
+import org.briarproject.briar.api.attachment.AttachmentHeader;
+import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.attachment.event.FileProgressEvent;
+import org.briarproject.briar.api.attachment.event.FileRequestedEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
-import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.channel.FetchResult;
 import org.briarproject.briar.api.channel.NoSuchChannelException;
+import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.GeneralSecurityException;
-import java.util.Date;
-import java.util.Locale;
-import java.util.regex.Matcher;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map.Entry;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
-import java.util.List;
+import java.util.regex.Matcher;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
-import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
-import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
-import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
-import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+
+import static java.util.Collections.emptyList;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
-import static java.util.Collections.emptyList;
-import static java.util.Objects.requireNonNull;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.data.BdfDictionary.NULL_VALUE;
 import static org.briarproject.bramble.api.identity.AuthorConstants.MAX_AUTHOR_NAME_LENGTH;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.util.LogUtils.logException;
+import static org.briarproject.bramble.util.StringUtils.toHexString;
+import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
+import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
+import static org.briarproject.briar.api.blog.BlogConstants.KEY_TYPE;
+import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
+import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
+import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_INITIAL;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_INTERVAL;
+import static org.briarproject.briar.api.channel.ChannelConstants.FILES_DIRECTORY;
+import static org.briarproject.briar.api.channel.ChannelConstants.FILE_EXTENSION;
+import static org.briarproject.briar.api.channel.ChannelConstants.FILE_STREAM_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_PREFIX;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_REGEX;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_IMPORT_BYTES;
+import static org.briarproject.briar.api.channel.ChannelConstants.MAX_IMPORT_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_LINK_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRRORS;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_MIRROR_LENGTH;
-import static org.briarproject.briar.api.channel.ChannelConstants.MAX_IMPORT_BYTES;
-import static org.briarproject.briar.api.channel.ChannelConstants.MAX_IMPORT_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
 import static org.briarproject.briar.api.channel.ChannelConstants.STREAM_FORMAT_VERSION;
-import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_ETAG;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_MESSAGES;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
@@ -148,6 +167,13 @@ class ChannelManagerImpl
 	private final WeakSingletonProvider<OkHttpClient> httpClientProvider;
 	private final AtomicBoolean fetcherStarted = new AtomicBoolean(false);
 
+	/**
+	 * The most framing, in bytes, an attachment file may add to each chunk
+	 * it carries: the entry's list and timestamp, and the chunk's
+	 * descriptor, which leaves this much room in a message body.
+	 */
+	private static final int MAX_FILE_ENTRY_OVERHEAD = 128;
+
 	@Inject
 	ChannelManagerImpl(DatabaseComponent db, ClientHelper clientHelper,
 			ContactGroupFactory contactGroupFactory,
@@ -181,6 +207,31 @@ class ChannelManagerImpl
 		if (e instanceof TransportActiveEvent) {
 			TransportId t = ((TransportActiveEvent) e).getTransportId();
 			if (t.equals(TorConstants.ID)) startFetcher();
+		} else if (e instanceof FileProgressEvent) {
+			// A manifest arriving reports no chunks yet. If it belongs to
+			// a channel with mirrors and the file is small, fetch it now,
+			// so it arrives with its post rather than at the next fetch
+			FileProgressEvent p = (FileProgressEvent) e;
+			if (p.getChunksReceived() != 0) return;
+			ioExecutor.execute(() -> {
+				try {
+					fetchIfSmall(p.getGroupId(), p.getManifestId());
+				} catch (DbException ex) {
+					logException(LOG, WARNING, ex);
+				}
+			});
+		} else if (e instanceof FileRequestedEvent) {
+			// The user asked for a large file. Contacts are asked by the
+			// request itself; a channel with mirrors can also serve it
+			FileRequestedEvent f = (FileRequestedEvent) e;
+			ioExecutor.execute(() -> {
+				try {
+					if (getMirrors(f.getGroupId()).isEmpty()) return;
+					fetchChannelFile(f.getGroupId(), f.getManifestId());
+				} catch (DbException ex) {
+					logException(LOG, WARNING, ex);
+				}
+			});
 		}
 	}
 
@@ -468,11 +519,22 @@ class ChannelManagerImpl
 		// Try each mirror until one answers. A mirror can withhold the
 		// channel but can't change it, so trying another is always safe.
 		for (String mirror : mirrors) {
+			FetchResult result;
 			try {
-				return fetchFrom(g, mirror, state);
+				result = fetchFrom(g, mirror, state);
 			} catch (IOException e) {
 				logException(LOG, INFO, e);
+				continue;
 			}
+			// The channel's file carries its posts and the manifests of
+			// their files; small files are fetched now, each from its own
+			// file beside the channel's
+			try {
+				fetchSmallFiles(g);
+			} catch (DbException e) {
+				logException(LOG, WARNING, e);
+			}
+			return result;
 		}
 		// Not the same as being up to date: we may be missing everything
 		// published since we last fetched
@@ -716,10 +778,17 @@ class ChannelManagerImpl
 	@Override
 	public void exportChannel(GroupId g, OutputStream out)
 			throws DbException, IOException {
+		exportChannel(g, out, false);
+	}
+
+	@Override
+	public void exportChannel(GroupId g, OutputStream out, boolean withFiles)
+			throws DbException, IOException {
 		BdfWriter w = bdfWriterFactory.createWriter(out);
 		db.transaction(true, txn -> {
 			Blog blog = blogManager.getBlog(txn, g);
 			if (!blog.isChannel()) throw new NoSuchChannelException();
+			Set<MessageId> leftOut = getLeftOut(txn, g, withFiles);
 			// Header: the format version and the channel's descriptor, so
 			// a reader can derive the group and check it is the channel
 			// they subscribed to
@@ -729,6 +798,7 @@ class ChannelManagerImpl
 				// Each message as it was signed, so the reader validates
 				// it rather than trusting whoever served the stream
 				for (MessageId m : getStreamOrder(txn, g)) {
+					if (leftOut.contains(m)) continue;
 					Message message = db.getMessage(txn, m);
 					w.writeList(BdfList.of(message.getTimestamp(),
 							message.getBody()));
@@ -738,6 +808,248 @@ class ChannelManagerImpl
 			}
 		});
 		w.flush();
+	}
+
+	/**
+	 * Returns the messages a channel's file leaves out: requests for files,
+	 * which pass between readers and aren't the channel's content, and
+	 * unless files are wanted, every file's chunks, which are published
+	 * one file each. Leaving out the same messages every time keeps the
+	 * file growing only at its end, and a copy written by a subscriber
+	 * identical to the owner's, even if the subscriber hasn't fetched every
+	 * file.
+	 */
+	private Set<MessageId> getLeftOut(Transaction txn, GroupId g,
+			boolean withFiles) throws DbException {
+		Set<MessageId> leftOut = new HashSet<>();
+		try {
+			for (Entry<MessageId, BdfDictionary> e :
+					clientHelper.getMessageMetadataAsDictionary(txn, g)
+							.entrySet()) {
+				Long type = e.getValue().getOptionalLong(KEY_TYPE);
+				if (type == null) continue;
+				if (type == FILE_REQUEST.getInt() ||
+						(!withFiles && type == FILE_CHUNK.getInt())) {
+					leftOut.add(e.getKey());
+				}
+			}
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+		return leftOut;
+	}
+
+	@Override
+	public Collection<MessageId> getCompleteFiles(GroupId g)
+			throws DbException {
+		List<MessageId> complete = new ArrayList<>();
+		for (MessageId id : getManifestIds(g)) {
+			FileHeader h = blogManager.getFileHeader(g, id);
+			if (blogManager.getFileStatus(h).isComplete()) complete.add(id);
+		}
+		return complete;
+	}
+
+	private Collection<MessageId> getManifestIds(GroupId g)
+			throws DbException {
+		return db.transactionWithResult(true, txn -> {
+			try {
+				return clientHelper.getMessageIds(txn, g, BdfDictionary.of(
+						new BdfEntry(KEY_TYPE, FILE_MANIFEST.getInt())));
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+		});
+	}
+
+	@Override
+	public void exportChannelFile(GroupId g, MessageId manifestId,
+			OutputStream out) throws DbException, IOException {
+		FileHeader h = blogManager.getFileHeader(g, manifestId);
+		BdfWriter w = bdfWriterFactory.createWriter(out);
+		db.transaction(true, txn -> {
+			List<MessageId> chunks =
+					getChunksInOrder(txn, g, manifestId, h.getChunkCount());
+			// Header: the format version and the manifest, so a reader can
+			// check this is the file they asked for
+			try {
+				w.writeList(BdfList.of(FILE_STREAM_FORMAT_VERSION,
+						manifestId));
+				for (MessageId id : chunks) {
+					Message m = db.getMessage(txn, id);
+					w.writeList(BdfList.of(m.getTimestamp(), m.getBody()));
+				}
+			} catch (IOException e) {
+				throw new DbException(e);
+			}
+		});
+		w.flush();
+	}
+
+	/**
+	 * Returns a file's chunks in index order, one for each index.
+	 *
+	 * @throws NoSuchMessageException If a chunk is missing
+	 */
+	private List<MessageId> getChunksInOrder(Transaction txn, GroupId g,
+			MessageId manifestId, int count) throws DbException {
+		MessageId[] byIndex = new MessageId[count];
+		try {
+			BdfDictionary query = BdfDictionary.of(
+					new BdfEntry(KEY_TYPE, FILE_CHUNK.getInt()),
+					new BdfEntry(KEY_FILE_MANIFEST_ID, manifestId));
+			for (Entry<MessageId, BdfDictionary> e : clientHelper
+					.getMessageMetadataAsDictionary(txn, g, query)
+					.entrySet()) {
+				int i = e.getValue().getLong(KEY_FILE_CHUNK_INDEX).intValue();
+				if (i >= 0 && i < count && byIndex[i] == null) {
+					byIndex[i] = e.getKey();
+				}
+			}
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+		List<MessageId> ordered = new ArrayList<>(count);
+		for (MessageId id : byIndex) {
+			if (id == null) throw new NoSuchMessageException();
+			ordered.add(id);
+		}
+		return ordered;
+	}
+
+	@Override
+	public String getFilePath(MessageId manifestId) {
+		return FILES_DIRECTORY + toHexString(manifestId.getBytes())
+				.toLowerCase(Locale.US) + FILE_EXTENSION;
+	}
+
+	@Override
+	public FetchResult fetchChannelFile(GroupId g, MessageId manifestId)
+			throws DbException {
+		List<String> mirrors = getMirrors(g);
+		if (mirrors.isEmpty()) return new FetchResult(NO_MIRRORS, 0);
+		FileHeader h = blogManager.getFileHeader(g, manifestId);
+		if (blogManager.getFileStatus(h).isComplete())
+			return new FetchResult(UNCHANGED, 0);
+		long manifestTimestamp = db.transactionWithResult(true,
+				txn -> db.getMessage(txn, manifestId).getTimestamp());
+		String path = getFilePath(manifestId);
+		// Try each mirror until one answers, as for the channel itself
+		for (String mirror : mirrors) {
+			HttpUrl base = HttpUrl.parse(mirror);
+			HttpUrl url = base == null ? null : base.resolve(path);
+			if (url == null) continue;
+			try {
+				return fetchFileFrom(g, h, manifestTimestamp, url);
+			} catch (IOException e) {
+				logException(LOG, INFO, e);
+			}
+		}
+		return new FetchResult(UNREACHABLE, 0);
+	}
+
+	private FetchResult fetchFileFrom(GroupId g, FileHeader h,
+			long manifestTimestamp, HttpUrl url)
+			throws DbException, IOException {
+		Request request = new Request.Builder().url(url).get().build();
+		Response response =
+				httpClientProvider.get().newCall(request).execute();
+		try (ResponseBody body = response.body()) {
+			if (!response.isSuccessful() || body == null)
+				throw new IOException("Response " + response.code());
+			// The manifest fixes how much this file can be: its bytes, and a
+			// little framing for each chunk. One byte beyond that is how a
+			// file too large to accept is told apart from one that is full
+			long budget = h.getSize() +
+					(h.getChunkCount() + 1L) * MAX_FILE_ENTRY_OVERHEAD;
+			CountingInputStream in =
+					new CountingInputStream(body.byteStream(), budget + 1);
+			int read = importFileEntries(g, h, manifestTimestamp, in);
+			if (in.getBytesRead() > budget)
+				throw new IOException("Attachment file is too large");
+			return new FetchResult(FETCHED, read);
+		} catch (FormatException e) {
+			throw new IOException(e);
+		}
+	}
+
+	/**
+	 * Reads an attachment file and stores its chunks. Nothing but the chunks
+	 * of the file named by the manifest, at the timestamp their sender gave
+	 * them, is accepted, and no more of them than the file has, so a
+	 * hostile mirror can't make us store anything else. Each chunk is still
+	 * checked against the manifest's hash when it is delivered.
+	 */
+	private int importFileEntries(GroupId g, FileHeader h,
+			long manifestTimestamp, InputStream in)
+			throws DbException, IOException, FormatException {
+		BdfReader r = bdfReaderFactory.createReader(in);
+		BdfList header = r.readList();
+		checkSize(header, 2);
+		if (header.getInt(0) != FILE_STREAM_FORMAT_VERSION)
+			throw new FormatException();
+		if (!Arrays.equals(header.getRaw(1), h.getManifestId().getBytes()))
+			throw new FormatException();
+		int read = 0;
+		while (!r.eof()) {
+			if (read == h.getChunkCount()) throw new FormatException();
+			BdfList entry = r.readList();
+			checkSize(entry, 2);
+			long timestamp = entry.getLong(0);
+			byte[] body = entry.getRaw(1);
+			checkLength(body, 1, MAX_MESSAGE_BODY_LENGTH);
+			// A file's chunks all take the timestamp after its manifest's
+			if (timestamp != manifestTimestamp + 1)
+				throw new FormatException();
+			checkChunkDescriptor(body, h.getManifestId());
+			Message m = messageFactory.createMessage(g, timestamp, body);
+			db.transaction(false, txn -> {
+				if (!db.containsGroup(txn, g))
+					throw new NoSuchChannelException();
+				db.importMessage(txn, m);
+			});
+			read++;
+		}
+		return read;
+	}
+
+	/**
+	 * Checks that a message body starts with the descriptor of a chunk of
+	 * the given file.
+	 */
+	private void checkChunkDescriptor(byte[] body, MessageId manifestId)
+			throws FormatException {
+		try {
+			BdfReader r = bdfReaderFactory.createReader(
+					new ByteArrayInputStream(body));
+			BdfList descriptor = r.readList();
+			checkSize(descriptor, 3);
+			if (descriptor.getInt(0) != FILE_CHUNK.getInt())
+				throw new FormatException();
+			if (!Arrays.equals(descriptor.getRaw(1), manifestId.getBytes()))
+				throw new FormatException();
+		} catch (IOException e) {
+			throw new FormatException();
+		}
+	}
+
+	/**
+	 * Fetches the channel's small files that haven't arrived. Called after
+	 * every fetch of the channel, so small images and files arrive with
+	 * the posts; larger ones wait until someone asks, as they do between
+	 * contacts.
+	 */
+	private void fetchSmallFiles(GroupId g) throws DbException {
+		for (MessageId id : getManifestIds(g)) fetchIfSmall(g, id);
+	}
+
+	private void fetchIfSmall(GroupId g, MessageId manifestId)
+			throws DbException {
+		if (getMirrors(g).isEmpty()) return;
+		FileHeader h = blogManager.getFileHeader(g, manifestId);
+		if (h.getSize() > MAX_PUSHED_FILE_SIZE) return;
+		if (blogManager.getFileStatus(h).isComplete()) return;
+		fetchChannelFile(g, manifestId);
 	}
 
 	/**

@@ -14,6 +14,10 @@
 		android:title="@string/channels_publish" />
 
 	<item
+		android:id="@+id/action_channel_publish_folder"
+		android:title="@string/channels_publish_folder" />
+
+	<item
 		android:id="@+id/action_channel_mirrors"
 		android:title="@string/channels_mirrors" />
 

@@ -5,6 +5,7 @@ import org.briarproject.bramble.api.crypto.PublicKey;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.GroupId;
@@ -15,6 +16,7 @@ import org.briarproject.nullsafety.NotNullByDefault;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Collection;
 import java.util.List;
 
 import javax.annotation.Nullable;
@@ -158,11 +160,61 @@ public interface ChannelManager {
 
 	/**
 	 * Writes a channel's posts to the given stream, in the format its
-	 * subscribers can import. The stream carries the channel's own signed
-	 * messages, so whoever stores or serves it cannot alter them.
+	 * subscribers can import: the file a mirror serves. The stream carries
+	 * the channel's own signed messages, so whoever stores or serves it
+	 * cannot alter them.
+	 * <p>
+	 * It carries the posts and the manifests describing their images and
+	 * files, but not the files' chunks, which are published separately,
+	 * one file each, by {@link #exportChannelFile}. Otherwise one video
+	 * would fill the limit on what a subscriber reads from mirrors over a
+	 * channel's whole life, and every subscriber would have to fetch every
+	 * file to reach the newest post.
 	 */
 	void exportChannel(GroupId g, OutputStream out)
 			throws DbException, IOException;
+
+	/**
+	 * Writes a channel's posts to the given stream, as
+	 * {@link #exportChannel(GroupId, OutputStream)} does, and if
+	 * {@code withFiles} is true the chunks of every file we hold in full as
+	 * well, so that one file handed over carries everything.
+	 */
+	void exportChannel(GroupId g, OutputStream out, boolean withFiles)
+			throws DbException, IOException;
+
+	/**
+	 * Returns the manifest IDs of the channel's images and files whose
+	 * chunks we hold in full, which can be published with
+	 * {@link #exportChannelFile}.
+	 */
+	Collection<MessageId> getCompleteFiles(GroupId g) throws DbException;
+
+	/**
+	 * Writes the chunks of one of a channel's images or files to the given
+	 * stream: the attachment file a mirror serves at
+	 * {@link #getFilePath(MessageId)} beside the channel's main file.
+	 *
+	 * @throws NoSuchMessageException If we don't hold every chunk
+	 */
+	void exportChannelFile(GroupId g, MessageId manifestId, OutputStream out)
+			throws DbException, IOException;
+
+	/**
+	 * Returns where the attachment file for the given manifest is
+	 * published, relative to the channel's main file.
+	 */
+	String getFilePath(MessageId manifestId);
+
+	/**
+	 * Fetches the chunks of one of a channel's images or files from its
+	 * mirrors. The manifest must have arrived: it fixes the file's size and
+	 * every chunk's hash, so a mirror can send nothing but those chunks.
+	 * Small files are fetched after every fetch of the channel; larger ones
+	 * when the user asks.
+	 */
+	FetchResult fetchChannelFile(GroupId g, MessageId manifestId)
+			throws DbException;
 
 	/**
 	 * Reads a channel stream published by a channel's owner and stores the

@@ -23,6 +23,7 @@ import org.briarproject.briar.api.attachment.FileTooBigException;
 import org.briarproject.briar.api.attachment.InsufficientStorageException;
 import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.event.FileProgressEvent;
+import org.briarproject.briar.api.attachment.event.FileRequestedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.ByteArrayInputStream;
@@ -557,6 +558,9 @@ public class ChunkedFileStore {
 							manifestId);
 			reportProgress(txn, g, manifestId, manifestMeta,
 					countChunks(txn, g, manifestId));
+			// Anything else that can fetch the file, such as a channel's
+			// mirrors, tries too
+			txn.attach(new FileRequestedEvent(g, manifestId));
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}

@@ -36,6 +36,7 @@ import javax.annotation.Nullable;
 import javax.inject.Inject;
 
 import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.widget.PopupMenu;
 import androidx.lifecycle.ViewModelProvider;
@@ -62,12 +63,18 @@ public class ChannelManageFragment extends BaseFragment
 
 	@Nullable
 	private GroupId publishing = null;
+	private boolean publishingWithFiles = false;
+	@Nullable
+	private ChannelItem publishingToFolder = null;
 	@Nullable
 	private GroupId editingMirrors = null;
 
 	private final ActivityResultLauncher<String> publishLauncher =
 			registerForActivityResult(new CreateDocumentAdvanced(),
 					this::onPublishUriChosen);
+	private final ActivityResultLauncher<Uri> folderLauncher =
+			registerForActivityResult(new OpenDocumentTree(),
+					this::onFolderChosen);
 	private final ActivityResultLauncher<String[]> importLauncher =
 			registerForActivityResult(new OpenAnyDocumentAdvanced(),
 					this::onImportUriChosen);
@@ -75,7 +82,17 @@ public class ChannelManageFragment extends BaseFragment
 	private void onPublishUriChosen(@Nullable Uri uri) {
 		GroupId g = publishing;
 		publishing = null;
-		if (uri != null && g != null) viewModel.publish(g, uri);
+		if (uri != null && g != null)
+			viewModel.publish(g, uri, publishingWithFiles);
+	}
+
+	private void onFolderChosen(@Nullable Uri uri) {
+		ChannelItem channel = publishingToFolder;
+		publishingToFolder = null;
+		if (uri != null && channel != null) {
+			viewModel.publishToFolder(channel.getId(), uri,
+					channel.getTitle());
+		}
 	}
 
 	private void onImportUriChosen(@Nullable Uri uri) {
@@ -139,6 +156,33 @@ public class ChannelManageFragment extends BaseFragment
 				(d, w) -> viewModel.confirmImport(pending));
 		b.setNegativeButton(R.string.cancel, null);
 		b.show();
+	}
+
+	/**
+	 * A file handed over can carry the channel's images and files, which
+	 * gives the receiver everything at once but can be large, or only the
+	 * posts, leaving the files to come later from mirrors or contacts.
+	 */
+	private void askWhetherToIncludeFiles(ChannelItem channel) {
+		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
+				R.style.BriarDialogTheme);
+		b.setTitle(R.string.channels_publish_with_files_title);
+		b.setMessage(R.string.channels_publish_with_files_message);
+		b.setPositiveButton(R.string.channels_publish_with_files,
+				(d, w) -> saveToFile(channel, true));
+		b.setNegativeButton(R.string.channels_publish_posts_only,
+				(d, w) -> saveToFile(channel, false));
+		b.show();
+	}
+
+	private void saveToFile(ChannelItem channel, boolean withFiles) {
+		publishing = channel.getId();
+		publishingWithFiles = withFiles;
+		try {
+			publishLauncher.launch(channel.getTitle() + ".briar");
+		} catch (ActivityNotFoundException e) {
+			showMessage(R.string.error_start_activity);
+		}
 	}
 
 	@Override
@@ -220,9 +264,11 @@ public class ChannelManageFragment extends BaseFragment
 			} else if (id == R.id.action_channel_copy_link) {
 				viewModel.copyLink(channel.getId());
 			} else if (id == R.id.action_channel_publish) {
-				publishing = channel.getId();
+				askWhetherToIncludeFiles(channel);
+			} else if (id == R.id.action_channel_publish_folder) {
+				publishingToFolder = channel;
 				try {
-					publishLauncher.launch(channel.getTitle() + ".briar");
+					folderLauncher.launch(null);
 				} catch (ActivityNotFoundException e) {
 					showMessage(R.string.error_start_activity);
 				}
