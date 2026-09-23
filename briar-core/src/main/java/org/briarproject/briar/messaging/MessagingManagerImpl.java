@@ -13,6 +13,7 @@ import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataParser;
 import org.briarproject.bramble.api.db.DatabaseComponent;
+import org.briarproject.bramble.api.db.DatabaseConfig;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
@@ -125,7 +126,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 			MessageTracker messageTracker,
 			ContactGroupFactory contactGroupFactory,
 			AutoDeleteManager autoDeleteManager,
-			CryptoComponent crypto) {
+			CryptoComponent crypto, DatabaseConfig databaseConfig) {
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.metadataParser = metadataParser;
@@ -136,7 +137,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 		this.autoDeleteManager = autoDeleteManager;
 		fileClient = new MessagingFileClient(clientHelper);
 		fileStore = new ChunkedFileStore(db, clientHelper, crypto,
-				fileClient);
+				fileClient, databaseConfig);
 	}
 
 	@Override

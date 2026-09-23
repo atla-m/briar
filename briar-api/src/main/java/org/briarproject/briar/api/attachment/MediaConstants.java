@@ -41,6 +41,16 @@ public interface MediaConstants {
 	long MAX_FILE_SIZE = 10L * 1024 * 1024;
 
 	/**
+	 * The free space, in bytes, that storing a file of our own must leave
+	 * behind. The database needs room to compact itself and to keep
+	 * accepting messages; a phone that runs out of it can lose the file
+	 * being stored and, before this was guarded, could leave Briar unable
+	 * to open. Measured on a device, compacting a 134 MB database needed
+	 * about 25 MB.
+	 */
+	long MIN_FREE_SPACE_AFTER_FILE = 64L * 1024 * 1024;
+
+	/**
 	 * The maximum number of chunks in a file, which follows from the maximum
 	 * file size and the chunk payload length.
 	 */

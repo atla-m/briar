@@ -42,6 +42,7 @@ import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.InsufficientStorageException;
 import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
 import org.briarproject.briar.api.autodelete.UnexpectedTimerException;
@@ -473,6 +474,9 @@ public class ConversationViewModel extends DbViewModel
 						clock.currentTimeMillis(), name, contentType, source);
 			} catch (FileTooBigException e) {
 				fileError.postEvent(R.string.file_too_big);
+				return;
+			} catch (InsufficientStorageException e) {
+				fileError.postEvent(R.string.file_no_storage);
 				return;
 			} catch (IOException | DbException e) {
 				logException(LOG, WARNING, e);

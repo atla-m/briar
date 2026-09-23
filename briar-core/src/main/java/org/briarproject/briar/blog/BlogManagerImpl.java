@@ -11,6 +11,7 @@ import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataParser;
 import org.briarproject.bramble.api.db.DatabaseComponent;
+import org.briarproject.bramble.api.db.DatabaseConfig;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.db.Transaction;
@@ -109,14 +110,16 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	BlogManagerImpl(DatabaseComponent db, IdentityManager identityManager,
 			AuthorManager authorManager, ClientHelper clientHelper,
 			MetadataParser metadataParser, BlogFactory blogFactory,
-			BlogPostFactory blogPostFactory, CryptoComponent crypto) {
+			BlogPostFactory blogPostFactory, CryptoComponent crypto,
+			DatabaseConfig databaseConfig) {
 		super(db, clientHelper, metadataParser);
 		this.identityManager = identityManager;
 		this.authorManager = authorManager;
 		this.blogFactory = blogFactory;
 		this.blogPostFactory = blogPostFactory;
 		fileClient = new BlogFileClient(clientHelper);
-		fileStore = new ChunkedFileStore(db, clientHelper, crypto, fileClient);
+		fileStore = new ChunkedFileStore(db, clientHelper, crypto, fileClient,
+				databaseConfig);
 		removeHooks = new CopyOnWriteArrayList<>();
 	}
 

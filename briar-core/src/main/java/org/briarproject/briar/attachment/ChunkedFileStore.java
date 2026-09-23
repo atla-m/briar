@@ -8,6 +8,7 @@ import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.db.DatabaseComponent;
+import org.briarproject.bramble.api.db.DatabaseConfig;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
@@ -18,6 +19,7 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.attachment.FileTooBigException;
+import org.briarproject.briar.api.attachment.InsufficientStorageException;
 import org.briarproject.briar.api.attachment.StreamSource;
 import org.briarproject.briar.api.attachment.event.FileProgressEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -42,6 +44,7 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_T
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_CHUNKS;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME_LENGTH;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
+import static org.briarproject.briar.api.attachment.MediaConstants.MIN_FREE_SPACE_AFTER_FILE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_DESCRIPTOR_LENGTH;
 
@@ -165,13 +168,15 @@ public class ChunkedFileStore {
 	private final ClientHelper clientHelper;
 	private final CryptoComponent crypto;
 	private final Client client;
+	private final DatabaseConfig config;
 
 	public ChunkedFileStore(DatabaseComponent db, ClientHelper clientHelper,
-			CryptoComponent crypto, Client client) {
+			CryptoComponent crypto, Client client, DatabaseConfig config) {
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.crypto = crypto;
 		this.client = client;
+		this.config = config;
 	}
 
 	// Validation. Both clients' validators call these, so the rules that
@@ -283,6 +288,9 @@ public class ChunkedFileStore {
 	 *
 	 * @throws FileTooBigException If the file is larger than
 	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MAX_FILE_SIZE}
+	 * @throws InsufficientStorageException If storing the file would
+	 * leave less free space than
+	 * {@link org.briarproject.briar.api.attachment.MediaConstants#MIN_FREE_SPACE_AFTER_FILE}
 	 */
 	public FileHeader addLocalFile(GroupId groupId, long timestamp,
 			String name, String contentType, StreamSource source)
@@ -308,6 +316,13 @@ public class ChunkedFileStore {
 			}
 		}
 		if (size == 0) throw new IllegalArgumentException("Empty file");
+		// Refuse before storing anything if the file would leave the
+		// database too little room: running out part way loses the file
+		// with a failed commit, and a database without room to compact
+		// could once leave Briar unable to open at all
+		long free = config.getDatabaseDirectory().getUsableSpace();
+		if (free - size < MIN_FREE_SPACE_AFTER_FILE)
+			throw new InsufficientStorageException();
 		// Store the manifest. It gets the given timestamp so it's sent
 		// before the chunks, which is also needed for the chunks to be
 		// delivered: they depend on it.
