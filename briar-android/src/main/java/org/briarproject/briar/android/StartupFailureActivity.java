@@ -11,6 +11,8 @@ import org.briarproject.briar.android.fragment.ErrorFragment;
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
+import java.io.File;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -21,6 +23,12 @@ import static org.briarproject.briar.android.BriarService.EXTRA_START_RESULT;
 @ParametersNotNullByDefault
 public class StartupFailureActivity extends BaseActivity implements
 		BaseFragmentListener {
+
+	/**
+	 * Below this much free space, a database that won't open is taken to
+	 * be out of room rather than damaged.
+	 */
+	private static final long LOW_SPACE_BYTES = 64L * 1024 * 1024;
 
 	@Override
 	public void onCreate(@Nullable Bundle state) {
@@ -52,7 +60,12 @@ public class StartupFailureActivity extends BaseActivity implements
 				errorRes = R.string.startup_failed_data_too_new_error;
 				break;
 			case DB_ERROR:
-				errorRes = R.string.startup_failed_db_error;
+				// On a phone that is out of space the usual advice, to
+				// set up a new account, would delete everything to fix a
+				// problem that freeing space fixes with nothing lost
+				errorRes = isShortOfSpace()
+						? R.string.startup_failed_storage_error
+						: R.string.startup_failed_db_error;
 				break;
 			case SERVICE_ERROR:
 				errorRes = R.string.startup_failed_service_error;
@@ -61,6 +74,16 @@ public class StartupFailureActivity extends BaseActivity implements
 				throw new IllegalArgumentException();
 		}
 		showInitialFragment(ErrorFragment.newInstance(getString(errorRes)));
+	}
+
+	/**
+	 * Returns true if the storage holding the account is nearly full, in
+	 * which case that is almost certainly why the database couldn't be
+	 * opened: it needs room to write as it opens.
+	 */
+	private boolean isShortOfSpace() {
+		File dataDir = new File(getApplicationInfo().dataDir);
+		return dataDir.getUsableSpace() < LOW_SPACE_BYTES;
 	}
 
 	@Override
