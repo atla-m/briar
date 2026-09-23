@@ -2,8 +2,6 @@ package org.briarproject.briar.api.channel;
 
 import java.util.regex.Pattern;
 
-import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
-
 public interface ChannelConstants {
 
 	/**
@@ -58,17 +56,51 @@ public interface ChannelConstants {
 	int STREAM_FORMAT_VERSION = 0;
 
 	/**
-	 * The largest channel stream we will read. A stream is published by an
-	 * untrusted host, so it must not be able to fill our storage.
+	 * The largest channel stream we will read from mirrors, counted over
+	 * the whole file across every fetch of it. A stream is served by an
+	 * untrusted host, and a message it serves that never becomes
+	 * deliverable, such as a chunk naming a manifest that never comes, is
+	 * kept for ever, so a limit counted per fetch would let a hostile
+	 * mirror add more every half hour for as long as we fetch.
 	 */
 	long MAX_STREAM_BYTES = 10L * 1024 * 1024;
 
 	/**
-	 * The largest number of messages we will read from a channel stream.
-	 * This is the tighter of the two limits for all but the largest
-	 * messages, because a stream carries a little more than each message
-	 * it holds.
+	 * The smallest a message in an honest channel stream can usefully be,
+	 * in bytes: a post needs its signature, its text and the stream's own
+	 * framing, which together come to about this much for a post of a
+	 * few words. Used to derive message limits that bind only on streams
+	 * padded with messages too small to be anything but junk.
+	 */
+	int MIN_HONEST_MESSAGE_BYTES = 128;
+
+	/**
+	 * The largest number of messages we will read from mirrors for one
+	 * channel, counted over the whole file like {@link #MAX_STREAM_BYTES}.
+	 * It bounds how many database rows an untrusted host can make us keep,
+	 * however small the messages. It is derived from the smallest honest
+	 * message rather than the largest message, so that an honest channel
+	 * reaches the byte limit first; deriving it from the largest message
+	 * allowed only a few hundred, and a channel of short posts stopped
+	 * updating for good after that many.
 	 */
 	int MAX_STREAM_MESSAGES =
-			(int) (MAX_STREAM_BYTES / MAX_MESSAGE_BODY_LENGTH) + 1;
+			(int) (MAX_STREAM_BYTES / MIN_HONEST_MESSAGE_BYTES);
+
+	/**
+	 * The largest channel file we will read when the user opens one by
+	 * hand. Each file is counted on its own, because the user chose it,
+	 * and reading the same file again stores nothing new; so this can be
+	 * far larger than {@link #MAX_STREAM_BYTES}, large enough for a
+	 * channel that carries its images and files, while still bounding the
+	 * work a file can cause.
+	 */
+	long MAX_IMPORT_BYTES = 100L * 1024 * 1024;
+
+	/**
+	 * The largest number of messages we will read from a channel file
+	 * opened by hand, derived like {@link #MAX_STREAM_MESSAGES}.
+	 */
+	int MAX_IMPORT_MESSAGES =
+			(int) (MAX_IMPORT_BYTES / MIN_HONEST_MESSAGE_BYTES);
 }
