@@ -550,6 +550,13 @@ public class ChunkedFileStore {
 			clientHelper.addLocalMessage(txn, request, meta, true, false);
 			clientHelper.mergeMessageMetadata(txn, manifestId,
 					BdfDictionary.of(new BdfEntry(KEY_FILE_REQUESTED, true)));
+			// Screens refresh a file's status on progress, so report it,
+			// though no chunk has arrived, to show that we have asked
+			BdfDictionary manifestMeta =
+					clientHelper.getMessageMetadataAsDictionary(txn,
+							manifestId);
+			reportProgress(txn, g, manifestId, manifestMeta,
+					countChunks(txn, g, manifestId));
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}

@@ -348,6 +348,21 @@ class GroupViewModel extends ThreadListViewModel<GroupMessageItem>
 	 * Shares the audio or video file at the given URI with the group: the
 	 * file is stored in chunks and a post referencing it is created.
 	 */
+	/**
+	 * Asks for a file its sender held back because it is too large to be
+	 * sent without being asked for. The file's row updates when the request
+	 * is stored, and again as the chunks arrive.
+	 */
+	void requestFile(FileHeader header) {
+		runOnDbThread(() -> {
+			try {
+				privateGroupManager.requestFile(header);
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
 	void sendFile(Uri uri) {
 		ioExecutor.execute(() -> {
 			ContentResolver resolver =

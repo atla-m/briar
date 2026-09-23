@@ -155,7 +155,6 @@ import static org.briarproject.briar.android.conversation.ImageActivity.NAME;
 import static org.briarproject.briar.android.util.UiUtils.launchActivityToOpenFile;
 import static org.briarproject.briar.android.util.UiUtils.observeOnce;
 import static org.briarproject.briar.android.view.AuthorView.setAvatar;
-import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_ONLY;
@@ -294,7 +293,7 @@ public class ConversationActivity extends BriarActivity
 		viewModel.getFileStatusUpdated().observe(this, this::updateFileStatus);
 		viewModel.getFileError().observeEvent(this, res -> {
 			String msg = res == R.string.file_too_big
-					? getString(res, MAX_FILE_SIZE / 1024 / 1024)
+					? getString(res, viewModel.getMaxFileSize() / 1024 / 1024)
 					: getString(res);
 			Toast.makeText(this, msg, LENGTH_LONG).show();
 		});
@@ -1193,7 +1192,12 @@ public class ConversationActivity extends BriarActivity
 	public void onFileClick(ConversationMessageItem messageItem,
 			FileHeader header) {
 		FileStatus status = messageItem.getFileStatus(header);
-		if (status == null || !status.isComplete()) {
+		if (status != null && status.isAwaitingRequest()) {
+			// Too large to have been sent without asking: ask now
+			viewModel.requestFile(header);
+			Toast.makeText(this, R.string.file_requested, LENGTH_SHORT)
+					.show();
+		} else if (status == null || !status.isComplete()) {
 			Toast.makeText(this, R.string.file_still_receiving, LENGTH_SHORT)
 					.show();
 		} else if (FileRowBinder.isPlayable(header.getContentType())) {
