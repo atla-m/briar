@@ -14,7 +14,7 @@ import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.android.contactselection.ContactSelectorControllerImpl;
-import org.briarproject.briar.android.controller.handler.ExceptionHandler;
+import org.briarproject.briar.android.controller.handler.ResultExceptionHandler;
 import org.briarproject.briar.api.autodelete.AutoDeleteManager;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.channel.ChannelManager;
@@ -37,6 +37,8 @@ import static java.util.Collections.emptyList;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logException;
+import static org.briarproject.bramble.util.StringUtils.truncateUtf8;
+import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.android.util.UiUtils.getSpanned;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
@@ -94,7 +96,7 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 	@Override
 	public void forward(GroupId blogId, MessageId postId,
 			Collection<ContactId> contacts,
-			ExceptionHandler<DbException> handler) {
+			ResultExceptionHandler<Void, DbException> handler) {
 		runOnDbThread(() -> {
 			try {
 				// Outside the transaction below: building a link opens a
@@ -103,9 +105,11 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 				db.transaction(false, txn -> {
 					// A blog post's text is HTML, a private message's is
 					// not, so forward what a reader would have seen
-					String text = getSpanned(
+					// A private message allows slightly less text than a
+					// blog post, and the link carries the rest
+					String text = truncateUtf8(getSpanned(
 							blogManager.getPostText(txn, postId)).toString()
-							.trim();
+							.trim(), MAX_PRIVATE_MESSAGE_TEXT_LENGTH);
 					for (ContactId c : contacts) {
 						try {
 							forward(txn, c, text, link);
@@ -115,6 +119,7 @@ class ForwardPostControllerImpl extends ContactSelectorControllerImpl
 						}
 					}
 				});
+				handler.onResult(null);
 			} catch (DbException e) {
 				logException(LOG, WARNING, e);
 				handler.onException(e);

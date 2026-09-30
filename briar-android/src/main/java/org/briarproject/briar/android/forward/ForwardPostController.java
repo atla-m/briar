@@ -6,7 +6,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.android.contactselection.ContactSelectorController;
 import org.briarproject.briar.android.contactselection.SelectableContactItem;
-import org.briarproject.briar.android.controller.handler.ExceptionHandler;
+import org.briarproject.briar.android.controller.handler.ResultExceptionHandler;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.util.Collection;
@@ -21,5 +21,5 @@ public interface ForwardPostController
 	 */
 	void forward(GroupId blogId, MessageId postId,
 			Collection<ContactId> contacts,
-			ExceptionHandler<DbException> handler);
+			ResultExceptionHandler<Void, DbException> handler);
 }
