@@ -14,6 +14,7 @@ import org.briarproject.bramble.test.DbExpectations;
 import org.briarproject.briar.api.attachment.Attachment;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.FileHeader;
+import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 import org.junit.Test;
@@ -40,6 +41,8 @@ public class AttachmentReaderImplTest extends BrambleMockTestCase {
 			context.mock(PrivateGroupManager.class);
 	private final MessagingManager messagingManager =
 			context.mock(MessagingManager.class);
+	private final BlogManager blogManager =
+			context.mock(BlogManager.class);
 
 	private final GroupId groupId = new GroupId(getRandomId());
 	private final Group privateGroup = new Group(groupId,
@@ -55,7 +58,7 @@ public class AttachmentReaderImplTest extends BrambleMockTestCase {
 
 	private final AttachmentReaderImpl attachmentReader =
 			new AttachmentReaderImpl(db, clientHelper, privateGroupManager,
-					messagingManager);
+					messagingManager, blogManager);
 
 	@Test(expected = NoSuchMessageException.class)
 	public void testWrongGroup() throws Exception {

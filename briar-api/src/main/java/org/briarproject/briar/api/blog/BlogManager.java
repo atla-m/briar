@@ -137,6 +137,12 @@ public interface BlogManager {
 	 */
 	InputStream getFile(FileHeader header) throws DbException;
 
+	InputStream getFile(Transaction txn, FileHeader header)
+			throws DbException;
+
+	FileHeader getFileHeader(Transaction txn, GroupId groupId,
+			MessageId manifestId) throws DbException;
+
 	/**
 	 * Returns the bytes of one chunk of a file that has fully arrived, for
 	 * playing audio and video without writing the file to disk.

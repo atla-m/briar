@@ -69,6 +69,7 @@ class ConversationMessageItem extends ConversationItem {
 		FileStatus old = fileStatuses.put(manifestId, status);
 		return old == null ||
 				old.getChunksReceived() != status.getChunksReceived() ||
+				old.isRequested() != status.isRequested() ||
 				old.isManifestReceived() != status.isManifestReceived();
 	}
 

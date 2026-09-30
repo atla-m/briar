@@ -17,6 +17,7 @@ import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.android.fragment.BaseFragment;
+import org.briarproject.briar.android.util.BriarSnackbarBuilder;
 import org.briarproject.briar.android.sharing.ShareBlogActivity;
 import org.briarproject.briar.android.widget.LinkDialogFragment;
 import org.briarproject.briar.api.attachment.FileHeader;
@@ -39,6 +40,8 @@ import static android.view.View.VISIBLE;
 import static java.util.Objects.requireNonNull;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.briar.android.activity.BriarActivity.GROUP_ID;
+import static android.app.Activity.RESULT_OK;
+import static com.google.android.material.snackbar.Snackbar.LENGTH_LONG;
 import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_SHARE_BLOG;
 import static org.briarproject.briar.android.util.UiUtils.MIN_DATE_RESOLUTION;
 
@@ -190,6 +193,16 @@ public class BlogPostFragment extends BaseFragment
 		if (refresher != null) {
 			LOG.info("Removing Handler Callback");
 			handler.removeCallbacks(refresher);
+		}
+	}
+
+	@Override
+	public void onActivityResult(int request, int result,
+			@Nullable Intent data) {
+		super.onActivityResult(request, result, data);
+		if (request == REQUEST_SHARE_BLOG && result == RESULT_OK) {
+			new BriarSnackbarBuilder().make(requireView(),
+					R.string.blogs_sharing_snackbar, LENGTH_LONG).show();
 		}
 	}
 

@@ -134,8 +134,20 @@ public class TextAttachmentController extends TextSendController
 
 	@Override
 	protected boolean canSendEmptyText() {
-		return !imageUris.isEmpty();
+		return !imageUris.isEmpty() || hasFiles;
 	}
+
+	/**
+	 * Tells the controller whether files are attached by some other
+	 * means than its own image picker, so a post with a file and no text
+	 * can be sent.
+	 */
+	public void setHasFiles(boolean hasFiles) {
+		this.hasFiles = hasFiles;
+		updateViewState();
+	}
+
+	private boolean hasFiles = false;
 
 	public void setImagesSupported() {
 		if (sendButton != null) sendButton.setImagesSupported();

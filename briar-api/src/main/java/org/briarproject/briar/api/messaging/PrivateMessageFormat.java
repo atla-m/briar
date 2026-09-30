@@ -62,8 +62,8 @@ public enum PrivateMessageFormat {
 	 * Returns true if this format supports auto-deletion.
 	 */
 	public boolean supportsAutoDelete() {
-		return this == TEXT_IMAGES_AUTO_DELETE ||
-				this == TEXT_IMAGES_AUTO_DELETE_FILES;
+		// Every format from the one that added the timer on carries it
+		return this != TEXT_ONLY && this != TEXT_IMAGES;
 	}
 
 	/**

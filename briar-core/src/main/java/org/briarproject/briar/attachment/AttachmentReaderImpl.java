@@ -15,6 +15,7 @@ import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.attachment.AttachmentReader;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.messaging.MessagingManager;
+import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 
 import java.io.ByteArrayInputStream;
@@ -31,15 +32,17 @@ public class AttachmentReaderImpl implements AttachmentReader {
 	private final ClientHelper clientHelper;
 	private final PrivateGroupManager privateGroupManager;
 	private final MessagingManager messagingManager;
+	private final BlogManager blogManager;
 
 	@Inject
 	public AttachmentReaderImpl(DatabaseComponent db,
 			ClientHelper clientHelper, PrivateGroupManager privateGroupManager,
-			MessagingManager messagingManager) {
+			MessagingManager messagingManager, BlogManager blogManager) {
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.privateGroupManager = privateGroupManager;
 		this.messagingManager = messagingManager;
+		this.blogManager = blogManager;
 	}
 
 	@Override
@@ -91,6 +94,10 @@ public class AttachmentReaderImpl implements AttachmentReader {
 			FileHeader file = messagingManager.getFileHeader(txn,
 					h.getGroupId(), h.getMessageId());
 			return messagingManager.getFile(txn, file);
+		} else if (client.equals(BlogManager.CLIENT_ID)) {
+			FileHeader file = blogManager.getFileHeader(txn,
+					h.getGroupId(), h.getMessageId());
+			return blogManager.getFile(txn, file);
 		}
 		throw new NoSuchMessageException();
 	}

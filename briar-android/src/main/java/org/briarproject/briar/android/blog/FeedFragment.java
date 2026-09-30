@@ -37,6 +37,7 @@ import static androidx.recyclerview.widget.RecyclerView.NO_POSITION;
 import static android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP;
 import static com.google.android.material.snackbar.Snackbar.LENGTH_LONG;
 import static org.briarproject.briar.android.activity.BriarActivity.GROUP_ID;
+import static android.app.Activity.RESULT_OK;
 import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_SHARE_BLOG;
 import static org.briarproject.briar.android.blog.BlogPostFragment.POST_ID;
 
@@ -199,6 +200,16 @@ public class FeedFragment extends BaseFragment
 	public void onLinkClick(String url) {
 		LinkDialogFragment f = LinkDialogFragment.newInstance(url);
 		f.show(getParentFragmentManager(), f.getUniqueTag());
+	}
+
+	@Override
+	public void onActivityResult(int request, int result,
+			@Nullable Intent data) {
+		super.onActivityResult(request, result, data);
+		if (request == REQUEST_SHARE_BLOG && result == RESULT_OK) {
+			new BriarSnackbarBuilder().make(list,
+					R.string.blogs_sharing_snackbar, LENGTH_LONG).show();
+		}
 	}
 
 	@Override

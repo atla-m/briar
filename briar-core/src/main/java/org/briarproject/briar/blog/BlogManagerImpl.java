@@ -397,6 +397,18 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	}
 
 	@Override
+	public InputStream getFile(Transaction txn, FileHeader header)
+			throws DbException {
+		return fileStore.getFile(txn, header);
+	}
+
+	@Override
+	public FileHeader getFileHeader(Transaction txn, GroupId groupId,
+			MessageId manifestId) throws DbException {
+		return fileStore.getFileHeader(txn, groupId, manifestId);
+	}
+
+	@Override
 	public boolean isChunkOf(Transaction txn, MessageId manifestId, int index,
 			byte[] body, int descriptorLength) throws DbException {
 		return fileStore.isChunkOf(txn, manifestId, index, body,
