@@ -121,6 +121,14 @@ public class ChunkedFileStore {
 	public static final String KEY_FILE_REQUESTED = "fileRequested";
 
 	/**
+	 * Manifest metadata key: true once a delivered message references the
+	 * file. Set when the manifest arrives after the message, or when the
+	 * message arrives after the manifest, so a chunk can tell whether its
+	 * file is wanted without scanning every message in the group.
+	 */
+	public static final String KEY_FILE_REFERENCED = "fileReferenced";
+
+	/**
 	 * Label for hashing a chunk's index and bytes.
 	 */
 	private static final String LABEL_CHUNK_HASH =
@@ -537,6 +545,7 @@ public class ChunkedFileStore {
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
+		markReferenced(txn, manifestId);
 		db.setMessageShared(txn, manifestId);
 		db.setMessagePermanent(txn, manifestId);
 		for (MessageId chunkId : getChunkIds(txn, g, manifestId)) {
@@ -744,12 +753,11 @@ public class ChunkedFileStore {
 	 */
 	private int countChunks(Transaction txn, GroupId g, MessageId manifestId)
 			throws DbException, FormatException {
-		Set<Integer> indices = new HashSet<>();
-		for (BdfDictionary meta : clientHelper.getMessageMetadataAsDictionary(
-				txn, g, getChunkQuery(manifestId)).values()) {
-			indices.add(meta.getInt(KEY_FILE_CHUNK_INDEX));
-		}
-		return indices.size();
+		// A chunk for an index already held is refused, so each stored
+		// chunk is a distinct one, and the IDs alone say how many: no
+		// need to load and parse every chunk's metadata for every chunk
+		return clientHelper.getMessageIds(txn, g, getChunkQuery(manifestId))
+				.size();
 	}
 
 	// Reading a file
@@ -862,8 +870,9 @@ public class ChunkedFileStore {
 	public byte[] getFileChunk(FileHeader header, int index)
 			throws DbException {
 		return db.transactionWithResult(true, txn -> {
-			FileStatus status = getFileStatus(txn, header);
-			if (!status.isComplete()) throw new NoSuchMessageException();
+			// The caller checks the file is complete before playing it;
+			// counting every chunk again for every chunk read made
+			// playing a video cost the square of its length
 			if (index < 0 || index >= header.getChunkCount())
 				throw new NoSuchMessageException();
 			return loadChunkPayload(txn, header, index);
@@ -939,15 +948,48 @@ public class ChunkedFileStore {
 	 * hook. No chunk of the file can have been delivered yet, as chunks
 	 * depend on the manifest; they are delivered after this returns.
 	 */
-	public void incomingManifest(Transaction txn, Message m,
+	public boolean incomingManifest(Transaction txn, Message m,
 			BdfDictionary meta) throws DbException, FormatException {
 		GroupId g = m.getGroupId();
-		if (!client.isManifestReferenced(txn, g, m.getId())) {
+		// The one scan of the group's messages a file costs: its chunks
+		// read the answer from the manifest's metadata
+		boolean referenced = client.isManifestReferenced(txn, g, m.getId());
+		if (referenced) {
+			markReferenced(txn, m.getId());
+		} else {
 			// Nothing references this file yet. Give the manifest a
 			// deadline, which is lifted if the referencing message arrives.
 			startCleanupTimer(txn, m.getId());
 		}
 		reportProgress(txn, g, m.getId(), meta, 0);
+		return referenced;
+	}
+
+	private void markReferenced(Transaction txn, MessageId manifestId)
+			throws DbException {
+		try {
+			clientHelper.mergeMessageMetadata(txn, manifestId,
+					BdfDictionary.of(new BdfEntry(KEY_FILE_REFERENCED, true)));
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+	}
+
+	/**
+	 * Returns true if a delivered message references the given manifest,
+	 * which is here. Reads the flag the manifest carries rather than
+	 * scanning the group.
+	 */
+	public boolean isReferenced(Transaction txn, MessageId manifestId)
+			throws DbException {
+		try {
+			return clientHelper.getMessageMetadataAsDictionary(txn, manifestId)
+					.getBoolean(KEY_FILE_REFERENCED, false);
+		} catch (NoSuchMessageException e) {
+			return false;
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
 	}
 
 	/**
@@ -1001,7 +1043,7 @@ public class ChunkedFileStore {
 			throw new InvalidMessageException();
 		// The chunk is wanted if the file is. Otherwise keep it for a
 		// while in case the referencing message arrives, then give up.
-		if (!client.isManifestReferenced(txn, g, manifestId)) {
+		if (!manifestMeta.getBoolean(KEY_FILE_REFERENCED, false)) {
 			startCleanupTimer(txn, m.getId());
 		}
 		// This chunk isn't marked as delivered until this hook returns, so
@@ -1024,6 +1066,7 @@ public class ChunkedFileStore {
 				txn, g, client.getManifestQuery());
 		for (MessageId manifestId : manifestIds) {
 			if (!presentManifests.contains(manifestId)) continue;
+			markReferenced(txn, manifestId);
 			db.stopCleanupTimer(txn, manifestId);
 			// The chunks that are already here are wanted now too. A chunk
 			// that arrives later finds a referenced manifest and isn't given

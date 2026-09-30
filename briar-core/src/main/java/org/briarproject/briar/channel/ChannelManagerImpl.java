@@ -91,6 +91,7 @@ import okhttp3.ResponseBody;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
@@ -105,6 +106,7 @@ import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TYPE;
+import static org.briarproject.briar.api.blog.BlogConstants.KEY_TIMESTAMP;
 import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
@@ -162,6 +164,19 @@ class ChannelManagerImpl
 			Pattern.compile("^(W/)?\"[\\x21\\x23-\\x7e]*\"$");
 	private static final int MAX_ETAG_LENGTH = 256;
 	/**
+	 * How long one fetch may take in all. A channel or file is at most
+	 * tens of megabytes, and a mirror trickling bytes would otherwise
+	 * hold the scheduled fetch, and so every other channel, for hours.
+	 */
+	private static final long FETCH_TIMEOUT_MS = MINUTES.toMillis(10);
+	/**
+	 * How long after a file could not be fetched from any mirror before
+	 * it is tried again without being asked for, so files the owner has
+	 * not uploaded don't cost every subscriber a request per mirror at
+	 * every fetch. Tapping the file, and restarting, try at once.
+	 */
+	private static final long FILE_RETRY_MS = MINUTES.toMillis(120);
+	/**
 	 * A Content-Range header: the range served, or a star for none, and
 	 * the file's full length, or a star if the mirror doesn't know it.
 	 */
@@ -192,6 +207,9 @@ class ChannelManagerImpl
 	private final Set<GroupId> fetching = ConcurrentHashMap.newKeySet();
 	private final Set<MessageId> fetchingFiles =
 			ConcurrentHashMap.newKeySet();
+	// When each file that no mirror served was last tried
+	private final Map<MessageId, Long> fileFailures =
+			new ConcurrentHashMap<>();
 
 	/**
 	 * The most framing, in bytes, an attachment file may add to each chunk
@@ -715,7 +733,7 @@ class ChannelManagerImpl
 		}
 		if (resume) b.addHeader("Range", "bytes=" + state.offset + "-");
 		Response response =
-				httpClientProvider.get().newCall(b.build()).execute();
+				httpClient().newCall(b.build()).execute();
 		try (ResponseBody body = response.body()) {
 			int code = response.code();
 			if (code == 304) {
@@ -760,6 +778,12 @@ class ChannelManagerImpl
 			if (resume) throw new ChangedFileException();
 			throw new IOException(e);
 		}
+	}
+
+	private OkHttpClient httpClient() {
+		// Shares the connection pool with the client it is built from
+		return httpClientProvider.get().newBuilder()
+				.callTimeout(FETCH_TIMEOUT_MS, MILLISECONDS).build();
 	}
 
 	/**
@@ -1172,11 +1196,14 @@ class ChannelManagerImpl
 			HttpUrl url = base == null ? null : base.resolve(path);
 			if (url == null) continue;
 			try {
-				return fetchFileFrom(g, h, manifestTimestamp, url);
+				FetchResult result = fetchFileFrom(g, h, manifestTimestamp, url);
+				fileFailures.remove(manifestId);
+				return result;
 			} catch (IOException e) {
 				logException(LOG, INFO, e);
 			}
 		}
+		fileFailures.put(manifestId, clock.currentTimeMillis());
 		return new FetchResult(UNREACHABLE, 0);
 	}
 
@@ -1185,7 +1212,7 @@ class ChannelManagerImpl
 			throws DbException, IOException {
 		Request request = new Request.Builder().url(url).get().build();
 		Response response =
-				httpClientProvider.get().newCall(request).execute();
+				httpClient().newCall(request).execute();
 		try (ResponseBody body = response.body()) {
 			if (!response.isSuccessful() || body == null)
 				throw new IOException("Response " + response.code());
@@ -1307,6 +1334,11 @@ class ChannelManagerImpl
 		FileHeader h = blogManager.getFileHeader(g, manifestId);
 		if (h.getSize() > MAX_PUSHED_FILE_SIZE) return;
 		if (blogManager.getFileStatus(h).isComplete()) return;
+		Long failed = fileFailures.get(manifestId);
+		if (failed != null &&
+				clock.currentTimeMillis() - failed < FILE_RETRY_MS) {
+			return;
+		}
 		fetchChannelFile(g, manifestId);
 	}
 
@@ -1326,10 +1358,25 @@ class ChannelManagerImpl
 		Collection<MessageId> ids = db.getMessageIds(txn, g);
 		List<MessageId> sorted = new ArrayList<>(ids);
 		Map<MessageId, Long> timestamps = new HashMap<>(ids.size());
+		// Every blog message's metadata carries its timestamp, so the
+		// order costs one metadata query rather than a read of every
+		// body, chunks included, before each is read again to be written
+		Map<MessageId, BdfDictionary> metadata;
+		try {
+			metadata = clientHelper.getMessageMetadataAsDictionary(txn, g);
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
 		for (MessageId m : ids) {
-			// The message is read again when it is written out; keeping
-			// only the timestamps here bounds what we hold in memory
-			timestamps.put(m, db.getMessage(txn, m).getTimestamp());
+			BdfDictionary meta = metadata.get(m);
+			Long timestamp = null;
+			try {
+				if (meta != null) timestamp = meta.getOptionalLong(KEY_TIMESTAMP);
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+			if (timestamp == null) timestamp = db.getMessage(txn, m).getTimestamp();
+			timestamps.put(m, timestamp);
 		}
 		Collections.sort(sorted, (a, b) -> {
 			int c = Long.compare(requireNonNull(timestamps.get(a)),

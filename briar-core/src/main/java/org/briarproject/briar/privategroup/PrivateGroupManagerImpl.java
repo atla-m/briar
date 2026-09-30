@@ -776,9 +776,8 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				fileStore.incomingChunk(txn, m, metaDict);
 				MessageId manifestId = new MessageId(
 						metaDict.getRaw(KEY_FILE_MANIFEST_ID));
-				return shareOrphan(txn, m.getGroupId(), fileClient
-						.isManifestReferenced(txn, m.getGroupId(),
-								manifestId));
+				return shareOrphan(txn, m.getGroupId(),
+						fileStore.isReferenced(txn, manifestId));
 			}
 		} catch (FormatException e) {
 			throw new InvalidMessageException(e);
@@ -800,9 +799,8 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				handleGroupMessage(txn, m, meta);
 				return ACCEPT_SHARE;
 			case FILE_MANIFEST:
-				fileStore.incomingManifest(txn, m, meta);
-				return shareOrphan(txn, m.getGroupId(), fileClient
-						.isManifestReferenced(txn, m.getGroupId(), m.getId()));
+				return shareOrphan(txn, m.getGroupId(),
+						fileStore.incomingManifest(txn, m, meta));
 			case FILE_REQUEST:
 				// Shared onwards, so it reaches whoever holds the file
 				fileStore.incomingRequest(txn, m, meta);

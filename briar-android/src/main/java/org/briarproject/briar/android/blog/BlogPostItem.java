@@ -11,6 +11,8 @@ import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.api.identity.AuthorInfo;
 
+import static org.briarproject.briar.api.identity.AuthorInfo.Status.OURSELVES;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -30,17 +32,28 @@ public class BlogPostItem
 	protected String text;
 	private final boolean read;
 	private final boolean channel;
+	private final boolean ours;
 	private final List<AttachmentItem> attachments = new ArrayList<>();
 	// The status of each of the post's files, keyed by manifest ID, filled
 	// in as the file arrives
 	private final Map<MessageId, FileStatus> fileStatuses = new HashMap<>();
 
 	BlogPostItem(BlogPostHeader header, @Nullable String text,
-			boolean channel) {
+			boolean channel, boolean ours) {
 		this.header = header;
 		this.text = text;
 		this.read = header.isRead();
 		this.channel = channel;
+		this.ours = ours;
+	}
+
+	/**
+	 * Returns true if we wrote the post: it is ours, or it is in a
+	 * channel we own, whose posts are signed by the channel's key rather
+	 * than by us.
+	 */
+	public boolean isOurs() {
+		return ours || getAuthorInfo().getStatus() == OURSELVES;
 	}
 
 	@Override
