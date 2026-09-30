@@ -224,6 +224,18 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 	 * folder replaces the channel's file and adds only the new files, whose
 	 * names follow from their content.
 	 */
+	/**
+	 * Returns a file name for a channel's file. A title comes from a link,
+	 * so it can hold characters a document provider refuses or a control
+	 * character that would hide part of the name.
+	 */
+	static String fileName(String title) {
+		String safe = title.replaceAll("[\\p{Cc}\\p{Cf}/\\\\:*?\"<>|]", "_")
+				.trim();
+		if (safe.isEmpty()) safe = "channel";
+		return safe + FILE_EXTENSION;
+	}
+
 	void publishToFolder(GroupId g, Uri tree, String title) {
 		ioExecutor.execute(() -> {
 			try {
@@ -231,7 +243,7 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 						getApplication().getContentResolver();
 				String rootId = DocumentsContract.getTreeDocumentId(tree);
 				Uri main = findOrCreate(resolver, tree, rootId,
-						title + FILE_EXTENSION, OCTET_STREAM);
+						fileName(title), OCTET_STREAM);
 				try (OutputStream out =
 						resolver.openOutputStream(main, "wt")) {
 					if (out == null) throw new IOException("Cannot open");

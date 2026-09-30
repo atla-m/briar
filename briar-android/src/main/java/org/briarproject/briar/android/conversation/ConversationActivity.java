@@ -78,6 +78,7 @@ import org.briarproject.briar.api.android.AndroidNotificationManager;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.briar.api.autodelete.event.ConversationMessagesDeletedEvent;
 import org.briarproject.briar.api.blog.BlogSharingManager;
+import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.briar.api.client.ProtocolStateException;
 import org.briarproject.briar.api.client.SessionId;
@@ -504,6 +505,28 @@ public class ConversationActivity extends BriarActivity
 
 	@Override
 	public void onForwardedChannelClick(String channelLink) {
+		// The link is whatever the contact's device put in it, so say
+		// which channel it names before subscribing to it
+		Blog blog;
+		try {
+			blog = channelManager.readLink(channelLink);
+		} catch (FormatException e) {
+			Toast.makeText(this, R.string.blogs_forwarded_bad_link,
+					LENGTH_SHORT).show();
+			return;
+		}
+		MaterialAlertDialogBuilder builder =
+				new MaterialAlertDialogBuilder(this, R.style.BriarDialogTheme);
+		builder.setTitle(R.string.blogs_forwarded_subscribe_title);
+		builder.setMessage(getString(
+				R.string.blogs_forwarded_subscribe_message, blog.getName()));
+		builder.setPositiveButton(R.string.channels_subscribe_button,
+				(dialog, which) -> subscribeFromForwardedLink(channelLink));
+		builder.setNegativeButton(R.string.cancel, null);
+		builder.show();
+	}
+
+	private void subscribeFromForwardedLink(String channelLink) {
 		// Subscribing tells nobody, not even the contact who forwarded the
 		// post, and gives us the channel's future posts rather than this
 		// one copy of one of them

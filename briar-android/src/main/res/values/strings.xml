@@ -549,6 +549,8 @@
 	<string name="blogs_forward_error">The post could not be forwarded</string>
 	<string name="blogs_forwarded_from">Forwarded from a channel. %s</string>
 	<string name="blogs_forwarded_subscribe">Tap to subscribe.</string>
+	<string name="blogs_forwarded_subscribe_title">Subscribe to this channel?</string>
+	<string name="blogs_forwarded_subscribe_message">\"%s\"\n\nA link from a contact can name any channel. If you subscribe, its posts will be fetched over Tor from the mirrors named in the link. Nobody is told that you subscribed.</string>
 	<string name="blogs_forwarded_subscribed">Subscribed to the channel</string>
 	<string name="blogs_forwarded_bad_link">That channel link could not be read</string>
 	<string name="channels_sharing_invitation_received">%1$s has shared the channel \"%2$s\" with you.</string>
