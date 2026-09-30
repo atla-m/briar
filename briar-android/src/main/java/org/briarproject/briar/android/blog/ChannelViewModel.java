@@ -205,7 +205,7 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 	void publish(GroupId g, Uri uri, boolean withFiles) {
 		ioExecutor.execute(() -> {
 			try (OutputStream out = getApplication().getContentResolver()
-					.openOutputStream(uri)) {
+					.openOutputStream(uri, "wt")) {
 				if (out == null) throw new IOException("Cannot open " + uri);
 				channelManager.exportChannel(g, out, withFiles);
 				message.postEvent(R.string.channels_published);

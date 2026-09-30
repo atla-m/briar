@@ -1,6 +1,7 @@
 package org.briarproject.briar.channel;
 
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.data.BdfReader;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.sync.Message;
@@ -22,6 +23,7 @@ import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
+import org.briarproject.briar.attachment.CountingInputStream;
 import org.briarproject.briar.api.channel.FetchResult;
 import org.briarproject.briar.api.channel.NoSuchChannelException;
 import org.briarproject.briar.test.BriarIntegrationTest;
@@ -42,7 +44,9 @@ import java.util.Collection;
 import java.util.Locale;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static java.util.Arrays.asList;
@@ -1106,6 +1110,181 @@ public class ChannelManagerIntegrationTest
 		channelManager1.importChannel(new ByteArrayInputStream(stream));
 		assertTrue(db1.transactionWithResult(true,
 				txn -> db1.getMessageIds(txn, g)).isEmpty());
+	}
+
+	@Test
+	public void testResumesAnAttachmentFileCutOffPartWay() throws Exception {
+		// A fetch that dies in the middle of a chunk continues from the
+		// end of the last chunk stored, rather than from the beginning
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader file = postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH * 2 + 7);
+		ByteArrayOutputStream fileOut = new ByteArrayOutputStream();
+		channelManager0.exportChannelFile(g, file.getManifestId(), fileOut);
+		byte[] whole = fileOut.toByteArray();
+		// Where the first chunk's entry ends
+		CountingInputStream counting = new CountingInputStream(
+				new ByteArrayInputStream(whole), whole.length);
+		BdfReader r = c1.getBdfReaderFactory().createReader(counting);
+		r.readList();
+		r.readList();
+		int firstEntryEnd = (int) counting.getBytesRead();
+		int cut = firstEntryEnd + 10;
+		byte[] main = exportChannel(g);
+		String path = "/" + channelManager0.getFilePath(file.getManifestId());
+		AtomicInteger fileRequests = new AtomicInteger();
+
+		MockWebServer server = new MockWebServer();
+		server.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				if ("/c.briar".equals(request.getPath())) {
+					return new MockResponse().setBody(new Buffer().write(main));
+				}
+				if (!path.equals(request.getPath()))
+					return new MockResponse().setResponseCode(404);
+				if (fileRequests.getAndIncrement() == 0) {
+					// Cut off in the middle of the second chunk
+					return new MockResponse()
+							.setBody(new Buffer().write(whole, 0, cut));
+				}
+				String range = request.getHeader("Range");
+				if (range == null || !range.startsWith("bytes="))
+					return new MockResponse().setResponseCode(500);
+				int from = Integer.parseInt(range.substring(6,
+						range.length() - 1));
+				return new MockResponse().setResponseCode(206)
+						.setHeader("Content-Range", "bytes " + from + "-" +
+								(whole.length - 1) + "/" + whole.length)
+						.setBody(new Buffer().write(whole, from,
+								whole.length - from));
+			}
+		});
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			channelManager1.fetchChannel(g);
+			awaitPendingMessageDelivery(2);
+			// The manifest's arrival starts a fetch in the background,
+			// which races with this one: whichever comes first is cut
+			// off, and the next continues from the first chunk's end
+			for (int i = 0; i < 3; i++) {
+				FetchResult.Outcome outcome =
+						fetchFileWhenFree(g, file.getManifestId());
+				if (outcome == FETCHED || outcome == UNCHANGED) break;
+			}
+			awaitComplete(file);
+			assertEquals(2, fileRequests.get());
+			server.takeRequest();
+			server.takeRequest();
+			assertEquals("bytes=" + firstEntryEnd + "-",
+					server.takeRequest().getHeader("Range"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testAFilePickedBeforeAnotherPostGoesAfterIt()
+			throws Exception {
+		// An image or file is stamped when it is picked, which may be
+		// before a post written in between. Once its post is sent it must
+		// go after that post in the file, or the file changes in the
+		// middle and every reader starts again
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] bytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH + 1);
+		long pickTime = c0.getClock().currentTimeMillis();
+		FileHeader picked = blogManager0.addLocalFile(g, pickTime, "a.bin",
+				"application/octet-stream",
+				() -> new ByteArrayInputStream(bytes));
+		lastPostTime = pickTime + 100;
+		channelManager0.post(g, getRandomString(42));
+		byte[] before = exportChannel(g);
+		BlogPost post = blogPostFactory.createBlogPost(g, pickTime + 200,
+				null, channel.getLocalAuthor(), "The file", emptyList(),
+				singletonList(picked));
+		blogManager0.addLocalPost(post);
+		byte[] after = exportChannel(g);
+		assertTrue(after.length > before.length);
+		assertArrayEquals(before, Arrays.copyOf(after, before.length));
+		ByteArrayOutputStream withFiles = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, withFiles, true);
+		assertArrayEquals(before,
+				Arrays.copyOf(withFiles.toByteArray(), before.length));
+	}
+
+	@Test
+	public void testAMirrorServingAWebPageDoesNotForgetTheFile()
+			throws Exception {
+		// A static host answers a missing file with a page and status
+		// 200. That says nothing about the channel's file, so what we
+		// knew of it is kept, and the next mirror is asked for changes
+		// rather than for the whole file
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] stream = exportChannel(g);
+
+		MockWebServer good = new MockWebServer();
+		good.enqueue(new MockResponse().setHeader("ETag", "\"one\"")
+				.setBody(new Buffer().write(stream)));
+		good.enqueue(new MockResponse().setResponseCode(304));
+		good.start();
+		MockWebServer bad = new MockWebServer();
+		bad.enqueue(new MockResponse().setHeader("Content-Type", "text/html")
+				.setBody("<html><body>Not found</body></html>"));
+		bad.start();
+		try {
+			subscribeWithMirror(g, good.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			channelManager1.setMirrors(g, asList(
+					bad.url("/c.briar").toString(),
+					good.url("/c.briar").toString()));
+			assertEquals(UNCHANGED,
+					channelManager1.fetchChannel(g).getOutcome());
+			good.takeRequest();
+			assertEquals("\"one\"",
+					good.takeRequest().getHeader("If-None-Match"));
+		} finally {
+			good.shutdown();
+			bad.shutdown();
+		}
+	}
+
+	@Test
+	public void testAnOwnerDoesNotFetchTheirOwnChannel() throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		MockWebServer server = new MockWebServer();
+		server.start();
+		try {
+			channelManager0.setMirrors(g,
+					singletonList(server.url("/c.briar").toString()));
+			channelManager0.fetchAllChannels();
+			assertEquals(0, server.getRequestCount());
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testALinkGivesMirrorsToAChannelHeldFromAFile()
+			throws Exception {
+		// A channel that came from a file has nowhere to fetch from until
+		// a link arrives
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		channelManager1.importChannel(
+				new ByteArrayInputStream(exportChannel(g)), true);
+		assertTrue(channelManager1.getMirrors(g).isEmpty());
+		channelManager0.setMirrors(g,
+				singletonList("http://mirror.example/c.briar"));
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		assertEquals(singletonList("http://mirror.example/c.briar"),
+				channelManager1.getMirrors(g));
 	}
 
 	@Test

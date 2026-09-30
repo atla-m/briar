@@ -137,6 +137,7 @@ import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_ETAG;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_MESSAGES;
+import static org.briarproject.briar.channel.ChannelConstants.MSG_KEY_FILE_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_LAST_MODIFIED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
@@ -460,7 +461,13 @@ class ChannelManagerImpl
 		// to replace the mirrors we have
 		boolean held = db.transactionWithResult(true,
 				txn -> db.containsGroup(txn, blog.getId()));
-		if (held) return blog;
+		if (held) {
+			// A channel that came from a file has nowhere to fetch from
+			// until a link arrives, so a link's mirrors are welcome then
+			if (getMirrors(blog.getId()).isEmpty() && !parsed.mirrors.isEmpty())
+				setMirrors(blog.getId(), parsed.mirrors);
+			return blog;
+		}
 		db.transaction(false, txn -> blogManager.addBlog(txn, blog));
 		if (!parsed.mirrors.isEmpty()) setMirrors(blog.getId(), parsed.mirrors);
 		return blog;
@@ -889,6 +896,18 @@ class ChannelManagerImpl
 				throw new ChannelTooLargeException("Channel is too large");
 			throw e;
 		} finally {
+			// A mirror that served something else entirely, such as a
+			// "not found" page with status 200, has told us nothing about
+			// the channel's file, so what we knew of it is kept
+			if (p.started) storeState(g, offset, p, etag, lastModified, total);
+		}
+		return new FetchResult(FETCHED, p.messages);
+	}
+
+	private void storeState(GroupId g, long offset, Progress p,
+			@Nullable String etag, @Nullable String lastModified,
+			long total) throws DbException {
+		{
 			// The offset is where the last whole message ended, not how
 			// far the stream got, so a fetch that breaks in the middle of
 			// a message is continued from a place the next one can parse.
@@ -903,7 +922,6 @@ class ChannelManagerImpl
 					complete ? etag : null,
 					complete ? lastModified : null);
 		}
-		return new FetchResult(FETCHED, p.messages);
 	}
 
 	/**
@@ -930,6 +948,7 @@ class ChannelManagerImpl
 
 		private int messages = 0;
 		private long bytes = 0;
+		private boolean started = false;
 		private boolean complete = false;
 
 		private Progress(long budget, int messagesBefore, int maxMessages) {
@@ -965,8 +984,13 @@ class ChannelManagerImpl
 	public void fetchAllChannels() {
 		try {
 			List<GroupId> toFetch = db.transactionWithResult(true, txn -> {
+				// An owner sets mirrors so the link carries them, but
+				// has nothing to fetch from them
+				Set<GroupId> owned = new HashSet<>();
+				for (Channel c : getChannels(txn)) owned.add(c.getBlogId());
 				List<GroupId> ids = new ArrayList<>();
 				for (GroupId g : blogManager.getBlogIds(txn)) {
+					if (owned.contains(g)) continue;
 					if (!getMirrors(txn, g).isEmpty()) ids.add(g);
 				}
 				return ids;
@@ -993,28 +1017,36 @@ class ChannelManagerImpl
 	public void exportChannel(GroupId g, OutputStream out, boolean withFiles)
 			throws DbException, IOException {
 		BdfWriter w = bdfWriterFactory.createWriter(out);
-		db.transaction(true, txn -> {
-			Blog blog = blogManager.getBlog(txn, g);
-			if (!blog.isChannel()) throw new NoSuchChannelException();
-			Set<MessageId> leftOut = getLeftOut(txn, g, withFiles);
-			// Header: the format version and the channel's descriptor, so
-			// a reader can derive the group and check it is the channel
-			// they subscribed to
-			try {
-				w.writeList(BdfList.of(STREAM_FORMAT_VERSION,
-						blog.getGroup().getDescriptor()));
-				// Each message as it was signed, so the reader validates
-				// it rather than trusting whoever served the stream
-				for (MessageId m : getStreamOrder(txn, g)) {
-					if (leftOut.contains(m)) continue;
-					Message message = db.getMessage(txn, m);
-					w.writeList(BdfList.of(message.getTimestamp(),
-							message.getBody()));
+		try {
+			db.transaction(true, txn -> {
+				Blog blog = blogManager.getBlog(txn, g);
+				if (!blog.isChannel()) throw new NoSuchChannelException();
+				Set<MessageId> leftOut = getLeftOut(txn, g, withFiles);
+				// Header: the format version and the channel's descriptor, so
+				// a reader can derive the group and check it is the channel
+				// they subscribed to
+				try {
+					w.writeList(BdfList.of(STREAM_FORMAT_VERSION,
+							blog.getGroup().getDescriptor()));
+					// Each message as it was signed, so the reader validates
+					// it rather than trusting whoever served the stream
+					for (MessageId m : getStreamOrder(txn, g)) {
+						if (leftOut.contains(m)) continue;
+						Message message = db.getMessage(txn, m);
+						w.writeList(BdfList.of(message.getTimestamp(),
+								message.getBody()));
+					}
+				} catch (IOException e) {
+					throw new DbException(e);
 				}
-			} catch (IOException e) {
-				throw new DbException(e);
-			}
-		});
+			});
+		} catch (DbException e) {
+			// The writer's failure, such as a full card or a revoked
+			// permission, is not a database error
+			if (e.getCause() instanceof IOException)
+				throw (IOException) e.getCause();
+			throw e;
+		}
 		w.flush();
 	}
 
@@ -1112,22 +1144,30 @@ class ChannelManagerImpl
 			OutputStream out) throws DbException, IOException {
 		FileHeader h = blogManager.getFileHeader(g, manifestId);
 		BdfWriter w = bdfWriterFactory.createWriter(out);
-		db.transaction(true, txn -> {
-			List<MessageId> chunks =
-					getChunksInOrder(txn, g, manifestId, h.getChunkCount());
-			// Header: the format version and the manifest, so a reader can
-			// check this is the file they asked for
-			try {
-				w.writeList(BdfList.of(FILE_STREAM_FORMAT_VERSION,
-						manifestId));
-				for (MessageId id : chunks) {
-					Message m = db.getMessage(txn, id);
-					w.writeList(BdfList.of(m.getTimestamp(), m.getBody()));
+		try {
+			db.transaction(true, txn -> {
+				List<MessageId> chunks =
+						getChunksInOrder(txn, g, manifestId, h.getChunkCount());
+				// Header: the format version and the manifest, so a reader can
+				// check this is the file they asked for
+				try {
+					w.writeList(BdfList.of(FILE_STREAM_FORMAT_VERSION,
+							manifestId));
+					for (MessageId id : chunks) {
+						Message m = db.getMessage(txn, id);
+						w.writeList(BdfList.of(m.getTimestamp(), m.getBody()));
+					}
+				} catch (IOException e) {
+					throw new DbException(e);
 				}
-			} catch (IOException e) {
-				throw new DbException(e);
-			}
-		});
+			});
+		} catch (DbException e) {
+			// The writer's failure, such as a full card or a revoked
+			// permission, is not a database error
+			if (e.getCause() instanceof IOException)
+				throw (IOException) e.getCause();
+			throw e;
+		}
 		w.flush();
 	}
 
@@ -1210,25 +1250,78 @@ class ChannelManagerImpl
 	private FetchResult fetchFileFrom(GroupId g, FileHeader h,
 			long manifestTimestamp, HttpUrl url)
 			throws DbException, IOException {
-		Request request = new Request.Builder().url(url).get().build();
-		Response response =
-				httpClient().newCall(request).execute();
+		// A fetch cut off part way continues from the end of the last
+		// chunk stored. Every mirror serves the same bytes for a file,
+		// as the export order is fixed, so the offset holds for any
+		// mirror; one that serves something else is started again.
+		MessageId manifestId = h.getManifestId();
+		long offset = getFileFetchOffset(manifestId);
+		Request.Builder b = new Request.Builder().url(url).get();
+		if (offset > 0) b.addHeader("Range", "bytes=" + offset + "-");
+		Response response = httpClient().newCall(b.build()).execute();
 		try (ResponseBody body = response.body()) {
+			int code = response.code();
+			if (code == 416 && offset > 0) {
+				storeFileFetchOffset(manifestId, 0);
+				throw new IOException("Attachment file changed");
+			}
 			if (!response.isSuccessful() || body == null)
-				throw new IOException("Response " + response.code());
+				throw new IOException("Response " + code);
+			boolean ranged = offset > 0 && code == 206;
+			if (ranged) {
+				long start = rangeStart(response);
+				if (start != -1 && start != offset)
+					throw new IOException("Unexpected range");
+			}
+			long from = ranged ? offset : 0;
 			// The manifest fixes how much this file can be: its bytes, and a
 			// little framing for each chunk. One byte beyond that is how a
 			// file too large to accept is told apart from one that is full
 			long budget = h.getSize() +
 					(h.getChunkCount() + 1L) * MAX_FILE_ENTRY_OVERHEAD;
-			CountingInputStream in =
-					new CountingInputStream(body.byteStream(), budget + 1);
-			int read = importFileEntries(g, h, manifestTimestamp, in);
-			if (in.getBytesRead() > budget)
-				throw new IOException("Attachment file is too large");
-			return new FetchResult(FETCHED, read);
+			CountingInputStream in = new CountingInputStream(
+					body.byteStream(), budget + 1 - from);
+			try {
+				int read = importFileEntries(g, h, manifestTimestamp, in,
+						!ranged, from);
+				if (from + in.getBytesRead() > budget)
+					throw new IOException("Attachment file is too large");
+				return new FetchResult(FETCHED, read);
+			} catch (FormatException e) {
+				// Not the rest of the file we were reading, or not a
+				// file at all: start again next time
+				if (ranged) storeFileFetchOffset(manifestId, 0);
+				throw new IOException(e);
+			}
+		}
+	}
+
+	private long getFileFetchOffset(MessageId manifestId)
+			throws DbException {
+		return db.transactionWithResult(true, txn -> {
+			try {
+				return clientHelper.getMessageMetadataAsDictionary(txn,
+						manifestId).getLong(MSG_KEY_FILE_FETCH_OFFSET, 0L);
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+		});
+	}
+
+	private void storeFileFetchOffset(MessageId manifestId, long offset)
+			throws DbException {
+		db.transaction(false, txn ->
+				storeFileFetchOffset(txn, manifestId, offset));
+	}
+
+	private void storeFileFetchOffset(Transaction txn, MessageId manifestId,
+			long offset) throws DbException {
+		try {
+			clientHelper.mergeMessageMetadata(txn, manifestId,
+					BdfDictionary.of(new BdfEntry(MSG_KEY_FILE_FETCH_OFFSET,
+							offset)));
 		} catch (FormatException e) {
-			throw new IOException(e);
+			throw new DbException(e);
 		}
 	}
 
@@ -1240,15 +1333,20 @@ class ChannelManagerImpl
 	 * checked against the manifest's hash when it is delivered.
 	 */
 	private int importFileEntries(GroupId g, FileHeader h,
-			long manifestTimestamp, InputStream in)
+			long manifestTimestamp, CountingInputStream in,
+			boolean expectHeader, long from)
 			throws DbException, IOException, FormatException {
 		BdfReader r = bdfReaderFactory.createReader(in);
-		BdfList header = r.readList();
-		checkSize(header, 2);
-		if (header.getInt(0) != FILE_STREAM_FORMAT_VERSION)
-			throw new FormatException();
-		if (!Arrays.equals(header.getRaw(1), h.getManifestId().getBytes()))
-			throw new FormatException();
+		if (expectHeader) {
+			BdfList header = r.readList();
+			checkSize(header, 2);
+			if (header.getInt(0) != FILE_STREAM_FORMAT_VERSION)
+				throw new FormatException();
+			if (!Arrays.equals(header.getRaw(1),
+					h.getManifestId().getBytes())) {
+				throw new FormatException();
+			}
+		}
 		int read = 0;
 		while (!r.eof()) {
 			if (read == h.getChunkCount()) throw new FormatException();
@@ -1271,6 +1369,10 @@ class ChannelManagerImpl
 				if (!blogManager.isChunkOf(txn, h.getManifestId(), index,
 						body, descriptorLength)) return false;
 				db.importMessage(txn, m);
+				// The reader has no bytes in hand between entries, so
+				// this is exactly where the chunk ended
+				storeFileFetchOffset(txn, h.getManifestId(),
+						from + in.getBytesRead());
 				return true;
 			});
 			if (!stored) throw new FormatException();
@@ -1367,23 +1469,76 @@ class ChannelManagerImpl
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
+		// An image or file is stamped when it is picked, which may be
+		// before a post written in between, so by its own timestamp it
+		// would land in the middle of the file once its post is sent,
+		// and every reader would have to start again. It takes its
+		// post's timestamp instead, and goes just before the post.
+		Map<MessageId, Long> carried = getReferenceTimestamps(txn, g);
+		Map<MessageId, Integer> ranks = new HashMap<>(ids.size());
 		for (MessageId m : ids) {
 			BdfDictionary meta = metadata.get(m);
 			Long timestamp = null;
+			Long type = null;
 			try {
-				if (meta != null) timestamp = meta.getOptionalLong(KEY_TIMESTAMP);
+				if (meta != null) {
+					timestamp = meta.getOptionalLong(KEY_TIMESTAMP);
+					type = meta.getOptionalLong(KEY_TYPE);
+				}
 			} catch (FormatException e) {
 				throw new DbException(e);
 			}
 			if (timestamp == null) timestamp = db.getMessage(txn, m).getTimestamp();
+			int rank = 2;
+			if (type != null && (type == FILE_MANIFEST.getInt() ||
+					type == ATTACHMENT.getInt())) {
+				Long post = carried.get(m);
+				if (post != null) timestamp = post;
+				rank = 0;
+			} else if (type != null && type == FILE_CHUNK.getInt()) {
+				try {
+					byte[] manifestId = meta.getOptionalRaw(KEY_FILE_MANIFEST_ID);
+					Long post = manifestId == null ? null :
+							carried.get(new MessageId(manifestId));
+					if (post != null) timestamp = post;
+				} catch (FormatException e) {
+					throw new DbException(e);
+				}
+				rank = 1;
+			}
 			timestamps.put(m, timestamp);
+			ranks.put(m, rank);
 		}
 		Collections.sort(sorted, (a, b) -> {
 			int c = Long.compare(requireNonNull(timestamps.get(a)),
 					requireNonNull(timestamps.get(b)));
+			if (c != 0) return c;
+			c = Integer.compare(requireNonNull(ranks.get(a)),
+					requireNonNull(ranks.get(b)));
 			return c != 0 ? c : a.compareTo(b);
 		});
 		return sorted;
+	}
+
+	/**
+	 * Returns, for each image and file a post carries, the timestamp of
+	 * the earliest post that carries it.
+	 */
+	private Map<MessageId, Long> getReferenceTimestamps(Transaction txn,
+			GroupId g) throws DbException {
+		Map<MessageId, Long> carried = new HashMap<>();
+		for (BlogPostHeader h : blogManager.getPostHeaders(txn, g)) {
+			long t = h.getTimestamp();
+			for (AttachmentHeader a : h.getAttachmentHeaders()) {
+				Long old = carried.get(a.getMessageId());
+				if (old == null || t < old) carried.put(a.getMessageId(), t);
+			}
+			for (FileHeader f : h.getFileHeaders()) {
+				Long old = carried.get(f.getManifestId());
+				if (old == null || t < old) carried.put(f.getManifestId(), t);
+			}
+		}
+		return carried;
 	}
 
 	@Override
@@ -1468,6 +1623,7 @@ class ChannelManagerImpl
 			// message is still checked against that channel's key.
 			g = requireNonNull(expected);
 		}
+		p.started = true;
 		while (!r.eof()) {
 			// The limits apply to the file, so what earlier fetches of
 			// it stored counts against them too. Going over one is not a

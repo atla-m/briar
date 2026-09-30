@@ -3,6 +3,7 @@ package org.briarproject.briar.test;
 import org.briarproject.bramble.BrambleCoreIntegrationTestEagerSingletons;
 import org.briarproject.bramble.BrambleCoreModule;
 import org.briarproject.bramble.api.contact.ContactManager;
+import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.identity.AuthorFactory;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
@@ -114,6 +115,8 @@ public interface BriarIntegrationTestComponent
 	ConversationManager getConversationManager();
 
 	DatabaseComponent getDatabaseComponent();
+
+	BdfReaderFactory getBdfReaderFactory();
 
 	BlogManager getBlogManager();
 
