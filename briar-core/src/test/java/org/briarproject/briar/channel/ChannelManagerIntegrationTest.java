@@ -22,6 +22,7 @@ import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.api.channel.Channel;
 import org.briarproject.briar.api.channel.ChannelManager;
+import org.briarproject.briar.api.channel.FetchResult;
 import org.briarproject.briar.api.channel.NoSuchChannelException;
 import org.briarproject.briar.test.BriarIntegrationTest;
 import org.briarproject.briar.test.BriarIntegrationTestComponent;
@@ -41,6 +42,7 @@ import java.util.Collection;
 import java.util.Locale;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 
 import static java.util.Arrays.asList;
@@ -56,6 +58,8 @@ import static org.briarproject.briar.api.channel.ChannelConstants.FILE_STREAM_FO
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.IN_PROGRESS;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.TOO_LARGE;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.NOT_SUPPORTED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
@@ -528,6 +532,165 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testTriesTheNextMirrorWhenOneLagsBehind() throws Exception {
+		// A mirror that has less of the file than we do may be lagging
+		// behind the one we read from, so the next mirror is asked to
+		// continue the file before it is taken to have been replaced,
+		// which would mean reading the whole file again
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] one = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] two = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] three = exportChannel(g);
+
+		MockWebServer lagging = new MockWebServer();
+		lagging.enqueue(new MockResponse().setBody(new Buffer().write(two)));
+		// Still serving the older file, which ends before where we are
+		lagging.enqueue(new MockResponse().setResponseCode(416)
+				.setHeader("Content-Range", "bytes */" + one.length));
+		lagging.start();
+		MockWebServer current = new MockWebServer();
+		current.enqueue(new MockResponse().setResponseCode(206)
+				.setHeader("Content-Range", "bytes " + two.length + "-" +
+						(three.length - 1) + "/" + three.length)
+				.setBody(new Buffer().write(three, two.length,
+						three.length - two.length)));
+		current.start();
+		try {
+			channelManager0.setMirrors(g, asList(
+					lagging.url("/c.briar").toString(),
+					current.url("/c.briar").toString()));
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(2);
+
+			FetchResult result = channelManager1.fetchChannel(g);
+			assertEquals(FETCHED, result.getOutcome());
+			assertEquals(1, result.getMessages());
+			awaitPendingMessageDelivery(1);
+			assertEquals(3, blogManager1.getPostHeaders(g).size());
+			// The lagging mirror was not asked for the whole file
+			assertEquals(2, lagging.getRequestCount());
+			assertEquals("bytes=" + two.length + "-",
+					current.takeRequest().getHeader("Range"));
+		} finally {
+			lagging.shutdown();
+			current.shutdown();
+		}
+	}
+
+	@Test
+	public void testAMirrorWithExactlyWhatWeHaveIsUpToDate()
+			throws Exception {
+		// A mirror that gave no tag or date answers a request for the
+		// rest of an unchanged file with 416, and its Content-Range says
+		// the file ends where we stopped: nothing new, not a changed file
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] stream = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(stream)));
+		server.enqueue(new MockResponse().setResponseCode(416)
+				.setHeader("Content-Range", "bytes */" + stream.length));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			assertEquals(UNCHANGED,
+					channelManager1.fetchChannel(g).getOutcome());
+			assertEquals(2, server.getRequestCount());
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testACappedRangeIsNotTakenForTheWholeFile() throws Exception {
+		// A mirror may serve less of a range than was asked for. If it
+		// says how long the file is, the fetch is not complete until we
+		// have that much, so the validators are not kept and the next
+		// fetch asks for the rest rather than being told nothing changed
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] one = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] two = exportChannel(g);
+		channelManager0.post(g, getRandomString(42));
+		byte[] three = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		// No validators, so the next fetch asks for a range
+		server.enqueue(new MockResponse().setBody(new Buffer().write(one)));
+		// Asked for the rest, the mirror serves only the second post,
+		// saying the file goes on past it
+		server.enqueue(new MockResponse().setResponseCode(206)
+				.setHeader("ETag", "\"three\"")
+				.setHeader("Content-Range", "bytes " + one.length + "-" +
+						(two.length - 1) + "/" + three.length)
+				.setBody(new Buffer().write(two, one.length,
+						two.length - one.length)));
+		server.enqueue(new MockResponse().setResponseCode(206)
+				.setHeader("ETag", "\"three\"")
+				.setHeader("Content-Range", "bytes " + two.length + "-" +
+						(three.length - 1) + "/" + three.length)
+				.setBody(new Buffer().write(three, two.length,
+						three.length - two.length)));
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			awaitPendingMessageDelivery(3);
+			assertEquals(3, blogManager1.getPostHeaders(g).size());
+			server.takeRequest();
+			server.takeRequest();
+			RecordedRequest third = server.takeRequest();
+			assertNull(third.getHeader("If-None-Match"));
+			assertEquals("bytes=" + two.length + "-",
+					third.getHeader("Range"));
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testAFileAttachedToADraftStaysOutOfTheChannelFile()
+			throws Exception {
+		// A file is stored when it is picked, before the post that
+		// carries it is written. Until a post names it, it is not the
+		// channel's content, and putting it in the file would make the
+		// file change in the middle when the draft is dropped
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] before = exportChannel(g);
+		byte[] draftBytes = getRandomBytes(123);
+		FileHeader draft = blogManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "draft.bin",
+				"application/octet-stream",
+				() -> new ByteArrayInputStream(draftBytes));
+		assertArrayEquals(before, exportChannel(g));
+		assertTrue(channelManager0.getCompleteFiles(g).isEmpty());
+		// With files included, its chunks stay out too
+		ByteArrayOutputStream withFiles = new ByteArrayOutputStream();
+		channelManager0.exportChannel(g, withFiles, true);
+		assertArrayEquals(before, withFiles.toByteArray());
+		// Once a post carries it, it is in
+		FileHeader posted = postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH);
+		assertEquals(singletonList(posted.getManifestId()),
+				new ArrayList<>(channelManager0.getCompleteFiles(g)));
+		blogManager0.removeFile(draft);
+	}
+
+	@Test
 	public void testRejectsAForgedPostServedByAMirror() throws Exception {
 		// A mirror that tries to put words in the channel's mouth
 		Channel channel = channelManager0.createChannel("Announcements");
@@ -847,8 +1010,8 @@ public class ChannelManagerIntegrationTest
 			subscribeWithMirror(g, server.url("/c.briar").toString());
 			channelManager1.fetchChannel(g);
 			awaitPendingMessageDelivery(4);
-			assertEquals(UNREACHABLE, channelManager1.fetchChannelFile(g,
-					wanted.getManifestId()).getOutcome());
+			assertEquals(UNREACHABLE,
+					fetchFileWhenFree(g, wanted.getManifestId()));
 			assertEquals(0,
 					blogManager1.getFileStatus(wanted).getChunksReceived());
 		} finally {
@@ -893,8 +1056,8 @@ public class ChannelManagerIntegrationTest
 			subscribeWithMirror(g, server.url("/c.briar").toString());
 			channelManager1.fetchChannel(g);
 			awaitPendingMessageDelivery(2);
-			assertEquals(UNREACHABLE, channelManager1.fetchChannelFile(g,
-					file.getManifestId()).getOutcome());
+			assertEquals(UNREACHABLE,
+					fetchFileWhenFree(g, file.getManifestId()));
 			assertEquals(0,
 					blogManager1.getFileStatus(file).getChunksReceived());
 			// Nothing was stored, not even a chunk found invalid later
@@ -1401,12 +1564,15 @@ public class ChannelManagerIntegrationTest
 			channelManager1.setMirrors(g,
 					singletonList(server.url("/c.briar").toString()));
 			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
-			// The mirror is dropped rather than the file read again:
-			// there is nothing wrong with the file, we just won't store
-			// it, so asking for it once more would be wasted work
-			assertEquals(UNREACHABLE,
+			// The file is reported too large rather than read again:
+			// there is nothing wrong with it, we just won't store it.
+			// The budget runs out in the middle of the extra message,
+			// which must not be taken for a file that has changed, or
+			// the whole file would be fetched again every time.
+			assertEquals(TOO_LARGE,
 					channelManager1.fetchChannel(g).getOutcome());
 
+			assertEquals(2, server.getRequestCount());
 			server.takeRequest();
 			assertEquals("bytes=" + head.size() + "-",
 					server.takeRequest().getHeader("Range"));
@@ -1632,6 +1798,23 @@ public class ChannelManagerIntegrationTest
 		});
 		server.start();
 		return server;
+	}
+
+	/**
+	 * Fetches a file, waiting for the fetch a manifest's arrival starts
+	 * in the background to finish first.
+	 */
+	private FetchResult.Outcome fetchFileWhenFree(GroupId g,
+			MessageId manifestId) throws Exception {
+		long deadline = System.currentTimeMillis() + 20_000;
+		while (true) {
+			FetchResult.Outcome outcome =
+					channelManager1.fetchChannelFile(g, manifestId).getOutcome();
+			if (outcome != IN_PROGRESS) return outcome;
+			if (System.currentTimeMillis() > deadline)
+				throw new AssertionError("Fetch did not finish");
+			Thread.sleep(50);
+		}
 	}
 
 	private String findFileRequest(MockWebServer server) throws Exception {

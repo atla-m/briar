@@ -365,6 +365,12 @@ public class ChannelManageFragment extends BaseFragment
 			case UNCHANGED:
 				showMessage(R.string.channels_fetch_none);
 				return;
+			case TOO_LARGE:
+				showMessage(R.string.channels_fetch_too_large);
+				return;
+			case IN_PROGRESS:
+				showMessage(R.string.channels_fetch_in_progress);
+				return;
 			case FETCHED:
 				int n = result.getMessages();
 				Toast.makeText(requireContext(),

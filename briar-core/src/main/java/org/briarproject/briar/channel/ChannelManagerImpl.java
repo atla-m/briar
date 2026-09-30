@@ -44,6 +44,7 @@ import org.briarproject.briar.api.attachment.event.FileRequestedEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
+import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
 import org.briarproject.briar.api.channel.Channel;
@@ -70,6 +71,7 @@ import java.util.Locale;
 import java.util.Map.Entry;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
@@ -104,6 +106,7 @@ import static org.briarproject.bramble.util.ValidationUtils.checkSize;
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_PUSHED_FILE_SIZE;
 import static org.briarproject.briar.api.blog.BlogConstants.KEY_TYPE;
 import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
+import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_MANIFEST;
 import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
 import static org.briarproject.briar.api.channel.ChannelConstants.FETCH_DELAY_INITIAL;
@@ -126,6 +129,8 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.IN_PROGRESS;
+import static org.briarproject.briar.api.channel.FetchResult.Outcome.TOO_LARGE;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_CHUNK_INDEX;
 import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_ETAG;
@@ -156,6 +161,12 @@ class ChannelManagerImpl
 	private static final Pattern ETAG_REGEX =
 			Pattern.compile("^(W/)?\"[\\x21\\x23-\\x7e]*\"$");
 	private static final int MAX_ETAG_LENGTH = 256;
+	/**
+	 * A Content-Range header: the range served, or a star for none, and
+	 * the file's full length, or a star if the mirror doesn't know it.
+	 */
+	private static final Pattern CONTENT_RANGE =
+			Pattern.compile("^bytes (?:(\\d+)-(\\d+)|\\*)/(\\d+|\\*)$");
 
 	private static final Logger LOG =
 			getLogger(ChannelManagerImpl.class.getName());
@@ -175,6 +186,12 @@ class ChannelManagerImpl
 	private final Executor ioExecutor;
 	private final WeakSingletonProvider<OkHttpClient> httpClientProvider;
 	private final AtomicBoolean fetcherStarted = new AtomicBoolean(false);
+	// Channels and files being fetched now, so that a scheduled fetch,
+	// "Fetch now" and the file triggers don't read the same bytes twice
+	// and store contradictory resume state
+	private final Set<GroupId> fetching = ConcurrentHashMap.newKeySet();
+	private final Set<MessageId> fetchingFiles =
+			ConcurrentHashMap.newKeySet();
 
 	/**
 	 * The most framing, in bytes, an attachment file may add to each chunk
@@ -545,6 +562,15 @@ class ChannelManagerImpl
 
 	@Override
 	public FetchResult fetchChannel(GroupId g) throws DbException {
+		if (!fetching.add(g)) return new FetchResult(IN_PROGRESS, 0);
+		try {
+			return fetchChannelNow(g);
+		} finally {
+			fetching.remove(g);
+		}
+	}
+
+	private FetchResult fetchChannelNow(GroupId g) throws DbException {
 		List<String> mirrors = getMirrors(g);
 		if (mirrors.isEmpty()) return new FetchResult(NO_MIRRORS, 0);
 		BdfDictionary meta = db.transactionWithResult(true, txn -> {
@@ -566,28 +592,69 @@ class ChannelManagerImpl
 		}
 		// Try each mirror until one answers. A mirror can withhold the
 		// channel but can't change it, so trying another is always safe.
+		// A mirror that has less of the file than we do may be lagging
+		// behind the one we read from, so every mirror is asked to
+		// continue the file before it is taken to have been replaced.
+		boolean changed = false;
 		for (String mirror : mirrors) {
-			FetchResult result;
 			try {
-				result = fetchFrom(g, mirror, state);
+				return fetched(g, fetchFrom(g, mirror, state,
+						state.offset > 0));
+			} catch (ChangedFileException e) {
+				changed = true;
+			} catch (ChannelTooLargeException e) {
+				// The limit is on the file, not the mirror, so no other
+				// mirror can help
+				logException(LOG, INFO, e);
+				return new FetchResult(TOO_LARGE, 0);
 			} catch (IOException e) {
 				logException(LOG, INFO, e);
-				continue;
 			}
-			// The channel's file carries its posts and the manifests of
-			// their files; small files are fetched now, each from its own
-			// file beside the channel's
-			try {
-				fetchSmallFiles(g);
-			} catch (DbException e) {
-				logException(LOG, WARNING, e);
+		}
+		if (changed) {
+			// The file we were reading is not the file being served
+			// now, so read it from the beginning, forgetting what we
+			// knew about the old one. We must forget the validators
+			// as well as the offset: a mirror that gave the same tag
+			// or date for a file we can't continue would otherwise
+			// answer that there was nothing new, and we would never
+			// read the file it is actually serving.
+			if (LOG.isLoggable(INFO)) {
+				LOG.info("Channel file changed, fetching in full");
 			}
-			return result;
+			FetchState fresh = new FetchState(null, null, 0, 0);
+			for (String mirror : mirrors) {
+				try {
+					return fetched(g, fetchFrom(g, mirror, fresh, false));
+				} catch (ChangedFileException e) {
+					// Only a fetch that is continuing a file can throw this
+					throw new AssertionError(e);
+				} catch (ChannelTooLargeException e) {
+					logException(LOG, INFO, e);
+					return new FetchResult(TOO_LARGE, 0);
+				} catch (IOException e) {
+					logException(LOG, INFO, e);
+				}
+			}
 		}
 		// Not the same as being up to date: we may be missing everything
 		// published since we last fetched
 		if (LOG.isLoggable(INFO)) LOG.info("No mirror answered for channel");
 		return new FetchResult(UNREACHABLE, 0);
+	}
+
+	/**
+	 * Called when a mirror has served the channel's file. The file carries
+	 * its posts and the manifests of their files; small files are fetched
+	 * now, each from its own file beside the channel's.
+	 */
+	private FetchResult fetched(GroupId g, FetchResult result) {
+		try {
+			fetchSmallFiles(g);
+		} catch (DbException e) {
+			logException(LOG, WARNING, e);
+		}
+		return result;
 	}
 
 	/**
@@ -613,38 +680,24 @@ class ChannelManagerImpl
 		}
 	}
 
-	private FetchResult fetchFrom(GroupId g, String mirror, FetchState state)
-			throws DbException, IOException {
-		if (state.offset > 0) {
-			try {
-				return fetchFrom(g, mirror, state, true);
-			} catch (ChangedFileException e) {
-				// The file we were reading is not the file being served
-				// now, so read it from the beginning, forgetting what we
-				// knew about the old one. We must forget the validators
-				// as well as the offset: a mirror that gave the same tag
-				// or date for a file we can't continue would otherwise
-				// answer that there was nothing new, and we would never
-				// read the file it is actually serving.
-				if (LOG.isLoggable(INFO)) {
-					LOG.info("Channel file changed, fetching in full");
-				}
-				return fetchFrom(g, mirror, new FetchState(null, null, 0, 0));
-			}
-		}
-		try {
-			return fetchFrom(g, mirror, state, false);
-		} catch (ChangedFileException e) {
-			// Only a fetch that is continuing a file can throw this
-			throw new AssertionError(e);
-		}
-	}
-
 	/**
 	 * Thrown when a mirror's answer cannot be read as the continuation of
 	 * the file we already have part of.
 	 */
 	private static class ChangedFileException extends Exception {
+	}
+
+	/**
+	 * Thrown when the channel's file has grown past what we will store
+	 * from a mirror, in bytes or in messages, over the file's whole life.
+	 * There is nothing wrong with the file; we just won't read the rest
+	 * of it, from this mirror or any other.
+	 */
+	private static class ChannelTooLargeException extends IOException {
+
+		private ChannelTooLargeException(String message) {
+			super(message);
+		}
 	}
 
 	private FetchResult fetchFrom(GroupId g, String mirror, FetchState state,
@@ -669,27 +722,80 @@ class ChannelManagerImpl
 				if (LOG.isLoggable(INFO)) LOG.info("Channel unchanged");
 				return new FetchResult(UNCHANGED, 0);
 			}
-			// A mirror that has less of the file than we do is not
-			// serving the file we were reading: it has been replaced by
-			// a shorter one. Read that from the beginning, rather than
-			// asking for ever for a range it will never have.
-			if (code == 416 && resume) throw new ChangedFileException();
+			if (code == 416 && resume) {
+				// The mirror has no bytes past where we stopped. If its
+				// file ends exactly there, it has what we have, which
+				// happens when the mirror gave no tag or date to ask
+				// with. If its file is shorter, it isn't serving the
+				// file we were reading: the file was replaced, or this
+				// mirror lags behind the one we read from.
+				if (totalLength(response) == state.offset) {
+					if (LOG.isLoggable(INFO)) LOG.info("Channel unchanged");
+					return new FetchResult(UNCHANGED, 0);
+				}
+				throw new ChangedFileException();
+			}
 			if (!response.isSuccessful() || body == null)
 				throw new IOException("Response " + code);
 			// A mirror that doesn't do ranges answers 200 with the whole
 			// file, which is the first fetch all over again
 			boolean ranged = resume && code == 206;
+			long total;
+			if (ranged) {
+				long start = rangeStart(response);
+				if (start != -1 && start != state.offset)
+					throw new IOException("Unexpected range");
+				total = totalLength(response);
+			} else {
+				total = body.contentLength();
+			}
 			return importFrom(g, body.byteStream(),
 					ranged ? state.offset : 0,
 					ranged ? state.messages : 0, !ranged,
 					etagIfSendable(response),
-					lastModifiedIfSettled(response));
+					lastModifiedIfSettled(response), total);
 		} catch (FormatException e) {
 			// The mirror served something that isn't this channel, or
 			// isn't the rest of the file we were reading
 			if (resume) throw new ChangedFileException();
 			throw new IOException(e);
 		}
+	}
+
+	/**
+	 * Returns the full length of the file a Content-Range header
+	 * describes, or -1 if there is no such header or it doesn't say.
+	 */
+	private static long totalLength(Response response) {
+		Matcher m = contentRange(response);
+		if (m == null || m.group(3).equals("*")) return -1;
+		try {
+			return Long.parseLong(m.group(3));
+		} catch (NumberFormatException e) {
+			return -1;
+		}
+	}
+
+	/**
+	 * Returns the offset at which the range a Content-Range header
+	 * describes starts, or -1 if there is no such header or no range.
+	 */
+	private static long rangeStart(Response response) {
+		Matcher m = contentRange(response);
+		if (m == null || m.group(1) == null) return -1;
+		try {
+			return Long.parseLong(m.group(1));
+		} catch (NumberFormatException e) {
+			return -1;
+		}
+	}
+
+	@Nullable
+	private static Matcher contentRange(Response response) {
+		String header = response.header("Content-Range");
+		if (header == null) return null;
+		Matcher m = CONTENT_RANGE.matcher(header);
+		return m.matches() ? m : null;
 	}
 
 	/**
@@ -743,23 +849,35 @@ class ChannelManagerImpl
 	 */
 	private FetchResult importFrom(GroupId g, InputStream in, long offset,
 			int messages, boolean expectHeader, @Nullable String etag,
-			@Nullable String lastModified)
+			@Nullable String lastModified, long total)
 			throws DbException, IOException, FormatException {
 		Progress p = new Progress(MAX_STREAM_BYTES - offset, messages,
 				MAX_STREAM_MESSAGES);
 		CountingInputStream counted = countUpTo(in, p);
 		try {
 			importEntries(g, counted, expectHeader, false, p);
+		} catch (FormatException e) {
+			// The stream ended in the middle of a message. If that is
+			// because we stopped reading at the budget, the file is
+			// too large, not changed: reading it again would only find
+			// the same
+			if (counted.getBytesRead() > p.budget)
+				throw new ChannelTooLargeException("Channel is too large");
+			throw e;
 		} finally {
 			// The offset is where the last whole message ended, not how
 			// far the stream got, so a fetch that breaks in the middle of
 			// a message is continued from a place the next one can parse.
 			// The validators are only remembered once the whole file has
 			// been read, or the next fetch would be told there is nothing
-			// new while we are still missing the end of it.
+			// new while we are still missing the end of it. A mirror that
+			// said how long the file is, and served less, hasn't served
+			// the whole file either.
+			boolean complete = p.complete &&
+					(total < 0 || offset + p.bytes == total);
 			storeFetchState(g, offset + p.bytes, p.messagesBefore + p.messages,
-					p.complete ? etag : null,
-					p.complete ? lastModified : null);
+					complete ? etag : null,
+					complete ? lastModified : null);
 		}
 		return new FetchResult(FETCHED, p.messages);
 	}
@@ -888,15 +1006,31 @@ class ChannelManagerImpl
 	private Set<MessageId> getLeftOut(Transaction txn, GroupId g,
 			boolean withFiles) throws DbException {
 		Set<MessageId> leftOut = new HashSet<>();
+		// An image or file is stored when it is picked, before the post
+		// that carries it is written, so one attached to a draft is here
+		// with no post to reveal it. It is not the channel's content
+		// until a post names it, and leaving it out keeps the file
+		// growing at the end rather than changing in the middle.
+		Set<MessageId> referenced = getReferencedIds(txn, g);
 		try {
 			for (Entry<MessageId, BdfDictionary> e :
 					clientHelper.getMessageMetadataAsDictionary(txn, g)
 							.entrySet()) {
-				Long type = e.getValue().getOptionalLong(KEY_TYPE);
+				BdfDictionary meta = e.getValue();
+				Long type = meta.getOptionalLong(KEY_TYPE);
 				if (type == null) continue;
-				if (type == FILE_REQUEST.getInt() ||
-						(!withFiles && type == FILE_CHUNK.getInt())) {
+				if (type == FILE_REQUEST.getInt()) {
 					leftOut.add(e.getKey());
+				} else if (type == FILE_MANIFEST.getInt() ||
+						type == ATTACHMENT.getInt()) {
+					if (!referenced.contains(e.getKey()))
+						leftOut.add(e.getKey());
+				} else if (type == FILE_CHUNK.getInt()) {
+					byte[] manifestId = meta.getOptionalRaw(KEY_FILE_MANIFEST_ID);
+					if (!withFiles || manifestId == null ||
+							!referenced.contains(new MessageId(manifestId))) {
+						leftOut.add(e.getKey());
+					}
 				}
 			}
 		} catch (FormatException e) {
@@ -905,11 +1039,32 @@ class ChannelManagerImpl
 		return leftOut;
 	}
 
+	/**
+	 * Returns the IDs of the images and files the channel's posts carry.
+	 */
+	private Set<MessageId> getReferencedIds(Transaction txn, GroupId g)
+			throws DbException {
+		Set<MessageId> referenced = new HashSet<>();
+		for (BlogPostHeader h : blogManager.getPostHeaders(txn, g)) {
+			for (AttachmentHeader a : h.getAttachmentHeaders()) {
+				referenced.add(a.getMessageId());
+			}
+			for (FileHeader f : h.getFileHeaders()) {
+				referenced.add(f.getManifestId());
+			}
+		}
+		return referenced;
+	}
+
 	@Override
 	public Collection<MessageId> getCompleteFiles(GroupId g)
 			throws DbException {
 		List<MessageId> complete = new ArrayList<>();
+		Set<MessageId> referenced = db.transactionWithResult(true,
+				txn -> getReferencedIds(txn, g));
 		for (MessageId id : getManifestIds(g)) {
+			// A file attached to a draft is not the channel's yet
+			if (!referenced.contains(id)) continue;
 			FileHeader h = blogManager.getFileHeader(g, id);
 			if (blogManager.getFileStatus(h).isComplete()) complete.add(id);
 		}
@@ -991,6 +1146,17 @@ class ChannelManagerImpl
 
 	@Override
 	public FetchResult fetchChannelFile(GroupId g, MessageId manifestId)
+			throws DbException {
+		if (!fetchingFiles.add(manifestId))
+			return new FetchResult(IN_PROGRESS, 0);
+		try {
+			return fetchChannelFileNow(g, manifestId);
+		} finally {
+			fetchingFiles.remove(manifestId);
+		}
+	}
+
+	private FetchResult fetchChannelFileNow(GroupId g, MessageId manifestId)
 			throws DbException {
 		List<String> mirrors = getMirrors(g);
 		if (mirrors.isEmpty()) return new FetchResult(NO_MIRRORS, 0);
@@ -1261,7 +1427,8 @@ class ChannelManagerImpl
 			// malformed stream but a file we will not store, so we give
 			// up on this mirror rather than reading the file again.
 			if (p.messagesBefore + p.messages + 1 > p.maxMessages)
-				throw new IOException("Channel has too many messages");
+				throw new ChannelTooLargeException(
+						"Channel has too many messages");
 			BdfList entry = r.readList();
 			checkSize(entry, 2);
 			long timestamp = entry.getLong(0);
@@ -1294,7 +1461,7 @@ class ChannelManagerImpl
 		// The stream was allowed one byte beyond the budget, so having
 		// read that byte means the file is larger than we will store
 		if (in.getBytesRead() > p.budget)
-			throw new IOException("Channel is too large");
+			throw new ChannelTooLargeException("Channel is too large");
 		p.complete = true;
 	}
 
