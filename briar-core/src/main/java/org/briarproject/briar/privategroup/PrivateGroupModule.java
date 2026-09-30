@@ -1,6 +1,7 @@
 package org.briarproject.briar.privategroup;
 
 import org.briarproject.bramble.api.FeatureFlags;
+import org.briarproject.bramble.api.cleanup.CleanupManager;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.data.BdfReaderFactory;
 import org.briarproject.bramble.api.data.MetadataEncoder;
@@ -35,11 +36,13 @@ public class PrivateGroupModule {
 	PrivateGroupManager provideGroupManager(
 			PrivateGroupManagerImpl groupManager,
 			ValidationManager validationManager,
-			FeatureFlags featureFlags) {
+			CleanupManager cleanupManager, FeatureFlags featureFlags) {
 		if (!featureFlags.shouldEnablePrivateGroupsInCore()) {
 			return groupManager;
 		}
 		validationManager.registerIncomingMessageHook(CLIENT_ID, MAJOR_VERSION,
+				groupManager);
+		cleanupManager.registerCleanupHook(CLIENT_ID, MAJOR_VERSION,
 				groupManager);
 		return groupManager;
 	}

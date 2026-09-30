@@ -1,6 +1,7 @@
 package org.briarproject.briar.blog;
 
 import org.briarproject.bramble.api.FeatureFlags;
+import org.briarproject.bramble.api.cleanup.CleanupManager;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.contact.ContactManager;
 import org.briarproject.bramble.api.data.BdfReaderFactory;
@@ -37,13 +38,16 @@ public class BlogModule {
 	@Singleton
 	BlogManager provideBlogManager(BlogManagerImpl blogManager,
 			LifecycleManager lifecycleManager, ContactManager contactManager,
-			ValidationManager validationManager, FeatureFlags featureFlags) {
+			ValidationManager validationManager,
+			CleanupManager cleanupManager, FeatureFlags featureFlags) {
 		if (!featureFlags.shouldEnableBlogsInCore()) {
 			return blogManager;
 		}
 		lifecycleManager.registerOpenDatabaseHook(blogManager);
 		contactManager.registerContactHook(blogManager);
 		validationManager.registerIncomingMessageHook(CLIENT_ID, MAJOR_VERSION,
+				blogManager);
+		cleanupManager.registerCleanupHook(CLIENT_ID, MAJOR_VERSION,
 				blogManager);
 		return blogManager;
 	}

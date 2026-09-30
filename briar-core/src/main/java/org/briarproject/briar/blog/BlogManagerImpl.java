@@ -2,6 +2,7 @@ package org.briarproject.briar.blog;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.client.BdfIncomingMessageHook;
+import org.briarproject.bramble.api.cleanup.CleanupHook;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.crypto.CryptoComponent;
 import org.briarproject.bramble.api.contact.Contact;
@@ -97,7 +98,7 @@ import static org.briarproject.briar.api.identity.AuthorInfo.Status.NONE;
 
 @NotNullByDefault
 class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
-		OpenDatabaseHook, ContactHook {
+		OpenDatabaseHook, ContactHook, CleanupHook {
 
 	private final IdentityManager identityManager;
 	private final AuthorManager authorManager;
@@ -237,6 +238,13 @@ class BlogManagerImpl extends BdfIncomingMessageHook implements BlogManager,
 	 * already references it, so images that no post ever references don't
 	 * pile up.
 	 */
+	@Override
+	public void deleteMessages(Transaction txn, GroupId g,
+			Collection<MessageId> messageIds) throws DbException {
+		// Only attachments, manifests and chunks carry cleanup timers
+		fileStore.deleteExpired(txn, g, messageIds);
+	}
+
 	private void handleAttachment(Transaction txn, Message m)
 			throws DbException, FormatException {
 		txn.attach(new BlogAttachmentReceivedEvent(m.getGroupId(), m.getId()));

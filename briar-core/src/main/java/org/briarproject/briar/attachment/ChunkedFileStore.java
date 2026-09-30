@@ -487,6 +487,23 @@ public class ChunkedFileStore {
 		deleteIfPresent(txn, manifestId);
 	}
 
+	/**
+	 * Deletes messages whose cleanup timers have elapsed: attachments,
+	 * manifests and chunks that no post came to reference. A manifest
+	 * takes its chunks with it, and a manifest some post does reference
+	 * after all is left alone. Anything else, such as an image, is simply
+	 * deleted. Called from the client's cleanup hook; without one the
+	 * cleanup manager throws when the first timer fires, and it fires on
+	 * the database thread.
+	 */
+	public void deleteExpired(Transaction txn, GroupId g,
+			Collection<MessageId> ids) throws DbException {
+		for (MessageId id : ids) {
+			if (isManifest(txn, id)) deleteFile(txn, g, id);
+			else deleteIfPresent(txn, id);
+		}
+	}
+
 	private void deleteIfPresent(Transaction txn, MessageId id)
 			throws DbException {
 		try {
@@ -708,6 +725,11 @@ public class ChunkedFileStore {
 			return new FileStatus(header, false, 0, false);
 		} catch (FormatException e) {
 			throw new DbException(e);
+		}
+		// A deleted message keeps an empty row, so a manifest that was
+		// cleaned up looks like one that never arrived
+		if (manifestMeta.isEmpty()) {
+			return new FileStatus(header, false, 0, false);
 		}
 		try {
 			int received = countChunks(txn, header.getGroupId(),
