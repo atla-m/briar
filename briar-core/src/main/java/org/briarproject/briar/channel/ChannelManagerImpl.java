@@ -74,6 +74,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
@@ -147,6 +148,14 @@ import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_PRIVAT
 @NotNullByDefault
 class ChannelManagerImpl
 		implements ChannelManager, OpenDatabaseHook, EventListener {
+
+	/**
+	 * An entity tag as RFC 7232 defines it: an optional weak marker, then
+	 * printable ASCII other than a double quote, in double quotes.
+	 */
+	private static final Pattern ETAG_REGEX =
+			Pattern.compile("^(W/)?\"[\\x21\\x23-\\x7e]*\"$");
+	private static final int MAX_ETAG_LENGTH = 256;
 
 	private static final Logger LOG =
 			getLogger(ChannelManagerImpl.class.getName());
@@ -409,6 +418,11 @@ class ChannelManagerImpl
 			throw new FormatException();
 		}
 		List<String> mirrors = parseMirrors(parsed.getList(3));
+		// A link comes from outside, and a mirror the HTTP client can't
+		// parse would throw at every scheduled fetch
+		for (String mirror : mirrors) {
+			if (HttpUrl.parse(mirror) == null) throw new FormatException();
+		}
 		Blog blog = subscribe(title, publicKey);
 		if (!mirrors.isEmpty()) setMirrors(blog.getId(), mirrors);
 		return blog;
@@ -434,6 +448,8 @@ class ChannelManagerImpl
 		BdfList list = new BdfList();
 		for (String mirror : mirrors) {
 			if (mirror.isEmpty() || mirror.length() > MAX_MIRROR_LENGTH)
+				throw new IllegalArgumentException();
+			if (HttpUrl.parse(mirror) == null)
 				throw new IllegalArgumentException();
 			list.add(mirror);
 		}
@@ -602,7 +618,11 @@ class ChannelManagerImpl
 	private FetchResult fetchFrom(GroupId g, String mirror, FetchState state,
 			boolean resume) throws DbException, IOException,
 			ChangedFileException {
-		Request.Builder b = new Request.Builder().url(mirror).get();
+		// A mirror stored before URLs were checked is unreachable, not
+		// a reason to throw on the fetch thread
+		HttpUrl url = HttpUrl.parse(mirror);
+		if (url == null) throw new IOException("Not an HTTP URL");
+		Request.Builder b = new Request.Builder().url(url).get();
 		// Ask the mirror to send the file only if it has changed
 		if (state.etag != null) b.addHeader("If-None-Match", state.etag);
 		if (state.lastModified != null) {
@@ -630,7 +650,7 @@ class ChannelManagerImpl
 			return importFrom(g, body.byteStream(),
 					ranged ? state.offset : 0,
 					ranged ? state.messages : 0, !ranged,
-					response.header("ETag"),
+					etagIfSendable(response),
 					lastModifiedIfSettled(response));
 		} catch (FormatException e) {
 			// The mirror served something that isn't this channel, or
@@ -638,6 +658,20 @@ class ChannelManagerImpl
 			if (resume) throw new ChangedFileException();
 			throw new IOException(e);
 		}
+	}
+
+	/**
+	 * Returns the tag the mirror gave for the file, or null if it isn't
+	 * one we could send back. The HTTP client refuses a header value
+	 * outside printable ASCII, so a mirror that gave one would otherwise
+	 * make every later fetch of the channel throw, from any mirror, until
+	 * the tag was replaced by a fetch that could never start.
+	 */
+	@Nullable
+	private String etagIfSendable(Response response) {
+		String etag = response.header("ETag");
+		if (etag == null || etag.length() > MAX_ETAG_LENGTH) return null;
+		return ETAG_REGEX.matcher(etag).matches() ? etag : null;
 	}
 
 	/**

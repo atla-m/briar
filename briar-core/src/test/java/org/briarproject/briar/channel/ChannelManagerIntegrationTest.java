@@ -1,8 +1,12 @@
 package org.briarproject.briar.channel;
 
 import org.briarproject.bramble.api.data.BdfList;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.bramble.api.identity.Author;
+import org.briarproject.bramble.util.Base32;
 import org.briarproject.briar.api.attachment.AttachmentHeader;
 import org.briarproject.bramble.api.identity.LocalAuthor;
 import org.briarproject.bramble.api.sync.GroupId;
@@ -42,8 +46,12 @@ import java.util.List;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
+import static java.util.Locale.US;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
+import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
+import static org.briarproject.briar.api.channel.ChannelConstants.LINK_PREFIX;
+import static org.briarproject.briar.api.channel.ChannelConstants.LINK_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
@@ -1572,6 +1580,72 @@ public class ChannelManagerIntegrationTest
 		expectBadLink("briar-channel://not!base32");
 		// A well-formed handshake link is not a channel link
 		expectBadLink("briar://" + getRandomString(53).toLowerCase());
+	}
+
+	@Test
+	public void testRefusesAMirrorThatIsNotAnHttpUrl() throws Exception {
+		// Anything the HTTP client can't parse would throw on the fetch
+		// thread at every scheduled fetch, so it is refused at the door
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		try {
+			channelManager0.setMirrors(g, singletonList("ftp://x/c.briar"));
+			fail();
+		} catch (IllegalArgumentException expected) {
+			// Expected
+		}
+		assertTrue(channelManager0.getMirrors(g).isEmpty());
+		// A link carrying such a mirror is malformed
+		Author a = channel.getBlog().getAuthor();
+		byte[] raw = c1.getClientHelper().toByteArray(BdfList.of(
+				LINK_FORMAT_VERSION, a.getName(),
+				a.getPublicKey().getEncoded(), BdfList.of("x")));
+		expectBadLink(LINK_PREFIX + Base32.encode(raw).toLowerCase(US));
+		// A mirror stored before the check is unreachable, not a crash
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		BdfDictionary meta = BdfDictionary.of(new BdfEntry(
+				GROUP_KEY_MIRRORS, BdfList.of("x")));
+		db1.transaction(false, txn ->
+				c1.getClientHelper().mergeGroupMetadata(txn, g, meta));
+		assertEquals(UNREACHABLE,
+				channelManager1.fetchChannel(g).getOutcome());
+	}
+
+	@Test
+	public void testForgetsATagItCouldNotSendBack() throws Exception {
+		// The HTTP client refuses a header value outside printable ASCII,
+		// so a tag like that, sent back, would make every later fetch
+		// of the channel throw
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] stream = exportChannel(g);
+
+		MockWebServer server = new MockWebServer();
+		server.enqueue(new MockResponse().setBody(new Buffer().write(stream))
+				.addHeaderLenient("ETag", "\"v1\u00e9\""));
+		server.enqueue(new MockResponse().setBody(new Buffer().write(stream))
+				.addHeader("ETag", "\"v2\""));
+		server.enqueue(new MockResponse().setResponseCode(304));
+		server.start();
+		try {
+			channelManager0.setMirrors(g,
+					singletonList(server.url("/c.briar").toString()));
+			channelManager1.subscribeFromLink(
+					channelManager0.getChannelLink(g));
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			server.takeRequest();
+			// The bad tag was not kept, so the next fetch sends none
+			assertEquals(FETCHED, channelManager1.fetchChannel(g).getOutcome());
+			assertNull(server.takeRequest().getHeader("If-None-Match"));
+			// A good tag is kept and sent
+			assertEquals(UNCHANGED,
+					channelManager1.fetchChannel(g).getOutcome());
+			assertEquals("\"v2\"", server.takeRequest()
+					.getHeader("If-None-Match"));
+		} finally {
+			server.shutdown();
+		}
 	}
 
 	private void expectBadLink(String link) throws Exception {
