@@ -77,6 +77,9 @@ class BlogPostFactoryImpl implements BlogPostFactory {
 
 		if (attachments.isEmpty() && files.isEmpty())
 			throw new IllegalArgumentException();
+		// The validator requires text, if present, to have length, so an
+		// empty string would sign a post no reader accepts
+		if (text != null && text.isEmpty()) text = null;
 		if (attachments.size() + files.size() > MAX_BLOG_POST_ATTACHMENTS)
 			throw new IllegalArgumentException();
 		if (text != null && StringUtils.toUtf8(text).length >

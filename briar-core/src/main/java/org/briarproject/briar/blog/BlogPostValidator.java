@@ -140,7 +140,7 @@ class BlogPostValidator extends BdfMessageValidator {
 		if (list.isEmpty()) throw new FormatException();
 		Object type = list.get(0);
 		return type instanceof Number &&
-				((Number) type).intValue() == t.getInt();
+				((Number) type).longValue() == t.getInt();
 	}
 
 	private BdfMessageContext validateAttachment(Message m, BdfList descriptor,
