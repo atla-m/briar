@@ -72,6 +72,7 @@ import javax.inject.Inject;
 
 import static java.util.Collections.emptyList;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
+import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_DO_NOT_SHARE;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_SHARE;
 import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.briar.api.attachment.MediaConstants.MSG_KEY_CONTENT_TYPE;
@@ -93,6 +94,7 @@ import static org.briarproject.briar.privategroup.GroupConstants.GROUP_KEY_MEMBE
 import static org.briarproject.briar.privategroup.GroupConstants.GROUP_KEY_OUR_GROUP;
 import static org.briarproject.briar.privategroup.GroupConstants.GROUP_KEY_VISIBILITY;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_ATTACHMENT_HEADERS;
+import static org.briarproject.briar.attachment.ChunkedFileStore.KEY_FILE_MANIFEST_ID;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_HAS_TEXT;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_INITIAL_JOIN_MSG;
 import static org.briarproject.briar.privategroup.GroupConstants.KEY_MEMBER;
@@ -768,11 +770,15 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 			BdfDictionary metaDict = metadataParser.parse(meta);
 			int type = metaDict.getInt(KEY_TYPE);
 			if (type == ATTACHMENT.getInt()) {
-				handleAttachment(txn, m);
-				return ACCEPT_SHARE;
+				boolean referenced = handleAttachment(txn, m);
+				return shareOrphan(txn, m.getGroupId(), referenced);
 			} else if (type == FILE_CHUNK.getInt()) {
 				fileStore.incomingChunk(txn, m, metaDict);
-				return ACCEPT_SHARE;
+				MessageId manifestId = new MessageId(
+						metaDict.getRaw(KEY_FILE_MANIFEST_ID));
+				return shareOrphan(txn, m.getGroupId(), fileClient
+						.isManifestReferenced(txn, m.getGroupId(),
+								manifestId));
 			}
 		} catch (FormatException e) {
 			throw new InvalidMessageException(e);
@@ -795,7 +801,8 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				return ACCEPT_SHARE;
 			case FILE_MANIFEST:
 				fileStore.incomingManifest(txn, m, meta);
-				return ACCEPT_SHARE;
+				return shareOrphan(txn, m.getGroupId(), fileClient
+						.isManifestReferenced(txn, m.getGroupId(), m.getId()));
 			case FILE_REQUEST:
 				// Shared onwards, so it reaches whoever holds the file
 				fileStore.incomingRequest(txn, m, meta);
@@ -813,7 +820,25 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 		fileStore.deleteExpired(txn, g, messageIds);
 	}
 
-	private void handleAttachment(Transaction txn, Message m)
+	/**
+	 * Decides whether an attachment, manifest or chunk is passed on. An
+	 * attachment carries no author, so in a group where only the creator
+	 * posts, one that no post of the creator's names yet is kept to
+	 * ourselves until one does: a member can't use the group to spread
+	 * files, only to store them on the members' phones for a while.
+	 */
+	private DeliveryAction shareOrphan(Transaction txn, GroupId g,
+			boolean referenced) throws DbException {
+		if (referenced || !getPrivateGroup(txn, g).isCreatorOnly())
+			return ACCEPT_SHARE;
+		return ACCEPT_DO_NOT_SHARE;
+	}
+
+	/**
+	 * Handles an incoming attachment, and returns true if a delivered post
+	 * already references it.
+	 */
+	private boolean handleAttachment(Transaction txn, Message m)
 			throws DbException, FormatException {
 		GroupId g = m.getGroupId();
 		txn.attach(new GroupAttachmentReceivedEvent(g, m.getId()));
@@ -826,13 +851,14 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 				clientHelper.getMessageMetadataAsDictionary(txn, g, query);
 		for (BdfDictionary meta : results.values()) {
 			for (AttachmentHeader h : parseAttachmentHeaders(g, meta)) {
-				if (h.getMessageId().equals(m.getId())) return;
+				if (h.getMessageId().equals(m.getId())) return true;
 			}
 		}
 		// No posts reference this attachment - start the timer
 		db.setCleanupTimerDuration(txn, m.getId(),
 				MISSING_ATTACHMENT_CLEANUP_DURATION_MS);
 		db.startCleanupTimer(txn, m.getId());
+		return false;
 	}
 
 
@@ -909,8 +935,23 @@ class PrivateGroupManagerImpl extends BdfIncomingMessageHook
 		if (!attachments.isEmpty())
 			stopAttachmentCleanupTimers(txn, m, attachments);
 		// nor are any files it references, nor their chunks
-		fileStore.onFilesReferenced(txn, m.getGroupId(),
-				fileClient.getReferencedIds(meta));
+		Collection<MessageId> referenced = fileClient.getReferencedIds(meta);
+		fileStore.onFilesReferenced(txn, m.getGroupId(), referenced);
+		// In a group where only the creator posts, they were kept to
+		// ourselves until now
+		if (getPrivateGroup(txn, m.getGroupId()).isCreatorOnly()) {
+			BdfDictionary query = BdfDictionary.of(
+					new BdfEntry(KEY_TYPE, ATTACHMENT.getInt()));
+			Collection<MessageId> present = clientHelper.getMessageIds(txn,
+					m.getGroupId(), query);
+			for (AttachmentHeader h : attachments) {
+				if (present.contains(h.getMessageId()))
+					db.setMessageShared(txn, h.getMessageId());
+			}
+			for (MessageId manifestId : referenced) {
+				fileStore.shareReceivedFile(txn, m.getGroupId(), manifestId);
+			}
+		}
 		// track message and broadcast event
 		messageTracker.trackIncomingMessage(txn, m);
 		attachGroupMessageAddedEvent(txn, m, meta, false);

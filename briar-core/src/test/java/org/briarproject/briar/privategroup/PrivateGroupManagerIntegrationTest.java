@@ -758,6 +758,72 @@ public class PrivateGroupManagerIntegrationTest
 		assertEquals(3, groupManager0.getHeaders(announceId).size());
 	}
 
+	@Test
+	public void testCreatorOnlyGroupKeepsAMembersFileToItself()
+			throws Exception {
+		// A manifest or chunk carries no author, so a member can push one
+		// into an announcement group. The creator's device stores it but
+		// doesn't pass it on to other members until a post of the
+		// creator's names it.
+		PrivateGroup announce = privateGroupFactory
+				.createPrivateGroup("Testannouncements", author0, true);
+		GroupId g = announce.getId();
+		addGroup(announce);
+		joinAsThirdMember(announce);
+
+		// Member 1 shares a file by hand, without a post
+		byte[] bytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH + 1);
+		FileHeader file = groupManager1.addLocalFile(g,
+				c1.getClock().currentTimeMillis(), "a.bin",
+				"application/octet-stream",
+				() -> new ByteArrayInputStream(bytes));
+		db1.transaction(false, txn -> {
+			db1.setMessageShared(txn, file.getManifestId());
+			BdfDictionary query = BdfDictionary.of(
+					new BdfEntry(KEY_FILE_MANIFEST_ID, file.getManifestId()));
+			for (MessageId id : c1.getClientHelper().getMessageIds(txn, g,
+					query)) {
+				db1.setMessageShared(txn, id);
+			}
+		});
+		sync1To0(3, true);
+		assertTrue(groupManager0.getFileStatus(file).isComplete());
+		// The creator's device holds it but has nothing to send member 2
+		assertFalse(db0.transactionWithResult(true, txn ->
+				db0.containsMessagesToSend(txn, contactId2From0,
+						Integer.MAX_VALUE, false)));
+
+		// Once the creator posts the file, it goes on
+		long time = c0.getClock().currentTimeMillis();
+		GroupMessage post = groupMessageFactory.createGroupMessage(g, time,
+				null, author0, "Now it is mine", emptyList(),
+				singletonList(file), groupManager0.getPreviousMsgId(g));
+		groupManager0.addLocalMessage(post);
+		sync0To2(4, true);
+		assertTrue(groupManager2.getFileStatus(file).isComplete());
+	}
+
+	private void joinAsThirdMember(PrivateGroup pg) throws Exception {
+		GroupId g = pg.getId();
+		db0.transaction(false, txn -> db0.setGroupVisibility(txn,
+				contactId2From0, g, SHARED));
+		long joinTime = c2.getClock().currentTimeMillis();
+		long inviteTime = joinTime - 1;
+		Contact c2From0 = contactManager0.getContact(contactId2From0);
+		byte[] creatorSignature = groupInvitationFactory
+				.signInvitation(c2From0, g, inviteTime, author0.getPrivateKey());
+		GroupMessage joinMsg2 = groupMessageFactory
+				.createJoinMessage(g, joinTime, author2, inviteTime,
+						creatorSignature);
+		db2.transaction(false, txn -> {
+			groupManager2.addPrivateGroup(txn, pg, joinMsg2, false);
+			db2.setGroupVisibility(txn, contactId0From2, g, SHARED);
+		});
+		sync2To0(1, true);
+		sync0To2(2, true);
+		sync0To1(1, true);
+	}
+
 	private void addGroup() throws Exception {
 		addGroup(privateGroup0);
 	}

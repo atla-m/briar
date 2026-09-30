@@ -52,6 +52,7 @@ import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_PREFIX;
 import static org.briarproject.briar.api.channel.ChannelConstants.LINK_FORMAT_VERSION;
+import static org.briarproject.briar.api.channel.ChannelConstants.FILE_STREAM_FORMAT_VERSION;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.NO_MIRRORS;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNCHANGED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.UNREACHABLE;
@@ -63,6 +64,8 @@ import static org.briarproject.bramble.util.IoUtils.copyAndClose;
 import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PAYLOAD_LENGTH;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.blog.MessageType.POST;
+import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
+import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYTES;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_MESSAGES;
@@ -851,6 +854,95 @@ public class ChannelManagerIntegrationTest
 		} finally {
 			server.shutdown();
 		}
+	}
+
+	@Test
+	public void testRefusesChunksThatDontMatchTheManifest() throws Exception {
+		// A mirror serving junk under the right manifest ID gets nothing
+		// stored and is not asked again: chunks are checked against the
+		// manifest before they are stored, not after
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		FileHeader file = postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH + 1);
+		long manifestTime = lastPostTime;
+		ByteArrayOutputStream junk = new ByteArrayOutputStream();
+		junk.write(c0.getClientHelper().toByteArray(BdfList.of(
+				FILE_STREAM_FORMAT_VERSION, file.getManifestId())));
+		for (int i = 0; i < 2; i++) {
+			ByteArrayOutputStream body = new ByteArrayOutputStream();
+			body.write(c0.getClientHelper().toByteArray(BdfList.of(
+					FILE_CHUNK.getInt(), file.getManifestId(), i)));
+			body.write(getRandomBytes(i == 0 ? FILE_CHUNK_PAYLOAD_LENGTH : 1));
+			junk.write(c0.getClientHelper().toByteArray(BdfList.of(
+					manifestTime + 1, body.toByteArray())));
+		}
+		byte[] main = exportChannel(g);
+		MockWebServer server = new MockWebServer();
+		server.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				if ("/c.briar".equals(request.getPath())) {
+					return new MockResponse().setBody(new Buffer().write(main));
+				}
+				return new MockResponse().setBody(
+						new Buffer().write(junk.toByteArray()));
+			}
+		});
+		server.start();
+		try {
+			subscribeWithMirror(g, server.url("/c.briar").toString());
+			channelManager1.fetchChannel(g);
+			awaitPendingMessageDelivery(2);
+			assertEquals(UNREACHABLE, channelManager1.fetchChannelFile(g,
+					file.getManifestId()).getOutcome());
+			assertEquals(0,
+					blogManager1.getFileStatus(file).getChunksReceived());
+			// Nothing was stored, not even a chunk found invalid later
+			assertEquals(2, db1.transactionWithResult(true,
+					txn -> db1.getMessageIds(txn, g)).size());
+		} finally {
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void testALinkDoesNotReplaceTheMirrorsOfAChannelAlreadyHeld()
+			throws Exception {
+		// Anyone with a channel's public link can make one with the same
+		// title and key and their own mirrors
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		subscribeWithMirror(g, "http://first.example/c.briar");
+		channelManager0.setMirrors(g,
+				singletonList("http://second.example/c.briar"));
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		assertEquals(singletonList("http://first.example/c.briar"),
+				channelManager1.getMirrors(g));
+		// The owner's own mirrors are safe from it too
+		Author a = channel.getBlog().getAuthor();
+		byte[] raw = c1.getClientHelper().toByteArray(BdfList.of(
+				LINK_FORMAT_VERSION, a.getName(),
+				a.getPublicKey().getEncoded(),
+				BdfList.of("http://evil.example/c.briar")));
+		channelManager0.subscribeFromLink(
+				LINK_PREFIX + Base32.encode(raw).toLowerCase(US));
+		assertEquals(singletonList("http://second.example/c.briar"),
+				channelManager0.getMirrors(g));
+	}
+
+	@Test
+	public void testSkipsARequestInAStream() throws Exception {
+		// The owner's file never carries requests; one from a mirror is
+		// unsigned and would be kept for ever and passed to contacts
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		byte[] body = c1.getClientHelper().toByteArray(
+				BdfList.of(FILE_REQUEST.getInt(), getRandomId()));
+		byte[] stream = buildStream(channel.getBlog(), 1234, body);
+		channelManager1.importChannel(new ByteArrayInputStream(stream));
+		assertTrue(db1.transactionWithResult(true,
+				txn -> db1.getMessageIds(txn, g)).isEmpty());
 	}
 
 	@Test

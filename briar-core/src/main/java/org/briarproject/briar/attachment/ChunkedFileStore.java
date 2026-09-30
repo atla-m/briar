@@ -593,6 +593,18 @@ public class ChunkedFileStore {
 	public void incomingRequest(Transaction txn, Message m,
 			BdfDictionary meta) throws DbException, FormatException {
 		MessageId manifestId = new MessageId(meta.getRaw(KEY_FILE_MANIFEST_ID));
+		// Every request for a file takes the same timestamp, so a group
+		// that asks many times carries one message. A request with any
+		// other timestamp is a copy nobody needs, if we can tell: a
+		// request has no dependencies, so it can arrive before its
+		// manifest, and then it is passed on unchecked.
+		try {
+			Message manifest = db.getMessage(txn, manifestId);
+			if (m.getTimestamp() != manifest.getTimestamp() + 2)
+				throw new FormatException();
+		} catch (NoSuchMessageException e) {
+			// Not our manifest, or not here yet
+		}
 		for (MessageId chunkId : getChunkIds(txn, m.getGroupId(),
 				manifestId)) {
 			db.setMessageShared(txn, chunkId);
@@ -636,6 +648,72 @@ public class ChunkedFileStore {
 					getChunkQuery(manifestId));
 		} catch (FormatException e) {
 			throw new DbException(e);
+		}
+	}
+
+	/**
+	 * Returns true if a chunk other than the given one, with the given
+	 * index and naming the given manifest, is already stored.
+	 */
+	private boolean holdsOtherChunk(Transaction txn, GroupId g,
+			MessageId manifestId, int index, MessageId self)
+			throws DbException {
+		BdfDictionary query = getChunkQuery(manifestId);
+		query.put(KEY_FILE_CHUNK_INDEX, index);
+		try {
+			for (MessageId id : clientHelper.getMessageIds(txn, g, query)) {
+				if (!id.equals(self)) return true;
+			}
+			return false;
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+	}
+
+	/**
+	 * Returns true if the given message body is the chunk at the given
+	 * index of the file the given manifest describes: its payload has the
+	 * length the file size implies and the hash the manifest lists. Lets
+	 * a chunk from a source that isn't a contact, such as a channel's
+	 * mirror, be checked before it is stored rather than after.
+	 */
+	public boolean isChunkOf(Transaction txn, MessageId manifestId,
+			int index, byte[] body, int descriptorLength) throws DbException {
+		try {
+			BdfDictionary manifestMeta =
+					clientHelper.getMessageMetadataAsDictionary(txn,
+							manifestId);
+			if (!manifestMeta.containsKey(KEY_FILE_CHUNK_HASHES)) return false;
+			BdfList hashes = manifestMeta.getList(KEY_FILE_CHUNK_HASHES);
+			long size = manifestMeta.getLong(KEY_FILE_SIZE);
+			if (index < 0 || index >= hashes.size()) return false;
+			int payloadLength = body.length - descriptorLength;
+			if (payloadLength != getPayloadLength(size, index)) return false;
+			return Arrays.equals(hashes.getRaw(index),
+					hashChunk(index, body, descriptorLength, payloadLength));
+		} catch (NoSuchMessageException e) {
+			return false;
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+	}
+
+	/**
+	 * Shares a received file's manifest and chunks, whichever of them are
+	 * here, so they are passed on. For a group that keeps unreferenced
+	 * files to itself until a post names them.
+	 */
+	public void shareReceivedFile(Transaction txn, GroupId g,
+			MessageId manifestId) throws DbException {
+		try {
+			if (!clientHelper.getMessageIds(txn, g, client.getManifestQuery())
+					.contains(manifestId)) return;
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+		db.setMessageShared(txn, manifestId);
+		for (MessageId chunkId : getChunkIds(txn, g, manifestId)) {
+			db.setMessageShared(txn, chunkId);
 		}
 	}
 
@@ -899,7 +977,15 @@ public class ChunkedFileStore {
 		if (!manifestMeta.containsKey(KEY_FILE_CHUNK_HASHES))
 			throw new InvalidMessageException();
 		// The manifest must be in the same group as the chunk
-		if (!db.getMessage(txn, manifestId).getGroupId().equals(g))
+		Message manifest = db.getMessage(txn, manifestId);
+		if (!manifest.getGroupId().equals(g))
+			throw new InvalidMessageException();
+		// A file's chunks all take the timestamp after the manifest's,
+		// so a chunk can't be stored again under another timestamp
+		if (m.getTimestamp() != manifest.getTimestamp() + 1)
+			throw new InvalidMessageException();
+		// Nor can a chunk we already hold be stored again
+		if (holdsOtherChunk(txn, g, manifestId, index, m.getId()))
 			throw new InvalidMessageException();
 		BdfList hashes = manifestMeta.getList(KEY_FILE_CHUNK_HASHES);
 		long size = manifestMeta.getLong(KEY_FILE_SIZE);

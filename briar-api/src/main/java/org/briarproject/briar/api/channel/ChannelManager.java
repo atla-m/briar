@@ -159,6 +159,14 @@ public interface ChannelManager {
 	Blog subscribeFromLink(String link) throws DbException, FormatException;
 
 	/**
+	 * Returns the channel a link describes, without subscribing to it, so
+	 * the person can be shown what they are about to subscribe to.
+	 *
+	 * @throws FormatException If the link is malformed
+	 */
+	Blog readLink(String link) throws FormatException;
+
+	/**
 	 * Writes a channel's posts to the given stream, in the format its
 	 * subscribers can import: the file a mirror serves. The stream carries
 	 * the channel's own signed messages, so whoever stores or serves it

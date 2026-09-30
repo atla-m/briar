@@ -64,6 +64,8 @@ import static org.briarproject.briar.api.attachment.MediaConstants.MAX_FILE_NAME
 import static org.briarproject.briar.api.attachment.MediaConstants.MAX_CONTENT_TYPE_BYTES;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.briar.messaging.MessageTypes.FILE_MANIFEST;
+import static org.briarproject.bramble.api.sync.validation.MessageState.INVALID;
+import static org.briarproject.briar.messaging.MessageTypes.FILE_REQUEST;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertNotEquals;
@@ -397,6 +399,76 @@ public class MessagingManagerIntegrationTest
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		copyAndClose(messagingManager1.getFile(received), out);
 		assertArrayEquals(fileBytes, out.toByteArray());
+	}
+
+	@Test
+	public void testRejectsACopyOfAChunkUnderAnotherTimestamp()
+			throws Exception {
+		// A chunk's timestamp is fixed by its manifest's, so one valid
+		// chunk can't be stored again and again under other timestamps
+		byte[] fileBytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH + 1);
+		GroupId g = messagingManager0.getConversationId(contactId);
+		FileHeader file = messagingManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "a.bin",
+				"application/octet-stream",
+				() -> new ByteArrayInputStream(fileBytes));
+		PrivateMessage m = messageFactory.createPrivateMessage(g,
+				c0.getClock().currentTimeMillis(), null, emptyList(),
+				singletonList(file), NO_AUTO_DELETE_TIMER);
+		messagingManager0.addLocalMessage(m);
+		syncMessage(c0, c1, contactId, 4, true);
+		assertTrue(messagingManager1.getFileStatus(file).isComplete());
+
+		// The sender re-sends the first chunk with the next timestamp
+		Message chunk = db0.transactionWithResult(true, txn -> {
+			BdfDictionary query = BdfDictionary.of(
+					new BdfEntry(KEY_FILE_MANIFEST_ID, file.getManifestId()));
+			MessageId id = c0.getClientHelper().getMessageIds(txn, g, query)
+					.iterator().next();
+			return db0.getMessage(txn, id);
+		});
+		Message copy = super.messageFactory.createMessage(g,
+				chunk.getTimestamp() + 1, chunk.getBody());
+		db1.transaction(false, txn ->
+				db1.receiveMessage(txn, contactId0From1, copy));
+		awaitPendingMessageValidation(1);
+		assertEquals(INVALID, db1.transactionWithResult(true,
+				txn -> db1.getMessageState(txn, copy.getId())));
+		assertEquals(2, messagingManager1.getFileStatus(file)
+				.getChunksReceived());
+	}
+
+	@Test
+	public void testRejectsARequestWithTheWrongTimestamp() throws Exception {
+		// Every request for a file takes the same timestamp, so a group
+		// that asks many times carries one message; one with another
+		// timestamp is a copy nobody needs
+		byte[] fileBytes = getRandomBytes((int) MAX_PUSHED_FILE_SIZE + 1);
+		GroupId g = messagingManager0.getConversationId(contactId);
+		FileHeader file = messagingManager0.addLocalFile(g,
+				c0.getClock().currentTimeMillis(), "clip.mp4", "video/mp4",
+				() -> new ByteArrayInputStream(fileBytes));
+		PrivateMessage m = messageFactory.createPrivateMessage(g,
+				c0.getClock().currentTimeMillis(), null, emptyList(),
+				singletonList(file), NO_AUTO_DELETE_TIMER);
+		messagingManager0.addLocalMessage(m);
+		syncMessage(c0, c1, contactId, 2, true);
+
+		long manifestTime = db0.transactionWithResult(true, txn ->
+				db0.getMessage(txn, file.getManifestId()).getTimestamp());
+		byte[] body = c1.getClientHelper().toByteArray(
+				BdfList.of(FILE_REQUEST, file.getManifestId()));
+		Message request = super.messageFactory.createMessage(g,
+				manifestTime + 3, body);
+		db0.transaction(false, txn ->
+				db0.receiveMessage(txn, contactId1From0, request));
+		awaitPendingMessageValidation(1);
+		assertEquals(INVALID, db0.transactionWithResult(true,
+				txn -> db0.getMessageState(txn, request.getId())));
+		// So the chunks stay held back
+		syncMessage(c0, c1, contactId, 0, true);
+		assertEquals(0, messagingManager1.getFileStatus(file)
+				.getChunksReceived());
 	}
 
 	@Test
