@@ -55,6 +55,7 @@ import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static java.util.Locale.US;
+import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.briar.api.channel.FetchResult.Outcome.FETCHED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
@@ -98,7 +99,7 @@ public class ChannelManagerIntegrationTest
 	private ChannelManager channelManager0, channelManager1;
 	private BlogManager blogManager0, blogManager1;
 	private long lastPostTime = 0;
-	private BlogSharingManager blogSharingManager0;
+	private BlogSharingManager blogSharingManager0, blogSharingManager1;
 
 	@Before
 	@Override
@@ -109,6 +110,7 @@ public class ChannelManagerIntegrationTest
 		blogManager0 = c0.getBlogManager();
 		blogManager1 = c1.getBlogManager();
 		blogSharingManager0 = c0.getBlogSharingManager();
+		blogSharingManager1 = c1.getBlogSharingManager();
 	}
 
 	@Test
@@ -241,54 +243,65 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
-	public void testSharingWithContactsOffersAndAccepts() throws Exception {
-		// Two contacts who both hold a channel exchange nothing until one
-		// offers it and the other accepts. With sharing with contacts on,
-		// the offer is made to every contact and taken up without asking.
+	public void testSharingWithContactsPassesPostsWithoutAMessage()
+			throws Exception {
+		// Two contacts who both hold a channel exchange nothing until both
+		// turn sharing on. Turning it on sends no invitation: it makes the
+		// channel visible to every contact, so its posts are offered, and
+		// a contact who has not turned it on drops them unread
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
 		channelManager0.post(g, getRandomString(42));
 		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
 		assertFalse(channelManager0.isSharingWithContacts(g));
+		assertEquals(INVISIBLE, db0.transactionWithResult(true, txn ->
+				db0.getGroupVisibility(txn, contactId1From0, g)));
 
-		// The owner turns it on: contacts are offered the channel
+		// The owner turns it on: the post is offered, nothing else is sent
 		channelManager0.setSharingWithContacts(g, true);
 		assertTrue(channelManager0.isSharingWithContacts(g));
-		sync0To1(1, true);
-		// With it off, the subscriber is asked rather than accepting
-		assertFalse(db1.transactionWithResult(true, txn ->
-				db1.containsMessagesToSend(txn, contactId0From1,
-						Integer.MAX_VALUE, false)));
-		// Turning it on takes up the offer that was waiting
+		assertEquals(SHARED, db0.transactionWithResult(true, txn ->
+				db0.getGroupVisibility(txn, contactId1From0, g)));
+		assertEquals(0, blogSharingManager0.getInvitations().size());
+		// The subscriber has it off, so the post is dropped
+		syncMessage(c0, c1, contactId1From0, 1, 0, 0, 0);
+		Thread.sleep(500);
+		assertEquals(0, blogManager1.getPostHeaders(g).size());
+		assertEquals(0, blogSharingManager1.getInvitations().size());
+
+		// The subscriber turns it on and posts flow. The dropped post was
+		// counted as sent and is retransmitted later, when it goes unacked
 		channelManager1.setSharingWithContacts(g, true);
-		sync1To0(1, true);
-		// And the post flows
+		channelManager0.post(g, getRandomString(42));
 		sync0To1(1, true);
 		assertEquals(1, blogManager1.getPostHeaders(g).size());
+
+		// Turning it off hides the channel again
+		channelManager0.setSharingWithContacts(g, false);
+		assertEquals(INVISIBLE, db0.transactionWithResult(true, txn ->
+				db0.getGroupVisibility(txn, contactId1From0, g)));
 	}
 
 	@Test
-	public void testSharingWithContactsAcceptsAnOfferAsItArrives()
+	public void testSharingSwitchLeavesAnInvitedChannelAlone()
 			throws Exception {
+		// A channel shared with a contact by invitation belongs to the
+		// sharing protocol: the switch neither hides it nor re-shares it
 		Channel channel = channelManager0.createChannel("Announcements");
 		GroupId g = channel.getBlogId();
-		channelManager0.post(g, getRandomString(42));
 		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
-		channelManager1.setSharingWithContacts(g, true);
-		channelManager0.setSharingWithContacts(g, true);
+		blogSharingManager0.sendInvitation(g, contactId1From0, null);
 		sync0To1(1, true);
-		// The offer is answered in the background
-		long deadline = System.currentTimeMillis() + 10_000;
-		while (!db1.transactionWithResult(true, txn ->
-				db1.containsMessagesToSend(txn, contactId0From1,
-						Integer.MAX_VALUE, false))) {
-			if (System.currentTimeMillis() > deadline)
-				throw new AssertionError("Offer not accepted");
-			Thread.sleep(50);
-		}
+		blogSharingManager1.respondToInvitation(blogManager1.getBlog(g),
+				contact0From1, true);
 		sync1To0(1, true);
-		sync0To1(1, true);
-		assertEquals(1, blogManager1.getPostHeaders(g).size());
+		assertEquals(SHARED, db0.transactionWithResult(true, txn ->
+				db0.getGroupVisibility(txn, contactId1From0, g)));
+
+		channelManager0.setSharingWithContacts(g, true);
+		channelManager0.setSharingWithContacts(g, false);
+		assertEquals(SHARED, db0.transactionWithResult(true, txn ->
+				db0.getGroupVisibility(txn, contactId1From0, g)));
 	}
 
 	@Test

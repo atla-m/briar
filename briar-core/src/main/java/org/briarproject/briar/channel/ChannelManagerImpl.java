@@ -4,7 +4,6 @@ import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.WeakSingletonProvider;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.contact.Contact;
-import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.contact.ContactManager;
 import org.briarproject.bramble.api.contact.ContactManager.ContactHook;
 import org.briarproject.bramble.api.client.ContactGroupFactory;
@@ -50,8 +49,6 @@ import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
-import org.briarproject.briar.api.blog.event.BlogInvitationRequestReceivedEvent;
-import org.briarproject.briar.api.sharing.SharingInvitationItem;
 import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
@@ -151,6 +148,8 @@ import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OF
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_LAST_MODIFIED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_WITH_CONTACTS;
+import static org.briarproject.bramble.api.sync.Group.Visibility.INVISIBLE;
+import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNELS;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_AUTHOR;
@@ -283,20 +282,6 @@ class ChannelManagerImpl
 					logException(LOG, WARNING, ex);
 				}
 			});
-		} else if (e instanceof BlogInvitationRequestReceivedEvent) {
-			// A contact offers a channel we share with contacts: accept
-			// without asking, since they have already said they have it
-			BlogInvitationRequestReceivedEvent b =
-					(BlogInvitationRequestReceivedEvent) e;
-			Blog blog = b.getMessageHeader().getNameable();
-			if (!blog.isChannel()) return;
-			ioExecutor.execute(() -> {
-				try {
-					acceptIfSharing(blog, b.getContactId());
-				} catch (DbException ex) {
-					logException(LOG, WARNING, ex);
-				}
-			});
 		} else if (e instanceof ClientVersionUpdatedEvent) {
 			// A contact has just been found to support channels, which
 			// isn't known when the contact is added
@@ -307,7 +292,7 @@ class ChannelManagerImpl
 			}
 			ioExecutor.execute(() -> {
 				try {
-					db.transaction(false, txn -> offerSharedChannels(txn,
+					db.transaction(false, txn -> applySharing(txn,
 							contactManager.getContact(txn, c.getContactId())));
 				} catch (DbException ex) {
 					logException(LOG, WARNING, ex);
@@ -492,18 +477,8 @@ class ChannelManagerImpl
 			} catch (FormatException e) {
 				throw new DbException(e);
 			}
-			if (!on) return;
-			// Offer it to everyone who can take it, and take up any offer
-			// of it that was waiting for an answer
 			for (Contact c : contactManager.getContacts(txn)) {
-				offerIfShareable(txn, g, c);
-			}
-			for (SharingInvitationItem i :
-					blogSharingManager.getInvitations(txn)) {
-				if (!i.getShareable().getId().equals(g)) continue;
-				for (Contact c : i.getNewSharers()) {
-					blogSharingManager.respondToInvitation(txn, blog, c, true);
-				}
+				setVisibility(txn, g, c, on);
 			}
 		});
 	}
@@ -525,38 +500,38 @@ class ChannelManagerImpl
 		}
 	}
 
-	private void offerIfShareable(Transaction txn, GroupId g, Contact c)
-			throws DbException {
-		if (blogSharingManager.getSharingStatus(txn, g, c) == SHAREABLE) {
-			blogSharingManager.sendInvitation(txn, g, c.getId(), null);
+	/**
+	 * Makes the channel visible to the contact, or hides it, without
+	 * telling the contact anything. Nothing is sent but the posts
+	 * themselves, which the contact's Briar drops unless the contact holds
+	 * the channel and has made it visible to us in turn. The sharing
+	 * protocol owns the visibility of any channel it has a session for, so
+	 * a channel shared by invitation is left to it.
+	 */
+	private void setVisibility(Transaction txn, GroupId g, Contact c,
+			boolean on) throws DbException {
+		if (blogSharingManager.getSharingStatus(txn, g, c) != SHAREABLE) {
+			return;
 		}
+		db.setGroupVisibility(txn, c.getId(), g, on ? SHARED : INVISIBLE);
 	}
 
 	/**
-	 * Offers every channel shared with contacts to the given contact.
+	 * Applies the sharing switch of every channel to the given contact.
 	 */
-	private void offerSharedChannels(Transaction txn, Contact c)
+	private void applySharing(Transaction txn, Contact c)
 			throws DbException {
 		for (GroupId g : blogManager.getBlogIds(txn)) {
-			if (isSharingWithContacts(txn, g)) offerIfShareable(txn, g, c);
+			if (isSharingWithContacts(txn, g)) setVisibility(txn, g, c, true);
 		}
-	}
-
-	private void acceptIfSharing(Blog blog, ContactId c) throws DbException {
-		db.transaction(false, txn -> {
-			if (!db.containsGroup(txn, blog.getId())) return;
-			if (!isSharingWithContacts(txn, blog.getId())) return;
-			blogSharingManager.respondToInvitation(txn, blog,
-					contactManager.getContact(txn, c), true);
-		});
 	}
 
 	@Override
 	public void addingContact(Transaction txn, Contact c)
 			throws DbException {
-		// The contact's client versions aren't known yet, so this offers
+		// The contact's client versions aren't known yet, so this does
 		// nothing until they are; see ClientVersionUpdatedEvent
-		offerSharedChannels(txn, c);
+		applySharing(txn, c);
 	}
 
 	@Override
