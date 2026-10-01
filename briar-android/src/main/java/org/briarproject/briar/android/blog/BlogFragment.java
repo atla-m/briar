@@ -11,7 +11,6 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Toast;
-import android.widget.TextView;
 import com.google.android.material.switchmaterial.SwitchMaterial;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -107,12 +106,9 @@ public class BlogFragment extends BaseFragment
 					blog.getBlog().isChannel() ? VISIBLE : GONE);
 		});
 		SwitchMaterial shareNearby = v.findViewById(R.id.shareNearby);
-		TextView nearbyExplanation =
-				v.findViewById(R.id.shareNearbyExplanation);
 		shareNearby.setEnabled(true);
 		viewModel.getNearbyExpiry().observe(getViewLifecycleOwner(),
-				expiry -> showNearbyState(shareNearby, nearbyExplanation,
-						expiry));
+				expiry -> showNearbyState(shareNearby, expiry));
 		viewModel.getNearbyUnavailable().observeEvent(getViewLifecycleOwner(),
 				unavailable -> Toast.makeText(requireContext(),
 						R.string.channels_share_nearby_no_bluetooth,
@@ -220,8 +216,7 @@ public class BlogFragment extends BaseFragment
 	@Nullable
 	private Runnable countdown = null;
 
-	private void showNearbyState(SwitchMaterial shareNearby,
-			TextView explanation, long expiry) {
+	private void showNearbyState(SwitchMaterial shareNearby, long expiry) {
 		long left = expiry - System.currentTimeMillis();
 		boolean on = expiry > 0 && left > 0;
 		if (shareNearby.isChecked() != on) {
@@ -233,12 +228,13 @@ public class BlogFragment extends BaseFragment
 		if (countdown != null) handler.removeCallbacks(countdown);
 		if (on) {
 			int minutes = (int) Math.max(1, (left + 59_999) / 60_000);
-			explanation.setText(getResources().getQuantityString(
+			// The switch's own label carries the countdown, to save space
+			shareNearby.setText(getResources().getQuantityString(
 					R.plurals.channels_share_nearby_on, minutes, minutes));
-			countdown = () -> showNearbyState(shareNearby, explanation, expiry);
+			countdown = () -> showNearbyState(shareNearby, expiry);
 			handler.postDelayed(countdown, 30_000);
 		} else {
-			explanation.setText(R.string.channels_share_nearby_explanation);
+			shareNearby.setText(R.string.channels_share_nearby);
 		}
 	}
 
