@@ -33,6 +33,7 @@ import org.briarproject.bramble.plugin.tcp.AndroidLanTcpPluginFactory;
 import org.briarproject.bramble.plugin.tor.AndroidTorPluginFactory;
 import org.briarproject.bramble.util.AndroidUtils;
 import org.briarproject.bramble.util.StringUtils;
+import org.briarproject.briar.android.blog.ChannelFolderPublisher;
 import org.briarproject.briar.android.account.DozeHelperModule;
 import org.briarproject.briar.android.account.LockManagerImpl;
 import org.briarproject.briar.android.account.SetupModule;
@@ -127,6 +128,8 @@ public class AppModule {
 		LockManager lockManager;
 		@Inject
 		RecentEmoji recentEmoji;
+		@Inject
+		ChannelFolderPublisher channelFolderPublisher;
 	}
 
 	private final Application application;

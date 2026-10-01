@@ -1,11 +1,7 @@
 package org.briarproject.briar.android.blog;
 
 import android.app.Application;
-import android.content.ContentResolver;
-import android.database.Cursor;
 import android.net.Uri;
-import android.provider.DocumentsContract;
-import android.provider.DocumentsContract.Document;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.db.DatabaseExecutor;
@@ -49,8 +45,6 @@ import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
 import static java.util.logging.Level.WARNING;
-import static org.briarproject.briar.api.channel.ChannelConstants.FILES_DIRECTORY;
-import static org.briarproject.briar.api.channel.ChannelConstants.FILE_EXTENSION;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.bramble.util.LogUtils.logDuration;
@@ -59,12 +53,12 @@ import static org.briarproject.bramble.util.LogUtils.now;
 @NotNullByDefault
 class ChannelViewModel extends DbViewModel implements EventListener {
 
-	private static final String OCTET_STREAM = "application/octet-stream";
 
 	private static final Logger LOG =
 			getLogger(ChannelViewModel.class.getName());
 
 	private final ChannelManager channelManager;
+	private final ChannelFolderPublisher folderPublisher;
 	private final EventBus eventBus;
 	private final Executor dbExecutor;
 	private final Executor ioExecutor;
@@ -94,12 +88,14 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 			LifecycleManager lifecycleManager, TransactionManager db,
 			AndroidExecutor androidExecutor,
 			@IoExecutor Executor ioExecutor,
-			ChannelManager channelManager, EventBus eventBus) {
+			ChannelManager channelManager, EventBus eventBus,
+			ChannelFolderPublisher folderPublisher) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
 		this.dbExecutor = dbExecutor;
 		this.ioExecutor = ioExecutor;
 		this.channelManager = channelManager;
 		this.eventBus = eventBus;
+		this.folderPublisher = folderPublisher;
 		eventBus.addListener(this);
 		loadChannels();
 	}
@@ -137,8 +133,10 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 			throws DbException {
 		long start = now();
 		List<ChannelItem> loaded = new ArrayList<>();
+		Collection<GroupId> published = folderPublisher.getPublished(txn);
 		for (Channel c : channelManager.getChannels(txn)) {
-			loaded.add(ChannelItem.owned(c));
+			loaded.add(ChannelItem.owned(c,
+					published.contains(c.getBlogId())));
 		}
 		// Channels we only read are listed too, so their reader can fetch
 		// them and see where they are published
@@ -262,60 +260,18 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 	 * character that would hide part of the name.
 	 */
 	static String fileName(String title) {
-		String safe = title.replaceAll("[\\p{Cc}\\p{Cf}/\\\\:*?\"<>|]", "_")
-				.trim();
-		if (safe.isEmpty()) safe = "channel";
-		return safe + FILE_EXTENSION;
+		return ChannelFolderPublisher.fileName(title);
 	}
 
-	void publishToFolder(GroupId g, Uri tree, String title) {
+	/**
+	 * Remembers the folder and writes the channel into it; from then on
+	 * the folder is brought up to date after each post.
+	 */
+	void publishToFolder(GroupId g, Uri tree) {
 		ioExecutor.execute(() -> {
 			try {
-				ContentResolver resolver =
-						getApplication().getContentResolver();
-				String rootId = DocumentsContract.getTreeDocumentId(tree);
-				// Written under a temporary name and renamed, so a copy
-				// tool or an upload never picks up a half-written file,
-				// and a failure leaves the last good one in place
-				String mainName = fileName(title);
-				Uri tmp = findOrCreate(resolver, tree, rootId,
-						mainName + ".tmp", OCTET_STREAM);
-				try (OutputStream out =
-						resolver.openOutputStream(tmp, "wt")) {
-					if (out == null) throw new IOException("Cannot open");
-					channelManager.exportChannel(g, out);
-				}
-				Uri old = findChild(resolver, tree, rootId, mainName);
-				if (old != null) DocumentsContract.deleteDocument(resolver, old);
-				if (DocumentsContract.renameDocument(resolver, tmp, mainName)
-						== null) {
-					throw new IOException("Cannot rename");
-				}
-				Collection<MessageId> files =
-						channelManager.getCompleteFiles(g);
-				if (!files.isEmpty()) {
-					String dirName = FILES_DIRECTORY.substring(0,
-							FILES_DIRECTORY.length() - 1);
-					Uri dir = findOrCreate(resolver, tree, rootId, dirName,
-							Document.MIME_TYPE_DIR);
-					String dirId = DocumentsContract.getDocumentId(dir);
-					for (MessageId id : files) {
-						String name = channelManager.getFilePath(id)
-								.substring(FILES_DIRECTORY.length());
-						// Named after its content, so one already there
-						// is this file
-						if (findChild(resolver, tree, dirId, name) != null)
-							continue;
-						Uri f = DocumentsContract.createDocument(resolver,
-								dir, OCTET_STREAM, name);
-						if (f == null) throw new IOException("Cannot create");
-						try (OutputStream out = resolver.openOutputStream(f)) {
-							if (out == null)
-								throw new IOException("Cannot open");
-							channelManager.exportChannelFile(g, id, out);
-						}
-					}
-				}
+				folderPublisher.setFolder(g, tree);
+				loadChannels();
 				message.postEvent(R.string.channels_published_folder);
 			} catch (IOException | DbException | RuntimeException e) {
 				logException(LOG, WARNING, e);
@@ -324,37 +280,16 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 		});
 	}
 
-	private static Uri findOrCreate(ContentResolver resolver, Uri tree,
-			String parentId, String name, String mimeType)
-			throws IOException {
-		Uri existing = findChild(resolver, tree, parentId, name);
-		if (existing != null) return existing;
-		Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree,
-				parentId);
-		Uri created = DocumentsContract.createDocument(resolver, parent,
-				mimeType, name);
-		if (created == null) throw new IOException("Cannot create " + name);
-		return created;
-	}
-
-	@Nullable
-	private static Uri findChild(ContentResolver resolver, Uri tree,
-			String parentId, String name) {
-		Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree,
-				parentId);
-		String[] columns = {Document.COLUMN_DOCUMENT_ID,
-				Document.COLUMN_DISPLAY_NAME};
-		try (Cursor c = resolver.query(children, columns, null, null,
-				null)) {
-			if (c == null) return null;
-			while (c.moveToNext()) {
-				if (name.equals(c.getString(1))) {
-					return DocumentsContract.buildDocumentUriUsingTree(tree,
-							c.getString(0));
-				}
+	void stopPublishingToFolder(GroupId g) {
+		dbExecutor.execute(() -> {
+			try {
+				folderPublisher.clearFolder(g);
+				loadChannels();
+				message.postEvent(R.string.channels_publish_folder_stopped);
+			} catch (DbException e) {
+				handleException(e);
 			}
-		}
-		return null;
+		});
 	}
 
 	/**

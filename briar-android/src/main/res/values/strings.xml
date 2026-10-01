@@ -589,7 +589,9 @@
 	<string name="channels_publish_with_files">Include them</string>
 	<string name="channels_publish_posts_only">Posts only</string>
 	<string name="channels_publish_folder">Publish to a folder</string>
-	<string name="channels_published_folder">Saved. Upload the channel\'s file and the files folder to each of its mirrors.</string>
+	<string name="channels_published_folder">Saved. The folder is brought up to date about half a minute after each post. Upload it to each of the channel\'s mirrors, or let a sync tool do it.</string>
+	<string name="channels_publish_folder_stop">Stop publishing to the folder</string>
+	<string name="channels_publish_folder_stopped">No longer publishing to the folder. What was written stays.</string>
 	<string name="channels_mirrors">Where it is published</string>
 	<string name="channels_mirrors_explanation">Web addresses where this channel\'s file is published, one per line. Subscribers fetch from these over Tor. Whoever hosts the file cannot change what the channel says, so several addresses are safe and one of them being blocked is not fatal.</string>
 	<string name="channels_mirrors_hint">https://example.com/channel.briar</string>

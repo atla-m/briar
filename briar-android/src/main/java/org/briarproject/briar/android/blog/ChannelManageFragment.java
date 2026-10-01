@@ -76,8 +76,6 @@ public class ChannelManageFragment extends BaseFragment
 	@Nullable
 	private GroupId publishingToFolder = null;
 	@Nullable
-	private String publishingToFolderTitle = null;
-	@Nullable
 	private GroupId editingMirrors = null;
 
 	private final ActivityResultLauncher<String> publishLauncher =
@@ -106,12 +104,8 @@ public class ChannelManageFragment extends BaseFragment
 
 	private void onFolderChosen(@Nullable Uri uri) {
 		GroupId g = publishingToFolder;
-		String title = publishingToFolderTitle;
 		publishingToFolder = null;
-		publishingToFolderTitle = null;
-		if (uri != null && g != null && title != null) {
-			viewModel.publishToFolder(g, uri, title);
-		}
+		if (uri != null && g != null) viewModel.publishToFolder(g, uri);
 	}
 
 	private void onImportUriChosen(@Nullable Uri uri) {
@@ -127,8 +121,6 @@ public class ChannelManageFragment extends BaseFragment
 	private static final String STATE_PUBLISHING = "publishing";
 	private static final String STATE_WITH_FILES = "publishingWithFiles";
 	private static final String STATE_TO_FOLDER = "publishingToFolder";
-	private static final String STATE_TO_FOLDER_TITLE =
-			"publishingToFolderTitle";
 	private static final String STATE_MIRRORS = "editingMirrors";
 
 	@Override
@@ -140,8 +132,6 @@ public class ChannelManageFragment extends BaseFragment
 		publishingWithFiles = savedInstanceState.getBoolean(STATE_WITH_FILES);
 		b = savedInstanceState.getByteArray(STATE_TO_FOLDER);
 		if (b != null) publishingToFolder = new GroupId(b);
-		publishingToFolderTitle =
-				savedInstanceState.getString(STATE_TO_FOLDER_TITLE);
 		b = savedInstanceState.getByteArray(STATE_MIRRORS);
 		if (b != null) editingMirrors = new GroupId(b);
 	}
@@ -156,7 +146,6 @@ public class ChannelManageFragment extends BaseFragment
 			outState.putByteArray(STATE_TO_FOLDER,
 					publishingToFolder.getBytes());
 		}
-		outState.putString(STATE_TO_FOLDER_TITLE, publishingToFolderTitle);
 		if (editingMirrors != null)
 			outState.putByteArray(STATE_MIRRORS, editingMirrors.getBytes());
 	}
@@ -312,6 +301,11 @@ public class ChannelManageFragment extends BaseFragment
 		boolean owned = channel.isOwned();
 		menu.getMenu().findItem(R.id.action_channel_write).setVisible(owned);
 		menu.getMenu().findItem(R.id.action_channel_delete).setVisible(owned);
+		menu.getMenu().findItem(R.id.action_channel_publish_folder)
+				.setVisible(owned)
+				.setTitle(channel.isPublished() ?
+						R.string.channels_publish_folder_stop :
+						R.string.channels_publish_folder);
 		menu.getMenu().findItem(R.id.action_channel_unsubscribe)
 				.setVisible(!owned);
 		menu.setOnMenuItemClickListener(item -> {
@@ -328,12 +322,15 @@ public class ChannelManageFragment extends BaseFragment
 			} else if (id == R.id.action_channel_publish) {
 				askWhetherToIncludeFiles(channel);
 			} else if (id == R.id.action_channel_publish_folder) {
-				publishingToFolder = channel.getId();
-				publishingToFolderTitle = channel.getTitle();
-				try {
-					folderLauncher.launch(null);
-				} catch (ActivityNotFoundException e) {
-					showMessage(R.string.error_start_activity);
+				if (channel.isPublished()) {
+					viewModel.stopPublishingToFolder(channel.getId());
+				} else {
+					publishingToFolder = channel.getId();
+					try {
+						folderLauncher.launch(null);
+					} catch (ActivityNotFoundException e) {
+						showMessage(R.string.error_start_activity);
+					}
 				}
 			} else if (id == R.id.action_channel_mirrors) {
 				editingMirrors = channel.getId();
