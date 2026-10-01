@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:tools="http://schemas.android.com/tools"
+	android:layout_width="match_parent"
+	android:layout_height="wrap_content"
+	android:orientation="vertical"
+	android:paddingStart="@dimen/margin_large"
+	android:paddingTop="@dimen/margin_medium"
+	android:paddingEnd="@dimen/margin_large">
+
+	<ImageView
+		android:id="@+id/qrCode"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:adjustViewBounds="true"
+		android:background="@android:color/white"
+		android:contentDescription="@string/qr_code"
+		android:scaleType="fitCenter" />
+
+	<TextView
+		android:id="@+id/fingerprint"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginTop="@dimen/margin_medium"
+		android:fontFamily="monospace"
+		android:gravity="center"
+		android:textColor="?android:attr/textColorPrimary"
+		tools:text="a3f9 2c81 7b10 44de" />
+
+	<TextView
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginTop="@dimen/margin_small"
+		android:text="@string/channels_show_qr_explanation"
+		android:textColor="?android:attr/textColorSecondary"
+		android:textSize="@dimen/text_size_small" />
+
+</LinearLayout>

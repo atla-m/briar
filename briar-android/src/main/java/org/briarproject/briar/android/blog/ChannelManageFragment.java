@@ -5,6 +5,15 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import static org.briarproject.briar.android.blog.ScanChannelLinkActivity.RESULT_LINK;
+import static android.app.Activity.RESULT_OK;
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult;
+import org.briarproject.briar.android.blog.ChannelViewModel.QrCodeInfo;
+import org.briarproject.briar.android.qrcode.QrCodeUtils;
+import android.widget.TextView;
+import android.widget.ImageView;
+import android.util.DisplayMetrics;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
@@ -74,6 +83,13 @@ public class ChannelManageFragment extends BaseFragment
 	private final ActivityResultLauncher<String> publishLauncher =
 			registerForActivityResult(new CreateDocumentAdvanced(),
 					this::onPublishUriChosen);
+	private final ActivityResultLauncher<Intent> scanLauncher =
+			registerForActivityResult(new StartActivityForResult(), r -> {
+				Intent data = r.getData();
+				if (r.getResultCode() != RESULT_OK || data == null) return;
+				String link = data.getStringExtra(RESULT_LINK);
+				if (link != null) viewModel.subscribe(link);
+			});
 	private final ActivityResultLauncher<Uri> folderLauncher =
 			registerForActivityResult(new OpenDocumentTree(),
 					this::onFolderChosen);
@@ -185,6 +201,8 @@ public class ChannelManageFragment extends BaseFragment
 				this::showFetchResult);
 		viewModel.getConfirmImport().observeEvent(getViewLifecycleOwner(),
 				this::showConfirmImportDialog);
+		viewModel.getQrCode().observeEvent(getViewLifecycleOwner(),
+				this::showQrCodeDialog);
 		return v;
 	}
 
@@ -305,6 +323,8 @@ public class ChannelManageFragment extends BaseFragment
 				startActivity(i);
 			} else if (id == R.id.action_channel_copy_link) {
 				viewModel.copyLink(channel.getId());
+			} else if (id == R.id.action_channel_show_qr) {
+				viewModel.showQrCode(channel.getId());
 			} else if (id == R.id.action_channel_publish) {
 				askWhetherToIncludeFiles(channel);
 			} else if (id == R.id.action_channel_publish_folder) {
@@ -367,6 +387,36 @@ public class ChannelManageFragment extends BaseFragment
 			if (!link.isEmpty()) viewModel.subscribe(link);
 		});
 		b.setNegativeButton(R.string.cancel, null);
+		// A link passed in person is read from the other phone's screen
+		b.setNeutralButton(R.string.channels_scan_qr, (d, w) -> {
+			try {
+				scanLauncher.launch(new Intent(requireContext(),
+						ScanChannelLinkActivity.class));
+			} catch (ActivityNotFoundException e) {
+				showMessage(R.string.error_start_activity);
+			}
+		});
+		b.show();
+	}
+
+	private void showQrCodeDialog(QrCodeInfo info) {
+		View v = requireActivity().getLayoutInflater()
+				.inflate(R.layout.dialog_channel_qr, null);
+		ImageView image = v.findViewById(R.id.qrCode);
+		DisplayMetrics dm = getResources().getDisplayMetrics();
+		Bitmap qr = QrCodeUtils.createQrCode(dm, info.link);
+		if (qr == null) {
+			showMessage(R.string.channels_show_qr_error);
+			return;
+		}
+		image.setImageBitmap(qr);
+		TextView fingerprint = v.findViewById(R.id.fingerprint);
+		fingerprint.setText(info.fingerprint);
+		AlertDialog.Builder b = new AlertDialog.Builder(requireContext(),
+				R.style.BriarDialogTheme);
+		b.setTitle(R.string.channels_show_qr);
+		b.setView(v);
+		b.setPositiveButton(R.string.ok, null);
 		b.show();
 	}
 

@@ -10,6 +10,10 @@
 		android:title="@string/channels_copy_link" />
 
 	<item
+		android:id="@+id/action_channel_show_qr"
+		android:title="@string/channels_show_qr" />
+
+	<item
 		android:id="@+id/action_channel_publish"
 		android:title="@string/channels_publish" />
 

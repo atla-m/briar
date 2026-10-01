@@ -327,6 +327,12 @@
 		</activity>
 
 		<activity
+			android:name="org.briarproject.briar.android.blog.ScanChannelLinkActivity"
+			android:exported="false"
+			android:screenOrientation="nosensor"
+			android:theme="@style/BriarTheme.NoActionBar" />
+
+		<activity
 			android:name="org.briarproject.briar.android.blog.BlogActivity"
 			android:exported="false"
 			android:parentActivityName="org.briarproject.briar.android.navdrawer.NavDrawerActivity"
