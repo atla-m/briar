@@ -18,16 +18,17 @@
 			android:textSize="@dimen/text_size_small" />
 
 		<TextView
+			android:id="@+id/heading"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
 			android:layout_marginTop="@dimen/margin_medium"
-			android:text="@string/channels_share_choose_contacts_heading"
-			android:textStyle="bold" />
+			android:text="@string/channels_share_choose_contacts_heading" />
 
 		<TextView
 			android:id="@+id/noContacts"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="@dimen/margin_medium"
 			android:text="@string/channels_share_no_contacts"
 			android:textColor="?android:attr/textColorSecondary"
 			android:visibility="gone" />

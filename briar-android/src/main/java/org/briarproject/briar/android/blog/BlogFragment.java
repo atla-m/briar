@@ -322,7 +322,10 @@ public class BlogFragment extends BaseFragment
 						boxes.addView(box);
 						checks.add(box);
 					}
-					none.setVisibility(contacts.isEmpty() ? VISIBLE : GONE);
+					boolean empty = contacts.isEmpty();
+					none.setVisibility(empty ? VISIBLE : GONE);
+					v.findViewById(R.id.heading)
+							.setVisibility(empty ? GONE : VISIBLE);
 					Runnable cancel = () -> {
 						if (sw != null) viewModel.setSharingWithContacts(false);
 					};
@@ -331,19 +334,26 @@ public class BlogFragment extends BaseFragment
 									R.style.BriarDialogTheme);
 					builder.setTitle(R.string.channels_share_with_contacts);
 					builder.setView(v);
-					builder.setPositiveButton(
-							R.string.channels_share_with_contacts_confirm,
-							(d, w) -> {
-								List<ContactId> chosen = new ArrayList<>();
-								for (CheckBox box : checks) {
-									if (box.isChecked()) {
-										chosen.add((ContactId) box.getTag());
+					if (empty) {
+						// Nothing to choose, so turning on would only store
+						// an empty list; leave the switch off
+						builder.setNegativeButton(R.string.ok,
+								(d, w) -> cancel.run());
+					} else {
+						builder.setPositiveButton(
+								R.string.channels_share_with_contacts_confirm,
+								(d, w) -> {
+									List<ContactId> chosen = new ArrayList<>();
+									for (CheckBox box : checks) {
+										if (box.isChecked()) {
+											chosen.add((ContactId) box.getTag());
+										}
 									}
-								}
-								viewModel.setSharingWithContacts(chosen);
-							});
-					builder.setNegativeButton(R.string.cancel,
-							(d, w) -> cancel.run());
+									viewModel.setSharingWithContacts(chosen);
+								});
+						builder.setNegativeButton(R.string.cancel,
+								(d, w) -> cancel.run());
+					}
 					builder.setOnCancelListener(d -> cancel.run());
 					builder.show();
 				});
