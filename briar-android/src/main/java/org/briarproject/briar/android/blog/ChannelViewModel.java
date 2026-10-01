@@ -345,7 +345,8 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 					importFile(uri, false);
 				} else {
 					confirmImport.postEvent(new PendingImport(uri,
-							blog.getName()));
+							blog.getName(),
+							ChannelFingerprint.of(blog.getAuthor())));
 				}
 			} catch (DbException e) {
 				logException(LOG, WARNING, e);
@@ -400,11 +401,12 @@ class ChannelViewModel extends DbViewModel implements EventListener {
 	static class PendingImport {
 
 		final Uri uri;
-		final String name;
+		final String name, fingerprint;
 
-		private PendingImport(Uri uri, String name) {
+		private PendingImport(Uri uri, String name, String fingerprint) {
 			this.uri = uri;
 			this.name = name;
+			this.fingerprint = fingerprint;
 		}
 	}
 

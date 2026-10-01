@@ -50,6 +50,7 @@ import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.api.attachment.FileHeader;
 import org.briarproject.briar.api.attachment.FileStatus;
 import org.briarproject.briar.android.attachment.AttachmentRetriever;
+import org.briarproject.briar.android.blog.ChannelFingerprint;
 import org.briarproject.briar.android.blog.BlogActivity;
 import org.briarproject.briar.android.contact.connect.ConnectViaBluetoothActivity;
 import org.briarproject.briar.android.conversation.ConversationVisitor.AttachmentCache;
@@ -519,7 +520,8 @@ public class ConversationActivity extends BriarActivity
 				new MaterialAlertDialogBuilder(this, R.style.BriarDialogTheme);
 		builder.setTitle(R.string.blogs_forwarded_subscribe_title);
 		builder.setMessage(getString(
-				R.string.blogs_forwarded_subscribe_message, blog.getName()));
+				R.string.blogs_forwarded_subscribe_message, blog.getName(),
+				ChannelFingerprint.of(blog.getAuthor())));
 		builder.setPositiveButton(R.string.channels_subscribe_button,
 				(dialog, which) -> subscribeFromForwardedLink(channelLink));
 		builder.setNegativeButton(R.string.cancel, null);

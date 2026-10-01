@@ -19,22 +19,26 @@ class ChannelItem {
 
 	private final GroupId id;
 	private final String title;
+	private final String fingerprint;
 	private final long created;
 	private final boolean owned;
 
 	static ChannelItem owned(Channel channel) {
 		return new ChannelItem(channel.getBlogId(), channel.getTitle(),
+				ChannelFingerprint.of(channel.getBlog().getAuthor()),
 				channel.getCreated(), true);
 	}
 
 	static ChannelItem subscribed(Blog blog) {
-		return new ChannelItem(blog.getId(), blog.getName(), 0, false);
+		return new ChannelItem(blog.getId(), blog.getName(),
+				ChannelFingerprint.of(blog.getAuthor()), 0, false);
 	}
 
-	private ChannelItem(GroupId id, String title, long created,
-			boolean owned) {
+	private ChannelItem(GroupId id, String title, String fingerprint,
+			long created, boolean owned) {
 		this.id = id;
 		this.title = title;
+		this.fingerprint = fingerprint;
 		this.created = created;
 		this.owned = owned;
 	}
@@ -45,6 +49,10 @@ class ChannelItem {
 
 	String getTitle() {
 		return title;
+	}
+
+	String getFingerprint() {
+		return fingerprint;
 	}
 
 	long getCreated() {
