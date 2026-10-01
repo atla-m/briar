@@ -607,7 +607,7 @@
 	<string name="channels_link_hint">Channel link</string>
 	<string name="channels_subscribe_button">Subscribe</string>
 	<string name="channels_share_with_contacts">Pass posts to contacts who also share it</string>
-	<string name="channels_share_with_contacts_explanation">Your phone will pass this channel\'s posts to any contact who has also turned this on for it, whenever you are connected: nearby over Bluetooth or Wi-Fi, or over the internet. No invitation or message is sent. A contact who has not turned this on receives nothing they can read. Contacts who have turned it on can tell that you follow the channel.</string>
+	<string name="channels_share_with_contacts_explanation">Your phone will pass this channel\'s posts to any contact who has also turned this on for it, whenever you are connected: nearby over Bluetooth or Wi-Fi, or over the internet. No invitation or message is sent. Each contact\'s phone is told privately, in a form only someone who already has the channel can recognise, that you pass its posts. Contacts who have not turned this on receive no posts. Contacts who have turned it on can tell that you follow the channel.</string>
 	<string name="channels_share_with_contacts_confirm">Turn on</string>
 	<string name="channels_share_nearby">Share nearby over Bluetooth for one hour</string>
 	<string name="channels_share_nearby_dialog">For one hour, your phone will exchange this channel\'s posts over Bluetooth with any phone nearby that has this switch on for the same channel, whether or not it belongs to a contact. Nothing about you is sent: no name, no contact details, only the posts. But anyone within Bluetooth range who has this channel\'s link can tell that a phone near them has it. It turns itself off after an hour.</string>
