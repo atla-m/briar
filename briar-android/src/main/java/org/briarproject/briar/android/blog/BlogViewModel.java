@@ -4,6 +4,8 @@ import android.app.Application;
 
 import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.contact.ContactManager;
+import org.briarproject.bramble.api.Pair;
 import org.briarproject.bramble.api.db.DatabaseExecutor;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.TransactionManager;
@@ -86,16 +88,19 @@ class BlogViewModel extends BaseViewModel {
 			@IoExecutor Executor ioExecutor,
 			BlogSharingManager blogSharingManager,
 			SharingController sharingController,
-			ChannelNearbyManager nearbyManager) {
+			ChannelNearbyManager nearbyManager,
+			ContactManager contactManager) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor,
 				eventBus, identityManager, notificationManager, blogManager,
 				channelManager, attachmentRetriever, ioExecutor);
 		this.blogSharingManager = blogSharingManager;
 		this.sharingController = sharingController;
 		this.nearbyManager = nearbyManager;
+		this.contactManager = contactManager;
 	}
 
 	private final ChannelNearbyManager nearbyManager;
+	private final ContactManager contactManager;
 	// When sharing nearby turns itself off, or zero if it is off
 	private final MutableLiveData<Long> nearbyExpiry = new MutableLiveData<>();
 	private final MutableLiveEvent<Boolean> nearbyUnavailable =
@@ -256,6 +261,49 @@ class BlogViewModel extends BaseViewModel {
 				handleException(e);
 			}
 		});
+	}
+
+	/**
+	 * Turns sharing with contacts on for the chosen contacts only.
+	 */
+	void setSharingWithContacts(Collection<ContactId> contacts) {
+		GroupId g = groupId;
+		if (g == null) return;
+		runOnDbThread(() -> {
+			try {
+				channelManager.setSharingContacts(g, contacts);
+				channelManager.setSharingWithContacts(g, true);
+				sharingWithContacts.postValue(true);
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
+	/**
+	 * Loads the contacts and which of them are chosen to get the posts;
+	 * every contact is chosen if none were chosen yet.
+	 */
+	LiveData<List<Pair<Contact, Boolean>>> loadSharingContacts() {
+		MutableLiveData<List<Pair<Contact, Boolean>>> result =
+				new MutableLiveData<>();
+		GroupId g = groupId;
+		if (g == null) return result;
+		runOnDbThread(() -> {
+			try {
+				Collection<ContactId> chosen =
+						channelManager.getSharingContacts(g);
+				List<Pair<Contact, Boolean>> list = new ArrayList<>();
+				for (Contact c : contactManager.getContacts()) {
+					boolean on = chosen == null || chosen.contains(c.getId());
+					list.add(new Pair<>(c, on));
+				}
+				result.postValue(list);
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+		return result;
 	}
 
 	LiveData<BlogItem> getBlog() {

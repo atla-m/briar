@@ -22,6 +22,8 @@ interface ChannelConstants {
 	 * without asking.
 	 */
 	String GROUP_KEY_SHARE_WITH_CONTACTS = "channelShareWithContacts";
+	// The contacts chosen to get the posts; absent means every contact
+	String GROUP_KEY_SHARE_CONTACT_IDS = "channelShareContactIds";
 	String GROUP_KEY_ETAG = "channelEtag";
 	String GROUP_KEY_LAST_MODIFIED = "channelLastModified";
 

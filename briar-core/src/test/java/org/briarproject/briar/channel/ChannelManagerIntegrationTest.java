@@ -293,6 +293,34 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testChosenContactsOnlyGetThePosts() throws Exception {
+		// Both have the switch on, so the post would flow; the owner then
+		// chooses only another contact, and the channel is hidden from
+		// this one until they are chosen too
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		channelManager0.setSharingWithContacts(g, true);
+		channelManager1.setSharingWithContacts(g, true);
+		assertNull(channelManager0.getSharingContacts(g));
+		sync1To0(1, true);
+		assertEquals(SHARED, visibility(db0, contactId1From0, g));
+
+		channelManager0.setSharingContacts(g, singletonList(contactId2From0));
+		assertEquals(singletonList(contactId2From0),
+				channelManager0.getSharingContacts(g));
+		assertEquals(INVISIBLE, visibility(db0, contactId1From0, g));
+		// The contact's own list is told too: our token for them is gone
+		sync0To1(1, true);
+		assertNothingToSend(db0, contactId1From0);
+
+		channelManager0.setSharingContacts(g,
+				asList(contactId1From0, contactId2From0));
+		assertEquals(SHARED, visibility(db0, contactId1From0, g));
+	}
+
+	@Test
 	public void testSharingSwitchLeavesAnInvitedChannelAlone()
 			throws Exception {
 		// A channel shared with a contact by invitation belongs to the
