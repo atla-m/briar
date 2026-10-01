@@ -20,8 +20,10 @@ import org.briarproject.bramble.api.settings.Settings;
 import org.briarproject.bramble.api.settings.SettingsManager;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.bramble.api.sync.event.GroupRemovedEvent;
 import org.briarproject.bramble.api.system.TaskScheduler;
 import org.briarproject.briar.api.blog.event.BlogPostAddedEvent;
+import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.channel.ChannelManager;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -85,6 +87,8 @@ public class ChannelFolderPublisher implements EventListener {
 	private final TaskScheduler scheduler;
 	private final Executor ioExecutor;
 	private final Map<GroupId, Cancellable> pending = new HashMap<>();
+	// One export of a channel at a time, since both write the same files
+	private final Map<GroupId, Object> locks = new HashMap<>();
 
 	@Inject
 	ChannelFolderPublisher(Application app, ChannelManager channelManager,
@@ -104,6 +108,24 @@ public class ChannelFolderPublisher implements EventListener {
 			BlogPostAddedEvent b = (BlogPostAddedEvent) e;
 			// Only our own posts change a folder we publish
 			if (b.isLocal()) scheduleExport(b.getGroupId());
+		} else if (e instanceof GroupRemovedEvent) {
+			GroupRemovedEvent g = (GroupRemovedEvent) e;
+			// A deleted channel must not keep its folder setting or the
+			// permission to write the folder: Android caps those per app
+			if (g.getGroup().getClientId().equals(BlogManager.CLIENT_ID)) {
+				GroupId id = g.getGroup().getId();
+				synchronized (pending) {
+					Cancellable c = pending.remove(id);
+					if (c != null) c.cancel();
+				}
+				ioExecutor.execute(() -> {
+					try {
+						clearFolder(id);
+					} catch (DbException ex) {
+						logException(LOG, WARNING, ex);
+					}
+				});
+			}
 		}
 	}
 
@@ -139,6 +161,7 @@ public class ChannelFolderPublisher implements EventListener {
 		} catch (SecurityException e) {
 			// Already gone
 		}
+		LOG.info("Stopped publishing channel to folder");
 	}
 
 	@Nullable
@@ -196,6 +219,24 @@ public class ChannelFolderPublisher implements EventListener {
 	 * after their content.
 	 */
 	public void export(GroupId g, Uri tree) throws DbException, IOException {
+		synchronized (lockFor(g)) {
+			exportLocked(g, tree);
+		}
+	}
+
+	private Object lockFor(GroupId g) {
+		synchronized (locks) {
+			Object lock = locks.get(g);
+			if (lock == null) {
+				lock = new Object();
+				locks.put(g, lock);
+			}
+			return lock;
+		}
+	}
+
+	private void exportLocked(GroupId g, Uri tree)
+			throws DbException, IOException {
 		String title = channelManager.getChannel(g).getTitle();
 		ContentResolver resolver = app.getContentResolver();
 		String rootId = DocumentsContract.getTreeDocumentId(tree);
@@ -229,9 +270,11 @@ public class ChannelFolderPublisher implements EventListener {
 	}
 
 	/**
-	 * Writes under a temporary name and renames over the old file, so a
-	 * copy tool or an upload never picks up a half-written file, and a
-	 * failure leaves the last good one in place.
+	 * Writes under a temporary name and swaps it for the old file, so a
+	 * copy tool or an upload never picks up a half-written file. The old
+	 * file is moved aside rather than deleted until the new one is in
+	 * place, so a failure leaves the last good one, and it is moved back
+	 * if the swap fails.
 	 */
 	private static void writeViaTemp(ContentResolver resolver, Uri tree,
 			String parentId, String name, String mimeType, Writer writer)
@@ -243,10 +286,21 @@ public class ChannelFolderPublisher implements EventListener {
 			writer.write(out);
 		}
 		Uri old = findChild(resolver, tree, parentId, name);
-		if (old != null) DocumentsContract.deleteDocument(resolver, old);
+		Uri aside = null;
+		if (old != null) {
+			Uri stale = findChild(resolver, tree, parentId, name + ".old");
+			if (stale != null) DocumentsContract.deleteDocument(resolver, stale);
+			aside = DocumentsContract.renameDocument(resolver, old,
+					name + ".old");
+			if (aside == null) throw new IOException("Cannot move " + name);
+		}
 		if (DocumentsContract.renameDocument(resolver, tmp, name) == null) {
+			if (aside != null) {
+				DocumentsContract.renameDocument(resolver, aside, name);
+			}
 			throw new IOException("Cannot rename " + name);
 		}
+		if (aside != null) DocumentsContract.deleteDocument(resolver, aside);
 	}
 
 	private interface Writer {
