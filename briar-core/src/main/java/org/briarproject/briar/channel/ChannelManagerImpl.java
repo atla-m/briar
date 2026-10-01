@@ -3,6 +3,10 @@ package org.briarproject.briar.channel;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.WeakSingletonProvider;
 import org.briarproject.bramble.api.client.ClientHelper;
+import org.briarproject.bramble.api.contact.Contact;
+import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.contact.ContactManager;
+import org.briarproject.bramble.api.contact.ContactManager.ContactHook;
 import org.briarproject.bramble.api.client.ContactGroupFactory;
 import org.briarproject.bramble.api.crypto.PrivateKey;
 import org.briarproject.bramble.api.crypto.PublicKey;
@@ -21,6 +25,7 @@ import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventListener;
+import org.briarproject.bramble.api.versioning.event.ClientVersionUpdatedEvent;
 import org.briarproject.bramble.api.identity.Author;
 import org.briarproject.bramble.api.identity.AuthorFactory;
 import org.briarproject.bramble.api.identity.LocalAuthor;
@@ -44,6 +49,9 @@ import org.briarproject.briar.api.attachment.event.FileRequestedEvent;
 import org.briarproject.briar.api.blog.Blog;
 import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
+import org.briarproject.briar.api.blog.BlogSharingManager;
+import org.briarproject.briar.api.blog.event.BlogInvitationRequestReceivedEvent;
+import org.briarproject.briar.api.sharing.SharingInvitationItem;
 import org.briarproject.briar.api.blog.BlogPostHeader;
 import org.briarproject.briar.api.blog.BlogPost;
 import org.briarproject.briar.api.blog.BlogPostFactory;
@@ -142,6 +150,8 @@ import static org.briarproject.briar.channel.ChannelConstants.MSG_KEY_FILE_FETCH
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_FETCH_OFFSET;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_LAST_MODIFIED;
 import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_MIRRORS;
+import static org.briarproject.briar.channel.ChannelConstants.GROUP_KEY_SHARE_WITH_CONTACTS;
+import static org.briarproject.briar.api.sharing.SharingManager.SharingStatus.SHAREABLE;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNELS;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_AUTHOR;
 import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_CREATED;
@@ -156,7 +166,8 @@ import static org.briarproject.briar.channel.ChannelConstants.KEY_CHANNEL_PRIVAT
 @ThreadSafe
 @NotNullByDefault
 class ChannelManagerImpl
-		implements ChannelManager, OpenDatabaseHook, EventListener {
+		implements ChannelManager, OpenDatabaseHook, EventListener,
+		ContactHook {
 
 	/**
 	 * An entity tag as RFC 7232 defines it: an optional weak marker, then
@@ -201,6 +212,8 @@ class ChannelManagerImpl
 	private final Clock clock;
 	private final TaskScheduler scheduler;
 	private final Executor ioExecutor;
+	private final ContactManager contactManager;
+	private final BlogSharingManager blogSharingManager;
 	private final WeakSingletonProvider<OkHttpClient> httpClientProvider;
 	private final AtomicBoolean fetcherStarted = new AtomicBoolean(false);
 	// Channels and files being fetched now, so that a scheduled fetch,
@@ -229,7 +242,11 @@ class ChannelManagerImpl
 			BdfReaderFactory bdfReaderFactory,
 			BdfWriterFactory bdfWriterFactory, Clock clock,
 			TaskScheduler scheduler, @IoExecutor Executor ioExecutor,
-			WeakSingletonProvider<OkHttpClient> httpClientProvider) {
+			WeakSingletonProvider<OkHttpClient> httpClientProvider,
+			ContactManager contactManager,
+			BlogSharingManager blogSharingManager) {
+		this.contactManager = contactManager;
+		this.blogSharingManager = blogSharingManager;
 		this.db = db;
 		this.clientHelper = clientHelper;
 		this.contactGroupFactory = contactGroupFactory;
@@ -262,6 +279,36 @@ class ChannelManagerImpl
 			ioExecutor.execute(() -> {
 				try {
 					fetchIfSmall(p.getGroupId(), p.getManifestId());
+				} catch (DbException ex) {
+					logException(LOG, WARNING, ex);
+				}
+			});
+		} else if (e instanceof BlogInvitationRequestReceivedEvent) {
+			// A contact offers a channel we share with contacts: accept
+			// without asking, since they have already said they have it
+			BlogInvitationRequestReceivedEvent b =
+					(BlogInvitationRequestReceivedEvent) e;
+			Blog blog = b.getMessageHeader().getNameable();
+			if (!blog.isChannel()) return;
+			ioExecutor.execute(() -> {
+				try {
+					acceptIfSharing(blog, b.getContactId());
+				} catch (DbException ex) {
+					logException(LOG, WARNING, ex);
+				}
+			});
+		} else if (e instanceof ClientVersionUpdatedEvent) {
+			// A contact has just been found to support channels, which
+			// isn't known when the contact is added
+			ClientVersionUpdatedEvent c = (ClientVersionUpdatedEvent) e;
+			if (!c.getClientVersion().getClientId()
+					.equals(BlogSharingManager.CLIENT_ID)) {
+				return;
+			}
+			ioExecutor.execute(() -> {
+				try {
+					db.transaction(false, txn -> offerSharedChannels(txn,
+							contactManager.getContact(txn, c.getContactId())));
 				} catch (DbException ex) {
 					logException(LOG, WARNING, ex);
 				}
@@ -430,6 +477,90 @@ class ChannelManagerImpl
 			this.blog = blog;
 			this.mirrors = mirrors;
 		}
+	}
+
+	@Override
+	public void setSharingWithContacts(GroupId g, boolean on)
+			throws DbException {
+		db.transaction(false, txn -> {
+			Blog blog = blogManager.getBlog(txn, g);
+			if (!blog.isChannel()) throw new NoSuchChannelException();
+			BdfDictionary meta = BdfDictionary.of(
+					new BdfEntry(GROUP_KEY_SHARE_WITH_CONTACTS, on));
+			try {
+				clientHelper.mergeGroupMetadata(txn, g, meta);
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+			if (!on) return;
+			// Offer it to everyone who can take it, and take up any offer
+			// of it that was waiting for an answer
+			for (Contact c : contactManager.getContacts(txn)) {
+				offerIfShareable(txn, g, c);
+			}
+			for (SharingInvitationItem i :
+					blogSharingManager.getInvitations(txn)) {
+				if (!i.getShareable().getId().equals(g)) continue;
+				for (Contact c : i.getNewSharers()) {
+					blogSharingManager.respondToInvitation(txn, blog, c, true);
+				}
+			}
+		});
+	}
+
+	@Override
+	public boolean isSharingWithContacts(GroupId g) throws DbException {
+		return db.transactionWithResult(true,
+				txn -> isSharingWithContacts(txn, g));
+	}
+
+	@Override
+	public boolean isSharingWithContacts(Transaction txn, GroupId g)
+			throws DbException {
+		try {
+			return clientHelper.getGroupMetadataAsDictionary(txn, g)
+					.getBoolean(GROUP_KEY_SHARE_WITH_CONTACTS, false);
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+	}
+
+	private void offerIfShareable(Transaction txn, GroupId g, Contact c)
+			throws DbException {
+		if (blogSharingManager.getSharingStatus(txn, g, c) == SHAREABLE) {
+			blogSharingManager.sendInvitation(txn, g, c.getId(), null);
+		}
+	}
+
+	/**
+	 * Offers every channel shared with contacts to the given contact.
+	 */
+	private void offerSharedChannels(Transaction txn, Contact c)
+			throws DbException {
+		for (GroupId g : blogManager.getBlogIds(txn)) {
+			if (isSharingWithContacts(txn, g)) offerIfShareable(txn, g, c);
+		}
+	}
+
+	private void acceptIfSharing(Blog blog, ContactId c) throws DbException {
+		db.transaction(false, txn -> {
+			if (!db.containsGroup(txn, blog.getId())) return;
+			if (!isSharingWithContacts(txn, blog.getId())) return;
+			blogSharingManager.respondToInvitation(txn, blog,
+					contactManager.getContact(txn, c), true);
+		});
+	}
+
+	@Override
+	public void addingContact(Transaction txn, Contact c)
+			throws DbException {
+		// The contact's client versions aren't known yet, so this offers
+		// nothing until they are; see ClientVersionUpdatedEvent
+		offerSharedChannels(txn, c);
+	}
+
+	@Override
+	public void removingContact(Transaction txn, Contact c) {
 	}
 
 	@Override

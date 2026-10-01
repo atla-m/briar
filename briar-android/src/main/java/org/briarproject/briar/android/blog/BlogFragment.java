@@ -9,6 +9,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Toast;
+import com.google.android.material.switchmaterial.SwitchMaterial;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
@@ -40,6 +41,8 @@ import static android.app.Activity.RESULT_OK;
 import static android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP;
 import static android.widget.Toast.LENGTH_SHORT;
 import static com.google.android.material.snackbar.Snackbar.LENGTH_LONG;
+import static android.view.View.GONE;
+import static android.view.View.VISIBLE;
 import static org.briarproject.briar.android.activity.BriarActivity.GROUP_ID;
 import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_SHARE_BLOG;
 
@@ -92,6 +95,23 @@ public class BlogFragment extends BaseFragment
 		View v = inflater.inflate(R.layout.fragment_blog, container, false);
 
 		list = v.findViewById(R.id.postList);
+		View sharing = v.findViewById(R.id.channelSharing);
+		SwitchMaterial shareWithContacts =
+				v.findViewById(R.id.shareWithContacts);
+		viewModel.getBlog().observe(getViewLifecycleOwner(), blog -> {
+			// The two switches are shown on a channel, and only there
+			sharing.setVisibility(
+					blog.getBlog().isChannel() ? VISIBLE : GONE);
+		});
+		viewModel.getSharingWithContacts().observe(getViewLifecycleOwner(),
+				on -> {
+					if (shareWithContacts.isChecked() != on) {
+						shareWithContacts.setOnCheckedChangeListener(null);
+						shareWithContacts.setChecked(on);
+					}
+					shareWithContacts.setOnCheckedChangeListener(
+							(view, checked) -> onShareWithContactsChanged(checked));
+				});
 		LayoutManager layoutManager = new LinearLayoutManager(getActivity());
 		list.setLayoutManager(layoutManager);
 		list.setAdapter(adapter);
@@ -180,6 +200,25 @@ public class BlogFragment extends BaseFragment
 		if (request == REQUEST_SHARE_BLOG && result == RESULT_OK) {
 			displaySnackbar(R.string.blogs_sharing_snackbar, false);
 		}
+	}
+
+	private void onShareWithContactsChanged(boolean on) {
+		if (!on) {
+			viewModel.setSharingWithContacts(false);
+			return;
+		}
+		// Say what it reveals before it is revealed
+		MaterialAlertDialogBuilder builder =
+				new MaterialAlertDialogBuilder(requireContext(),
+						R.style.BriarDialogTheme);
+		builder.setTitle(R.string.channels_share_with_contacts);
+		builder.setMessage(R.string.channels_share_with_contacts_explanation);
+		builder.setPositiveButton(R.string.channels_share_with_contacts_confirm,
+				(d, w) -> viewModel.setSharingWithContacts(true));
+		builder.setNegativeButton(R.string.cancel, (d, w) ->
+				viewModel.setSharingWithContacts(false));
+		builder.setOnCancelListener(d -> viewModel.setSharingWithContacts(false));
+		builder.show();
 	}
 
 	@Override

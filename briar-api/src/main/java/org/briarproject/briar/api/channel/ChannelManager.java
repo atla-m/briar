@@ -159,6 +159,22 @@ public interface ChannelManager {
 	Blog subscribeFromLink(String link) throws DbException, FormatException;
 
 	/**
+	 * Turns sharing with contacts on or off for a channel we hold. On, the
+	 * channel is offered to every contact who can take it, now and as
+	 * contacts are added, and a contact's offer of the channel is accepted
+	 * without asking, so two contacts who both turn this on exchange the
+	 * channel's posts over any connection. Off, nothing is offered and
+	 * offers are shown for a decision, as for any blog. Turning it on
+	 * tells contacts that we follow the channel.
+	 */
+	void setSharingWithContacts(GroupId g, boolean on) throws DbException;
+
+	boolean isSharingWithContacts(GroupId g) throws DbException;
+
+	boolean isSharingWithContacts(Transaction txn, GroupId g)
+			throws DbException;
+
+	/**
 	 * Returns the channel a link describes, without subscribing to it, so
 	 * the person can be shown what they are about to subscribe to.
 	 *

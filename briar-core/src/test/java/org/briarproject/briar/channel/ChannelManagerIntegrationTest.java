@@ -239,6 +239,57 @@ public class ChannelManagerIntegrationTest
 	}
 
 	@Test
+	public void testSharingWithContactsOffersAndAccepts() throws Exception {
+		// Two contacts who both hold a channel exchange nothing until one
+		// offers it and the other accepts. With sharing with contacts on,
+		// the offer is made to every contact and taken up without asking.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		assertFalse(channelManager0.isSharingWithContacts(g));
+
+		// The owner turns it on: contacts are offered the channel
+		channelManager0.setSharingWithContacts(g, true);
+		assertTrue(channelManager0.isSharingWithContacts(g));
+		sync0To1(1, true);
+		// With it off, the subscriber is asked rather than accepting
+		assertFalse(db1.transactionWithResult(true, txn ->
+				db1.containsMessagesToSend(txn, contactId0From1,
+						Integer.MAX_VALUE, false)));
+		// Turning it on takes up the offer that was waiting
+		channelManager1.setSharingWithContacts(g, true);
+		sync1To0(1, true);
+		// And the post flows
+		sync0To1(1, true);
+		assertEquals(1, blogManager1.getPostHeaders(g).size());
+	}
+
+	@Test
+	public void testSharingWithContactsAcceptsAnOfferAsItArrives()
+			throws Exception {
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		channelManager1.setSharingWithContacts(g, true);
+		channelManager0.setSharingWithContacts(g, true);
+		sync0To1(1, true);
+		// The offer is answered in the background
+		long deadline = System.currentTimeMillis() + 10_000;
+		while (!db1.transactionWithResult(true, txn ->
+				db1.containsMessagesToSend(txn, contactId0From1,
+						Integer.MAX_VALUE, false))) {
+			if (System.currentTimeMillis() > deadline)
+				throw new AssertionError("Offer not accepted");
+			Thread.sleep(50);
+		}
+		sync1To0(1, true);
+		sync0To1(1, true);
+		assertEquals(1, blogManager1.getPostHeaders(g).size());
+	}
+
+	@Test
 	public void testImportingAStreamDeliversPostsWithoutSyncing()
 			throws Exception {
 		// The point of the stream: a device that has no sync relationship
