@@ -40,6 +40,8 @@ import okio.Buffer;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.util.Collection;
 import java.util.Locale;
 import java.util.Map;
@@ -287,6 +289,42 @@ public class ChannelManagerIntegrationTest
 		sync1To0(1, true);
 		sync0To1(1, true);
 		assertEquals(1, blogManager1.getPostHeaders(g).size());
+	}
+
+	@Test
+	public void testANearbyCopyIsReadOverAConnection() throws Exception {
+		// Two phones holding the channel, connected by nothing but a
+		// Bluetooth link keyed by the channel's key: one serves its copy
+		// and the small files it has, the other reads and stores them
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager0.post(g, getRandomString(42));
+		byte[] bytes = getRandomBytes(FILE_CHUNK_PAYLOAD_LENGTH + 5);
+		FileHeader file = postFile(channel, bytes);
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+
+		PipedInputStream serverIn = new PipedInputStream();
+		PipedOutputStream readerOut = new PipedOutputStream(serverIn);
+		PipedInputStream readerIn = new PipedInputStream();
+		PipedOutputStream serverOut = new PipedOutputStream(readerIn);
+		Thread server = new Thread(() -> {
+			try {
+				c0.getNearbyChannelProtocol().serve(g, serverIn, serverOut);
+			} catch (Exception e) {
+				throw new AssertionError(e);
+			}
+		});
+		server.start();
+		int read = c1.getNearbyChannelProtocol().read(g, readerIn, readerOut);
+		server.join(10_000);
+		// The post, the file's post and its manifest
+		assertEquals(3, read);
+		awaitPendingMessageDelivery(5);
+		assertEquals(2, blogManager1.getPostHeaders(g).size());
+		assertTrue(blogManager1.getFileStatus(file).isComplete());
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		copyAndClose(blogManager1.getFile(file), out);
+		assertArrayEquals(bytes, out.toByteArray());
 	}
 
 	@Test

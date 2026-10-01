@@ -28,14 +28,13 @@
 		android:layout_width="match_parent"
 		android:layout_height="wrap_content"
 		android:layout_marginTop="@dimen/margin_small"
-		android:enabled="false"
 		android:text="@string/channels_share_nearby" />
 
 	<TextView
 		android:id="@+id/shareNearbyExplanation"
 		android:layout_width="match_parent"
 		android:layout_height="wrap_content"
-		android:text="@string/channels_share_nearby_soon"
+		android:text="@string/channels_share_nearby_explanation"
 		android:textColor="?android:attr/textColorSecondary"
 		android:textSize="@dimen/text_size_small" />
 

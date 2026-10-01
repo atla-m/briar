@@ -610,7 +610,14 @@
 	<string name="channels_share_with_contacts_explanation">Your contacts will know you follow this channel. Its posts then pass between you and any contact who also shares it, over any connection, including Bluetooth.</string>
 	<string name="channels_share_with_contacts_confirm">Share</string>
 	<string name="channels_share_nearby">Share with anyone nearby who has it</string>
-	<string name="channels_share_nearby_soon">Not available yet.</string>
+	<string name="channels_share_nearby_explanation">For one hour, anyone nearby with this channel\'s link can read its posts from your phone over Bluetooth, and your phone reads theirs. They can see your phone has the channel.</string>
+	<string name="channels_share_nearby_dialog">Anyone nearby with this channel\'s link, including people you would rather not tell, can see that your phone has it, for one hour. Posts pass over Bluetooth between every phone nearby that turns this on. It turns itself off after an hour.</string>
+	<string name="channels_share_nearby_confirm">Share for an hour</string>
+	<string name="channels_share_nearby_no_bluetooth">Bluetooth must be on to share nearby</string>
+	<plurals name="channels_share_nearby_on">
+		<item quantity="one">On. Turns itself off in %d minute.</item>
+		<item quantity="other">On. Turns itself off in %d minutes.</item>
+	</plurals>
 	<string name="channels_where_posts_come_from">Posts arrive from the channel\'s addresses over the internet, or from contacts you share it with.</string>
 	<string name="channels_subscribe_error">That is not a valid channel link</string>
 	<string name="channels_import">Read a published channel file</string>

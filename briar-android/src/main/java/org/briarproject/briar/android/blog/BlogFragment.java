@@ -2,6 +2,8 @@ package org.briarproject.briar.android.blog;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -9,6 +11,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Toast;
+import android.widget.TextView;
 import com.google.android.material.switchmaterial.SwitchMaterial;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -103,6 +106,17 @@ public class BlogFragment extends BaseFragment
 			sharing.setVisibility(
 					blog.getBlog().isChannel() ? VISIBLE : GONE);
 		});
+		SwitchMaterial shareNearby = v.findViewById(R.id.shareNearby);
+		TextView nearbyExplanation =
+				v.findViewById(R.id.shareNearbyExplanation);
+		shareNearby.setEnabled(true);
+		viewModel.getNearbyExpiry().observe(getViewLifecycleOwner(),
+				expiry -> showNearbyState(shareNearby, nearbyExplanation,
+						expiry));
+		viewModel.getNearbyUnavailable().observeEvent(getViewLifecycleOwner(),
+				unavailable -> Toast.makeText(requireContext(),
+						R.string.channels_share_nearby_no_bluetooth,
+						LENGTH_LONG).show());
 		viewModel.getSharingWithContacts().observe(getViewLifecycleOwner(),
 				on -> {
 					if (shareWithContacts.isChecked() != on) {
@@ -200,6 +214,57 @@ public class BlogFragment extends BaseFragment
 		if (request == REQUEST_SHARE_BLOG && result == RESULT_OK) {
 			displaySnackbar(R.string.blogs_sharing_snackbar, false);
 		}
+	}
+
+	private final Handler handler = new Handler(Looper.getMainLooper());
+	@Nullable
+	private Runnable countdown = null;
+
+	private void showNearbyState(SwitchMaterial shareNearby,
+			TextView explanation, long expiry) {
+		long left = expiry - System.currentTimeMillis();
+		boolean on = expiry > 0 && left > 0;
+		if (shareNearby.isChecked() != on) {
+			shareNearby.setOnCheckedChangeListener(null);
+			shareNearby.setChecked(on);
+		}
+		shareNearby.setOnCheckedChangeListener(
+				(view, checked) -> onShareNearbyChanged(checked));
+		if (countdown != null) handler.removeCallbacks(countdown);
+		if (on) {
+			int minutes = (int) Math.max(1, (left + 59_999) / 60_000);
+			explanation.setText(getResources().getQuantityString(
+					R.plurals.channels_share_nearby_on, minutes, minutes));
+			countdown = () -> showNearbyState(shareNearby, explanation, expiry);
+			handler.postDelayed(countdown, 30_000);
+		} else {
+			explanation.setText(R.string.channels_share_nearby_explanation);
+		}
+	}
+
+	private void onShareNearbyChanged(boolean on) {
+		if (!on) {
+			viewModel.setSharingNearby(false);
+			return;
+		}
+		// Say what it reveals before it is revealed
+		MaterialAlertDialogBuilder builder =
+				new MaterialAlertDialogBuilder(requireContext(),
+						R.style.BriarDialogTheme);
+		builder.setTitle(R.string.channels_share_nearby);
+		builder.setMessage(R.string.channels_share_nearby_dialog);
+		builder.setPositiveButton(R.string.channels_share_nearby_confirm,
+				(d, w) -> viewModel.setSharingNearby(true));
+		builder.setNegativeButton(R.string.cancel, (d, w) ->
+				viewModel.setSharingNearby(false));
+		builder.setOnCancelListener(d -> viewModel.setSharingNearby(false));
+		builder.show();
+	}
+
+	@Override
+	public void onDestroyView() {
+		if (countdown != null) handler.removeCallbacks(countdown);
+		super.onDestroyView();
 	}
 
 	private void onShareWithContactsChanged(boolean on) {

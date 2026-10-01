@@ -5,6 +5,7 @@ import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.contact.ContactManager;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager;
 import org.briarproject.briar.api.channel.ChannelManager;
+import org.briarproject.briar.api.channel.ChannelNearbyManager;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -18,6 +19,13 @@ public class ChannelModule {
 	public static class EagerSingletons {
 		@Inject
 		ChannelManager channelManager;
+	}
+
+	@Provides
+	@Singleton
+	ChannelNearbyManager provideChannelNearbyManager(
+			NearbyChannelSharerImpl sharer) {
+		return sharer;
 	}
 
 	@Provides

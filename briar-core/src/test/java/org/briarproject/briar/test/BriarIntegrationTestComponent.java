@@ -23,6 +23,7 @@ import org.briarproject.briar.api.blog.BlogFactory;
 import org.briarproject.briar.api.blog.BlogManager;
 import org.briarproject.briar.api.blog.BlogSharingManager;
 import org.briarproject.briar.api.channel.ChannelManager;
+import org.briarproject.briar.channel.NearbyChannelProtocol;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.conversation.ConversationManager;
 import org.briarproject.briar.api.forum.ForumManager;
@@ -123,6 +124,8 @@ public interface BriarIntegrationTestComponent
 	BlogSharingManager getBlogSharingManager();
 
 	ChannelManager getChannelManager();
+
+	NearbyChannelProtocol getNearbyChannelProtocol();
 
 	ForumSharingManager getForumSharingManager();
 

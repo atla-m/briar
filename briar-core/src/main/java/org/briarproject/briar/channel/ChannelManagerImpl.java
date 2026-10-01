@@ -1406,18 +1406,9 @@ class ChannelManagerImpl
 					throw new IOException("Unexpected range");
 			}
 			long from = ranged ? offset : 0;
-			// The manifest fixes how much this file can be: its bytes, and a
-			// little framing for each chunk. One byte beyond that is how a
-			// file too large to accept is told apart from one that is full
-			long budget = h.getSize() +
-					(h.getChunkCount() + 1L) * MAX_FILE_ENTRY_OVERHEAD;
-			CountingInputStream in = new CountingInputStream(
-					body.byteStream(), budget + 1 - from);
 			try {
-				int read = importFileEntries(g, h, manifestTimestamp, in,
-						!ranged, from);
-				if (from + in.getBytesRead() > budget)
-					throw new IOException("Attachment file is too large");
+				int read = importFile(g, h, manifestTimestamp,
+						body.byteStream(), from);
 				return new FetchResult(FETCHED, read);
 			} catch (FormatException e) {
 				// Not the rest of the file we were reading, or not a
@@ -1426,6 +1417,35 @@ class ChannelManagerImpl
 				throw new IOException(e);
 			}
 		}
+	}
+
+	@Override
+	public int importChannelFile(GroupId g, MessageId manifestId,
+			InputStream in) throws DbException, IOException, FormatException {
+		FileHeader h = blogManager.getFileHeader(g, manifestId);
+		long manifestTimestamp = db.transactionWithResult(true,
+				txn -> db.getMessage(txn, manifestId).getTimestamp());
+		return importFile(g, h, manifestTimestamp, in, 0);
+	}
+
+	/**
+	 * Reads an attachment file from the given offset and stores its
+	 * chunks. The manifest fixes how much this file can be: its bytes, and
+	 * a little framing for each chunk. One byte beyond that is how a file
+	 * too large to accept is told apart from one that is full.
+	 */
+	private int importFile(GroupId g, FileHeader h, long manifestTimestamp,
+			InputStream in, long from)
+			throws DbException, IOException, FormatException {
+		long budget = h.getSize() +
+				(h.getChunkCount() + 1L) * MAX_FILE_ENTRY_OVERHEAD;
+		CountingInputStream counted =
+				new CountingInputStream(in, budget + 1 - from);
+		int read = importFileEntries(g, h, manifestTimestamp, counted,
+				from == 0, from);
+		if (from + counted.getBytesRead() > budget)
+			throw new IOException("Attachment file is too large");
+		return read;
 	}
 
 	private long getFileFetchOffset(MessageId manifestId)
