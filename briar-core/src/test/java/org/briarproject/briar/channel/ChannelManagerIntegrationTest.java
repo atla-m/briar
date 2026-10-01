@@ -73,6 +73,7 @@ import static org.briarproject.briar.api.attachment.MediaConstants.FILE_CHUNK_PA
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.blog.MessageType.POST;
 import static org.briarproject.briar.api.blog.MessageType.FILE_REQUEST;
+import static org.briarproject.briar.api.blog.MessageType.ATTACHMENT;
 import static org.briarproject.briar.api.blog.MessageType.FILE_CHUNK;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.briar.api.channel.ChannelConstants.MAX_STREAM_BYTES;
@@ -1095,6 +1096,30 @@ public class ChannelManagerIntegrationTest
 				LINK_PREFIX + Base32.encode(raw).toLowerCase(US));
 		assertEquals(singletonList("http://second.example/c.briar"),
 				channelManager0.getMirrors(g));
+	}
+
+	@Test
+	public void testSkipsAnImageNoPostCarries() throws Exception {
+		// Images and manifests are unsigned, so a mirror could serve any
+		// number of them. One that no post carries is not stored.
+		Channel channel = channelManager0.createChannel("Announcements");
+		GroupId g = channel.getBlogId();
+		channelManager1.subscribeFromLink(channelManager0.getChannelLink(g));
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		body.write(c1.getClientHelper().toByteArray(
+				BdfList.of(ATTACHMENT.getInt(), "image/jpeg")));
+		body.write(getRandomBytes(1000));
+		byte[] stream = buildStream(channel.getBlog(), 1234,
+				body.toByteArray());
+		channelManager1.importChannel(new ByteArrayInputStream(stream));
+		assertTrue(db1.transactionWithResult(true,
+				txn -> db1.getMessageIds(txn, g)).isEmpty());
+		// One a post carries is, and the post comes first in the file
+		FileHeader file = postFile(channel, FILE_CHUNK_PAYLOAD_LENGTH);
+		assertEquals(2, channelManager1.importChannel(
+				new ByteArrayInputStream(exportChannel(g))));
+		awaitPendingMessageDelivery(2);
+		assertTrue(blogManager1.getFileStatus(file).isManifestReceived());
 	}
 
 	@Test
